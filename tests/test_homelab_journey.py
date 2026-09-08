@@ -285,6 +285,79 @@ def test_budget_only_profile_cannot_be_applied_in_simple_mode(app):
     assert page._profile_combo.findData("studio") < 0
 
 
+BUDGET_ONLY_PLAN = {
+    "action": "prepare",
+    "dryRun": True,
+    "host": "local",
+    "profile": "edge",
+    "profileInstallable": False,
+    "profileNote": "zeroclaw worker not implemented",
+    "profileServices": ["zeroclaw", "9router"],
+    "budget": {"budgetMB": 1664, "availableMB": 7954, "verdict": "pass"},
+    "access": "local",
+    "apps": ["jellyfin", "syncthing", "vaultwarden", "uptime-kuma"],
+    "steps": ["dependencies", "daemon", "access", "configure", "apps", "verify"],
+}
+
+
+def _reviewed(page, payload):
+    """Drive the plan-then-execute flow up to the execution decision."""
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": payload.get("profile") or ""}
+    page._onboard_state["plan_host"] = ""
+    raw = json.dumps(payload).encode()
+    page._on_apply_plan_done(0, raw, b"")   # first pass: review
+    page._on_apply_plan_done(0, raw, b"")   # second pass: execute
+
+
+def test_budget_only_plan_never_installs_the_default_stack_silently(app, monkeypatch):
+    """UX-005: an unavailable choice must not install other apps as if it served the goal."""
+    page = _page()
+    ran: list = []
+    monkeypatch.setattr(type(page), "run_cmd",
+                        lambda self, args, host=None: ran.append((list(args), host)))
+    monkeypatch.setattr(type(page), "_ask_simulation_choice", lambda self, p: "cancel")
+    _reviewed(page, BUDGET_ONLY_PLAN)
+    assert ran == []
+    assert "só reserva recursos" in page._state_label.text()
+
+
+def test_budget_only_plan_offers_simulation_and_base_install_apart(app, monkeypatch):
+    page = _page()
+    ran: list = []
+    monkeypatch.setattr(type(page), "run_cmd",
+                        lambda self, args, host=None: ran.append((list(args), host)))
+
+    monkeypatch.setattr(type(page), "_ask_simulation_choice", lambda self, p: "simulate")
+    _reviewed(page, BUDGET_ONLY_PLAN)
+    assert ran == [(["profile", "set", "edge"], "")]
+
+    ran.clear()
+    monkeypatch.setattr(type(page), "_ask_simulation_choice", lambda self, p: "install-base")
+    _reviewed(page, BUDGET_ONLY_PLAN)
+    # Installing the base is explicit and carries no profile that cannot
+    # deliver its services.
+    assert ran == [(["prepare", "--json"], "")]
+
+
+def test_installable_plan_still_executes_the_reviewed_profile(app, monkeypatch):
+    page = _page()
+    ran: list = []
+    monkeypatch.setattr(type(page), "run_cmd",
+                        lambda self, args, host=None: ran.append((list(args), host)))
+    monkeypatch.setattr(type(page), "_ask_simulation_choice",
+                        lambda self, p: pytest.fail("perfil instalável não deve perguntar"))
+    plan = dict(BUDGET_ONLY_PLAN, profile="assistant-private", profileInstallable=True)
+    _reviewed(page, plan)
+    assert ran == [(["prepare", "--json", "--profile", "assistant-private"], "")]
+
+
+def test_simulation_refusal_names_the_services_it_cannot_install():
+    text = journey.plan_simulation_refusal(BUDGET_ONLY_PLAN)
+    assert "zeroclaw" in text and "9router" in text
+    assert "zeroclaw worker not implemented" in text
+
+
 # ------------------------------------------------------------------ UX-007
 @pytest.mark.parametrize(
     "raw,expected",
@@ -321,3 +394,28 @@ def test_onboarding_copy_is_task_oriented(app):
         text = page._onboard_prompt()
         assert f"Passo {index + 1} de {len(page.ONBOARD_STEPS)}" in text
         assert not [word for word in jargon if word in text]
+
+
+def test_plan_is_summarised_in_product_language(app):
+    """UX-007: knowing what the plan does must not require reading JSON."""
+    page = _page()
+    page._render_onboard_plan(BUDGET_ONLY_PLAN)
+    text = page._plan_summary.text()
+    assert page._plan_summary.isVisibleTo(page)
+    assert "Servidor: este computador" in text
+    assert "Instala 4 aplicativos" in text and "jellyfin" in text
+    assert "só por este computador (127.0.0.1)" in text
+    assert "1664 MiB" in text
+    assert "Etapas: 6" in text
+    # The budget-only warning is part of the summary, not only of the log.
+    assert "só reserva recursos" in text
+    # The document itself is still recorded for the advanced view.
+    assert '"profileInstallable": false' in page._output.toPlainText()
+
+
+def test_plan_summary_has_no_argv_or_flags(app):
+    page = _page()
+    page._render_onboard_plan(dict(BUDGET_ONLY_PLAN, profileInstallable=True))
+    text = page._plan_summary.text()
+    for jargon in ("--json", "--dry-run", "--profile", "dryRun", "appsSource"):
+        assert jargon not in text

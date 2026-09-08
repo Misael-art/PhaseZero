@@ -1018,9 +1018,13 @@ def test_plan_renders_budget_only_profile_warning(app):
     }
     page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
     assert page._onboard_state.get("review_plan") is not None
-    out = page._output.toPlainText()
-    assert "ORÇAMENTO" in out and "NÃO instala" in out
-    assert "zeroclaw worker not implemented" in out
+    # UX-007: the truth is stated on the page, in product language, and
+    # recorded in the output pane as well.
+    summary = page._plan_summary.text()
+    assert page._plan_summary.isVisibleTo(page)
+    for text in (summary, page._output.toPlainText()):
+        assert "só reserva recursos" in text
+        assert "zeroclaw worker not implemented" in text
 
 
 def test_plan_without_warning_for_installable_profile(app):
@@ -1035,7 +1039,8 @@ def test_plan_without_warning_for_installable_profile(app):
         "appsSource": "catalog-defaults",
     }
     page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
-    assert "ORÇAMENTO" not in page._output.toPlainText()
+    assert "só reserva recursos" not in page._output.toPlainText()
+    assert "só reserva recursos" not in page._plan_summary.text()
 
 
 # ---------------------------------------------------------------------------

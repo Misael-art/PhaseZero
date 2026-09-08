@@ -17,7 +17,8 @@ from .base import BasePage
 from ..journey import (
     CONFIGURE_ACCESS, NOT_INSTALLED, PREPARING, READY,
     app_journey, failure_banner_text, first_use_steps, journey_action_label,
-    journey_headline, open_url, profile_simulation_note, split_profiles,
+    journey_headline, open_url, plan_is_simulation, plan_simulation_refusal,
+    plan_summary, profile_simulation_note, split_profiles,
 )
 from ..platform import state_dir
 
@@ -66,6 +67,7 @@ class HomelabPage(BasePage):
         self._pair_advance = False
         self._pair_host = ""
         self._onboard_label: QLabel | None = None
+        self._plan_summary: QLabel | None = None
         self._onboard_next: QPushButton | None = None
         # UX-005: simple mode installs; simulating a budget is opt-in.
         self._profiles_all: list = []
@@ -267,7 +269,18 @@ class HomelabPage(BasePage):
         o_lay.addWidget(start)
         o_lay.addWidget(self._onboard_confirm)
         o_lay.addWidget(self._onboard_next)
-        onboard.setLayout(o_lay)
+        onboard_box = QVBoxLayout()
+        onboard_box.addLayout(o_lay)
+        # UX-007: the reviewed plan is stated in the interface, in product
+        # language. The JSON document stays in Saída for the advanced view;
+        # reading it is never required to know what will happen.
+        self._plan_summary = QLabel("")
+        self._plan_summary.setObjectName("homelabPlanSummary")
+        self._plan_summary.setWordWrap(True)
+        self._plan_summary.setAccessibleName("Resumo do plano")
+        self._plan_summary.setVisible(False)
+        onboard_box.addWidget(self._plan_summary)
+        onboard.setLayout(onboard_box)
         lay.addWidget(onboard)
 
         # App cards (one-click catalog) ------------------------------------
@@ -676,6 +689,28 @@ class HomelabPage(BasePage):
                 "Recursos insuficientes agora — libere memória/disco ou revise o plano"
             )
             return
+        # UX-005: installing is not simulating. A budget-only profile has no
+        # install recipe, so `prepare --profile X` would set the budget and
+        # install the catalog defaults — answering a goal the operator never
+        # chose. The choice is made explicit instead of assumed.
+        if plan_is_simulation(payload):
+            choice = self._ask_simulation_choice(payload)
+            if choice == "simulate":
+                self._onboard_state.pop("review_plan", None)
+                self.run_cmd(["profile", "set", str(payload.get("profile") or "")],
+                             host=captured_host)
+                return
+            if choice != "install-base":
+                self._state_label.setText(
+                    "Nada instalado — esta escolha só reserva recursos"
+                )
+                return
+            self._onboard_state.pop("review_plan", None)
+            # Explicitly the base server, without the profile that cannot
+            # deliver its services.
+            self.run_cmd(["prepare", "--json"], host=captured_host)
+            return
+
         self._onboard_state.pop("review_plan", None)
         # REV-007: execute exactly the reviewed plan (same profile), not a
         # re-derivation from current widget state.
@@ -684,6 +719,34 @@ class HomelabPage(BasePage):
         if profile:
             exec_args += ["--profile", profile]
         self.run_cmd(exec_args, host=captured_host)
+
+    def _ask_simulation_choice(self, payload: dict) -> str:
+        """Ask what a budget-only choice should actually do.
+
+        Returns ``"simulate"`` (reserve the budget, install nothing),
+        ``"install-base"`` (install the base server, without the profile)
+        or ``"cancel"``.
+        """
+        apps = ", ".join(str(a) for a in (payload.get("apps") or []))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Esta escolha não instala o que promete")
+        box.setText(plan_simulation_refusal(payload))
+        box.setInformativeText(
+            f"Instalar a base do servidor traz os aplicativos padrão ({apps})."
+            if apps else "Escolha o que fazer."
+        )
+        cancel = box.addButton("Cancelar", QMessageBox.RejectRole)
+        simulate = box.addButton("Só reservar recursos", QMessageBox.AcceptRole)
+        install = box.addButton("Instalar base do servidor", QMessageBox.AcceptRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is simulate:
+            return "simulate"
+        if clicked is install:
+            return "install-base"
+        return "cancel"
 
     @staticmethod
     def _plan_intent(payload: dict) -> dict:
@@ -697,16 +760,16 @@ class HomelabPage(BasePage):
         return {k: v for k, v in payload.items() if k != "budget"}
 
     def _render_onboard_plan(self, payload: dict) -> None:
-        # R01-003: budget-only profiles are stated, never implied — the
-        # operator sees that the profile's services are NOT installed by
-        # this plan before pressing apply again.
-        if payload.get("profileInstallable") is False:
-            note = str(payload.get("profileNote") or "sem receita de instalação")
-            self._append(
-                f"[plano] Perfil '{payload.get('profile')}' é apenas ORÇAMENTO: "
-                f"este plano NÃO instala os serviços do perfil ({note}). "
-                "Aplicativos vêm do catálogo.\n"
-            )
+        # R01-003 + UX-007: what the plan does is shown in the interface,
+        # in product language — including the fact that a budget-only
+        # profile installs none of its services. The raw document follows
+        # in Saída for whoever wants it.
+        lines = plan_summary(payload)
+        if self._plan_summary is not None:
+            self._plan_summary.setText("\n".join(f"• {line}" for line in lines))
+            self._plan_summary.setVisible(bool(lines))
+        for line in lines:
+            self._append(f"[plano] {line}\n")
         self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
     def _hl_for(self, alias: str, *parts: str) -> list[str]:

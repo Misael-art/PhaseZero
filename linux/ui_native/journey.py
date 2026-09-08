@@ -118,6 +118,68 @@ def split_profiles(profiles: list) -> tuple[list, list]:
     return installable, budget_only
 
 
+def plan_is_simulation(payload: dict) -> bool:
+    """True when the reviewed plan carries a budget-only profile.
+
+    Such a plan still prepares the server and installs the catalog
+    defaults, which is NOT what the chosen profile promised. Executing it
+    unchanged would answer a goal the operator did not ask for.
+    """
+    return bool(payload.get("profile")) and payload.get("profileInstallable") is False
+
+
+def plan_simulation_refusal(payload: dict) -> str:
+    profile = str(payload.get("profile") or "")
+    services = [str(s) for s in (payload.get("profileServices") or [])]
+    note = str(payload.get("profileNote") or "sem receita de instalação")
+    served = ", ".join(services) if services else "os serviços do perfil"
+    return (
+        f"'{profile}' só reserva recursos: {served} não têm instalação disponível "
+        f"({note}). Instalar agora prepararia o servidor com os aplicativos padrão, "
+        "que não é o que você escolheu."
+    )
+
+
+def plan_summary(payload: dict) -> list[str]:
+    """The plan in product language (UX-007).
+
+    The same document the advanced view shows as JSON, said in terms of
+    what will happen to the machine. Callers render these lines in the
+    interface; the raw document stays an advanced detail.
+    """
+    lines: list[str] = []
+    host = str(payload.get("hostAlias") or payload.get("host") or "local")
+    lines.append("Servidor: este computador" if host == "local" else f"Servidor: {host}")
+
+    apps = [str(a) for a in (payload.get("apps") or [])]
+    if apps:
+        lines.append(f"Instala {len(apps)} aplicativos: " + ", ".join(apps) + ".")
+    else:
+        lines.append("Nenhum aplicativo será instalado por este plano.")
+
+    access = str(payload.get("access") or "")
+    if access:
+        lines.append(
+            "Acesso: só por este computador (127.0.0.1)." if access == "local"
+            else f"Acesso: {access}."
+        )
+
+    budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+    if budget.get("budgetMB") is not None:
+        lines.append(
+            f"Memória reservada: {budget.get('budgetMB')} MiB de "
+            f"{budget.get('availableMB')} MiB livres."
+        )
+
+    steps = [str(s) for s in (payload.get("steps") or [])]
+    if steps:
+        lines.append(f"Etapas: {len(steps)} — " + " → ".join(steps) + ".")
+
+    if plan_is_simulation(payload):
+        lines.append(plan_simulation_refusal(payload))
+    return lines
+
+
 def profile_simulation_note(profile: dict) -> str:
     note = str(profile.get("installNote") or "sem receita de instalação")
     return (
