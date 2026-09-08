@@ -140,3 +140,7 @@ regressão desta frente; não usada como aceite.
 REV-001..018 `verified` ou `deferred` com razão aceita; R5 com CI verde no
 SHA final e asset validado em host limpo; gates físicos registrados com o
 operador; handoff no formato obrigatório.
+
+## Verificação independente70d959f — 2026-09-08
+
+QA dark confirma correções UX-001..004 nos cenários revisados, com confirmação apresentada e overflow horizontal zero em800/1280. Resultado final de pytest e limites em `reports/verify-ux-70d959f/README.md`. Aceite local, sem release; próxima UX-005/007/009.
