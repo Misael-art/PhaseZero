@@ -73,13 +73,19 @@ widget e no log. Resultado desta rodada: **pytest 872 passaram, 0 falhas** e
 Sem captura visual nesta rodada — o aceite é por controle e por comando executado,
 não por layout. Limites anteriores continuam valendo.
 
-## Próxima etapa aprovada como direção
+## Próxima etapa
 
-Avançar UX-005/007/009: modo simples por jornada, separando instalação de simulação de orçamento, com estado funcional, ação principal, configuração de acesso e Abrir solução. Preferir um fluxo completo de referência antes de replicá-lo pelo catálogo.
+UX-005/007/009 têm aceite local pelas rodadas acima: jornada por app real, instalação
+distinta de simulação de orçamento, plano em linguagem de produto e recuperação por
+controle visível. O que a direção original pedia e ainda **não** foi feito: medir a
+jornada com quem não conhece o produto, e prová-la contra um servidor de verdade —
+instalar um app, criar a primeira conta, abrir a solução.
 
-Aceite sugerido: usuário escolhe destino e app instalável, revisa impacto, instala, configura primeiro acesso, abre solução e retoma após erro. Testar somente por controles apresentados, dentro de MainWindow/tema real. JSON, logs, política e orçamento ficam em detalhes avançados; não se tornam requisito para operar.
-
-Depois R2/UX-008 (primeiro pareamento) e R3/UX-010 (contrato gráfico). Permanecem pendentes tema light, escala150/200%, leitor de tela, usabilidade com participantes, CI/PR/release, banco↔anexos e snapshots por serviço. Não reexecutei suíte shell sem mudanças nem pytest completo/falha dualscreen alegada pelo agente.
+Em aberto no roadmap: UX-006 (início por objetivo real), R2/UX-008 (primeiro
+pareamento remoto), R3/UX-010 (contrato gráfico do Windows) e UX-011 (acessibilidade
+e usabilidade). Permanecem pendentes tema light, escala150/200%, leitor de tela,
+usabilidade com participantes, CI/PR/release, banco↔anexos e snapshots por serviço.
+Não verifiquei a falha dualscreen alegada pelo agente.
 
 ## Handoff
 
