@@ -406,6 +406,23 @@ class WindowsVmPage(BasePage):
         self._set_state("info")
         self.status_loader.fetch_action(action)
 
+    def focus_journey(self, key: str) -> None:
+        """UX-006: "Instalar e usar Windows" lands on the install entry.
+
+        The hero's install control is the entry point of the installation
+        journey, so arriving from the goal card brings it forward instead
+        of leaving the operator to find it among the maintenance switches.
+        """
+        if key != "install":
+            return
+        install = getattr(self, "install_button", None)
+        if install is None:
+            return
+        install.setFocus(Qt.FocusReason.OtherFocusReason)
+        scroll = self.findChild(QScrollArea)
+        if scroll is not None:
+            scroll.ensureWidgetVisible(install)
+
     def _set_state(self, state: str) -> None:
         self.state_label.setProperty("state", state)
         self.state_label.style().unpolish(self.state_label)

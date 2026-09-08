@@ -18,6 +18,11 @@ class BasePage(QWidget):
     action_requested = Signal(object)
     actions_requested = Signal(object)
     action_selected = Signal(object)
+    # UX-006: a goal card may lead to the page where that goal is actually
+    # carried out, instead of firing one action and leaving the operator to
+    # find the rest of the journey in the sidebar. The second argument names
+    # the journey to bring forward once that page is shown.
+    category_requested = Signal(str, str)
 
     def __init__(
         self,
@@ -121,6 +126,18 @@ class BasePage(QWidget):
 
     def request_action(self, action: ActionSpec) -> None:
         self.action_requested.emit(action)
+
+    def request_category(self, category: str, focus: str = "") -> None:
+        """UX-006: go to the page that carries out this goal."""
+        self.category_requested.emit(category, focus)
+
+    def focus_journey(self, key: str) -> None:
+        """Bring the journey named by ``key`` forward on this page.
+
+        The default is a no-op: a page without a specific entry point is
+        simply shown. Pages that own a multi-step journey override this so
+        arriving from a goal card lands on the right step.
+        """
 
     def request_actions(self, actions: list[ActionSpec]) -> None:
         if actions:

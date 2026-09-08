@@ -514,6 +514,25 @@ class HomelabPage(BasePage):
             self._onboard_confirm.setVisible(visible)
             self._onboard_confirm.setEnabled(visible)
 
+    def focus_journey(self, key: str) -> None:
+        """UX-006: arriving from a goal card lands on that goal's step.
+
+        "install" starts the guided flow from the beginning; "pair" jumps
+        to the step that authorizes this computer to run another machine,
+        which is the goal 'cuidar de outro computador' actually means.
+        """
+        if key == "pair":
+            self._onboard_step = self.ONBOARD_STEPS.index("pair")
+            self._onboard_confirmed = False
+            self._refresh_onboard_label()
+            if self._host_combo is not None:
+                self._host_combo.setFocus()
+            self._state_label.setText(
+                "Escolha o computador remoto e pareie para administrá-lo daqui"
+            )
+        elif key == "install":
+            self.start_onboarding()
+
     def start_onboarding(self) -> None:
         self._onboard_step = 0
         self._onboard_confirmed = False

@@ -17,45 +17,55 @@ from .base import BasePage
 
 # Jornada de primeiro uso: três passos concretos, cada um uma ação real do
 # catálogo (nada de navegação inventada). IDs ausentes simplesmente somem.
+# UX-006: nenhum passo exige IA — quem nunca vai usar assistente conclui o
+# primeiro uso inteiro. IA continua disponível como objetivo, por escolha.
 ONBOARDING_STEPS: tuple[tuple[str, str, str], ...] = (
     ("1", "Diagnosticar o sistema",
      "Uma checagem rápida diz o que já está bom e o que precisa de atenção."),
-    ("2", "Preparar agentes de IA",
-     "Instala as regras e conectores para os assistentes funcionarem aqui."),
-    ("3", "Criar primeiro backup",
-     "Memória, acessos e dados protegidos antes de qualquer mudança grande."),
+    ("2", "Preparar este computador",
+     "Aplica a base segura do sistema: pacotes essenciais e ajustes conservadores."),
 )
 
 # PZ-AUD-029: objetivos em vez de taxonomias. Cinco jornadas, cada uma com
 # UMA ação de entrada real do catálogo mais requisito, custo e maturidade.
 # Detalhes técnicos continuam nas páginas de cada área (revelação progressiva).
-JOURNEYS: tuple[tuple[str, str, str, str, str, str], ...] = (
-    # key, title, entry action id, requirement, cost, maturity
+# UX-006: cada objetivo leva ao lugar onde ele acontece. Objetivos com
+# jornada própria (``destination``) abrem a página e caem na etapa de
+# entrada; os demais executam a ação real do catálogo. Nenhum objetivo
+# depende de IA — ela é uma escolha entre as outras.
+JOURNEYS: tuple[tuple[str, str, str, str, str, str, str, str], ...] = (
+    # key, title, entry action id, requirement, cost, maturity,
+    # destination category, journey focus
     ("use", "Preparar este computador",
      "profile.safe-base",
      "Arch/derivada + bridge admin (configurada após instalar)",
      "pacotes do sistema",
-     "perfil base"),
+     "perfil base", "", ""),
     ("host", "Hospedar serviços em casa",
      "profile.homelab",
      "Docker instalado pelo preparo; orçamento verificado antes",
      "~1 GiB de RAM base + apps",
-     "receitas por app"),
+     "receitas por app", "Homelab", "install"),
     ("manage", "Cuidar de outro computador",
      "homelab.hosts",
      "SSH + pareamento com a chave do admin",
      "sem custo nesta máquina",
-     "ponte remota"),
+     "ponte remota", "Homelab", "pair"),
+    ("windows", "Instalar e usar Windows",
+     "windows.provision.player",
+     "ISO do Windows + espaço em disco; bridge admin para o boot",
+     "download da ISO + imagem da VM",
+     "instalação assistida", "Windows VM", "install"),
     ("ai", "IA e desenvolvimento",
      "profile.dev-ai",
      "toolchain via perfil; logins dos provedores quando pedir",
      "modelos sob demanda",
-     "núcleo + proxies"),
+     "núcleo + proxies", "", ""),
     ("play", "Jogos, Android e VM",
      "profile.gaming",
      "drivers/Steam conforme a página de cada área",
      "downloads por área",
-     "catálogo por área"),
+     "catálogo por área", "", ""),
 )
 
 _STEP_HINTS = {number: hint for number, _t, hint in ONBOARDING_STEPS}
@@ -76,10 +86,14 @@ class DashboardPage(BasePage):
         self.dashboard_cards: list[ActionCard] = []
         self._grids: list[tuple[QGridLayout, list[ActionCard], int]] = []
         try:
-            first_use = not OperationLedger(root).records(limit=1)
+            # The ledger lives in the state dir, like every other caller.
+            # Passing the repo root made every start look like a first use,
+            # so "retomar" never had anything to offer.
+            recent = OperationLedger().records(limit=1)
         except Exception:
-            first_use = True
-        self.first_use = first_use
+            recent = []
+        self.first_use = not recent
+        self._recent = recent[0] if recent else {}
 
     def build(self) -> None:
         scroll = QScrollArea()
@@ -106,6 +120,10 @@ class DashboardPage(BasePage):
             onboarding = self._build_onboarding()
             if onboarding is not None:
                 host_layout.addWidget(onboarding)
+        else:
+            resume = self._build_resume()
+            if resume is not None:
+                host_layout.addWidget(resume)
 
         journeys = self._build_journeys()
         if journeys is not None:
@@ -128,8 +146,7 @@ class DashboardPage(BasePage):
         for number, title, _hint in ONBOARDING_STEPS:
             action_id = {
                 "1": "system.doctor.system",
-                "2": "ai.compat",
-                "3": "ai.backup.export",
+                "2": "profile.safe-base",
             }.get(number, "")
             action = self.by_id.get(action_id)
             if action is not None:
@@ -177,14 +194,63 @@ class DashboardPage(BasePage):
             column.addLayout(row)
         return card
 
+    def _build_resume(self) -> QWidget | None:
+        """UX-006: retomar a tarefa recente, do lugar onde ela acontece.
+
+        O ledger registra ciclo de vida (nunca comandos ou segredos). O que
+        interessa aqui é onde a tarefa estava e como voltar para ela — não
+        o identificador da operação.
+        """
+        record = self._recent
+        title = str(record.get("title") or "")
+        category = str(record.get("category") or "")
+        # MainWindow falls back to Início for a category it cannot show, so
+        # the card only needs both fields to be present.
+        if not title or not category:
+            return None
+        status = str(record.get("status") or "")
+        headline = {
+            "succeeded": "Última tarefa concluída",
+            "failed": "Última tarefa falhou",
+            "interrupted": "Tarefa interrompida",
+            "cancelled": "Última tarefa cancelada",
+        }.get(status, "Tarefa em andamento")
+        card = QFrame()
+        card.setObjectName("healthHero")
+        policy = card.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        card.setSizePolicy(policy)
+        card.setMinimumWidth(0)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(20, 16, 20, 16)
+        copy = QVBoxLayout()
+        heading = QLabel(headline)
+        heading.setObjectName("serviceTitle")
+        heading.setWordWrap(True)
+        heading.setMinimumWidth(0)
+        detail = QLabel(f"{title} · {category}")
+        detail.setObjectName("cardDescription")
+        detail.setWordWrap(True)
+        detail.setMinimumWidth(0)
+        copy.addWidget(heading)
+        copy.addWidget(detail)
+        row.addLayout(copy, 1)
+        resume = QPushButton("Retomar")
+        resume.setObjectName("primaryButton")
+        resume.setAccessibleName(f"Retomar {title}")
+        resume.clicked.connect(lambda _=False, c=category: self.request_category(c))
+        row.addWidget(resume)
+        self.resume_card = card
+        return card
+
     def _build_journeys(self) -> QWidget | None:
         """Faixa de objetivos — PZ-AUD-029. Só ações que existem."""
-        rows: list[tuple[ActionSpec, str, str, str, str]] = []
-        for _key, title, action_id, requirement, cost, maturity in JOURNEYS:
+        rows: list[tuple[ActionSpec, str, str, str, str, str, str]] = []
+        for _key, title, action_id, requirement, cost, maturity, dest, focus in JOURNEYS:
             action = self.by_id.get(action_id)
             if action is None:
                 continue
-            rows.append((action, title, requirement, cost, maturity))
+            rows.append((action, title, requirement, cost, maturity, dest, focus))
         if not rows:
             return None
         self.journey_cards: list[QWidget] = []
@@ -193,7 +259,7 @@ class DashboardPage(BasePage):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(14)
-        for index, (action, title, requirement, cost, maturity) in enumerate(rows):
+        for index, (action, title, requirement, cost, maturity, dest, focus) in enumerate(rows):
             card = QFrame()
             card.setObjectName("journeyCard")
             # Same reflow contract as ActionCard: narrow viewports collapse
@@ -209,10 +275,18 @@ class DashboardPage(BasePage):
             meta.setWordWrap(True)
             meta.setMinimumWidth(0)
             column.addWidget(meta)
-            run = QPushButton("Preparar e usar")
+            if dest:
+                run = QPushButton("Abrir jornada")
+                run.setAccessibleName(f"{title} — abrir jornada")
+                run.setToolTip(f"Vai para {dest} e começa na etapa certa.")
+                run.clicked.connect(
+                    lambda _=False, d=dest, f=focus: self.request_category(d, f)
+                )
+            else:
+                run = QPushButton("Preparar e usar")
+                run.setAccessibleName(f"{title} — preparar e usar")
+                run.clicked.connect(lambda _=False, a=action: self.request_action(a))
             run.setObjectName("primaryButton")
-            run.setAccessibleName(f"{title} — preparar e usar")
-            run.clicked.connect(lambda _=False, a=action: self.request_action(a))
             column.addWidget(run)
             self.journey_cards.append(card)
             self.mark_represented(action)

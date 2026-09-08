@@ -161,7 +161,7 @@ def test_home_journeys_cover_objectives_with_single_entry(qapp):
         page = window.registry.page_for("Início")
         assert page is not None
         cards = getattr(page, "journey_cards", [])
-        assert len(cards) == 5, f"expected 5 journey cards, got {len(cards)}"
+        assert len(cards) == 6, f"expected 6 journey cards, got {len(cards)}"
         seen_actions = set()
         for card in cards:
             labels = [w.text() for w in card.findChildren(QLabel)]
@@ -169,13 +169,17 @@ def test_home_journeys_cover_objectives_with_single_entry(qapp):
             assert "Precisa:" in joined
             assert "Custo:" in joined
             assert "Maturidade:" in joined
+            # UX-006: one entry control per card — it either runs the
+            # entry action or opens the page that carries the journey.
             buttons = [b for b in card.findChildren(QPushButton)
-                       if b.text() == "Preparar e usar"]
+                       if b.text() in ("Preparar e usar", "Abrir jornada")]
             assert len(buttons) == 1
         from linux.ui_native.pages.dashboard import JOURNEYS
 
-        for _key, _title, action_id, _req, _cost, _mat in JOURNEYS:
+        for _key, _title, action_id, _req, _cost, _mat, dest, _focus in JOURNEYS:
             assert action_id in window.registry.by_id, action_id
+            if dest:
+                assert window.registry.page_for(dest) is not None, dest
             seen_actions.add(action_id)
-        assert len(seen_actions) == 5
+        assert len(seen_actions) == 6
         window.close()

@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
             page.action_requested.connect(self.request_action)
             page.actions_requested.connect(self.request_actions)
             page.action_selected.connect(self.inspect_action)
+            page.category_requested.connect(self.show_journey)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -449,6 +450,13 @@ class MainWindow(QMainWindow):
             if hasattr(page, "reload"):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
+
+    def show_journey(self, category: str, focus: str = "") -> None:
+        """UX-006: open a goal's destination and land on its entry step."""
+        self.show_category(category)
+        page = self.registry.page_for(category)
+        if page is not None and focus:
+            page.focus_journey(focus)
 
     def inspect_action(self, action: ActionSpec) -> None:
         self.inspector.set_action(action)
