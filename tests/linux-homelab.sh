@@ -61,6 +61,7 @@ order_out="$(PZ_DRY_RUN=1 bash -c '
 ' "$REPO_ROOT" 2>&1)"
 svc_line="$(printf '%s\n' "$order_out" | grep -n "system services" | head -1 | cut -d: -f1)"
 script_line="$(printf '%s\n' "$order_out" | grep -n "setup scripts" | head -1 | cut -d: -f1)"
+# shellcheck disable=SC2015 # asserção de ordem: falha cai no ramo de erro
 [ -n "$svc_line" ] && [ -n "$script_line" ] && [ "$svc_line" -lt "$script_line" ] \
     || { echo "FAIL: services not ordered before scripts"; exit 1; }
 # A failing workload step fails the applier (no WARN-and-continue).
@@ -102,6 +103,7 @@ echo "$compose_out" | rg -q "would converge declared compose: up" \
     || { echo "FAIL: docker_compose not consumed in dry-run"; exit 1; }
 compose_line="$(printf '%s\n' "$compose_out" | grep -n "would converge declared compose" | head -1 | cut -d: -f1)"
 script_line2="$(printf '%s\n' "$compose_out" | grep -n "setup scripts" | head -1 | cut -d: -f1)"
+# shellcheck disable=SC2015 # asserção de ordem: falha cai no ramo de erro
 [ -n "$compose_line" ] && [ -n "$script_line2" ] && [ "$compose_line" -lt "$script_line2" ] \
     || { echo "FAIL: compose not converged before scripts"; exit 1; }
 printf '%s\n' '{"name":"pz-test-bad","docker_compose":{"core":123}}' > "$TMP/bad-compose.json"
@@ -1367,6 +1369,7 @@ echo "  restore partial failure rolls back to pre-restore ok"
 # rollback copy taken while writers are live can ship a torn database.
 down_line="$(rg -n 'if ! cmd_down; then' "$REPO_ROOT/linux/server/homelab-stack.sh" | head -1 | cut -d: -f1)"
 snap_line="$(rg -n 'tar -C "\$mount" -czf "\$pre_dir' "$REPO_ROOT/linux/server/homelab-stack.sh" | head -1 | cut -d: -f1)"
+# shellcheck disable=SC2015 # asserção de ordem: falha cai no ramo de erro
 [ -n "$down_line" ] && [ -n "$snap_line" ] && [ "$down_line" -lt "$snap_line" ] \
     || { echo "FAIL: pre-restore snapshot must follow stack stop (REV-003)"; exit 1; }
 echo "  restore stops stack before snapshot ok (REV-003)"
@@ -1376,6 +1379,7 @@ echo "  restore stops stack before snapshot ok (REV-003)"
 # ps/volume succeed, `compose down` exits 42). No volume-mount override —
 # that path short-circuits cmd_down.
 DOCK="$TMP/docker-down42"; mkdir -p "$DOCK"
+# shellcheck disable=SC2016 # o corpo do stub é literal de propósito: a expansão acontece quando o stub roda, não agora
 printf '#!/usr/bin/env bash\ncase "$1" in info|compose) case "${2:-}" in version|"") exit 0 ;; esac ;; esac\ncase "$*" in *"down"*) exit 42 ;; *) exit 0 ;; esac\n' > "$DOCK/docker"
 chmod +x "$DOCK/docker"
 cp -a "$BKT/bk1" "$BKT/bkr01"
@@ -1401,9 +1405,11 @@ SHIM="$TMP/cp-shim"; mkdir -p "$SHIM"
 real_cp="$(command -v cp)"
 real_find="$(command -v find)"
 # cp shim: fails once (consumes the arm file) when the destination matches.
+# shellcheck disable=SC2016 # o corpo do stub é literal de propósito: a expansão acontece quando o stub roda, não agora
 printf '#!/usr/bin/env bash\nif [ "${1:-}" = "-a" ] && [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
 # find shim: fails only the FIRST wipe of the configured directory (arm
 # consumed) so the rollback's own wipe still succeeds.
+# shellcheck disable=SC2016 # o corpo do stub é literal de propósito: a expansão acontece quando o stub roda, não agora
 printf '#!/usr/bin/env bash\nif [ -n "${PZ_REV1_WIPE:-}" ] && [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${1:-}" = "$PZ_REV1_WIPE" ] && [ "${*: -1}" = "-delete" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_find" > "$SHIM/find"
 chmod +x "$SHIM/cp" "$SHIM/find"
 for scenario in vw-cp st-cp vw-wipe; do
@@ -1430,6 +1436,7 @@ done
 echo "  restore failed mutation rolls back at every position ok (REV-001 matrix)"
 # REV-001: when even the rollback cannot complete, the result says
 # recovery-required instead of claiming rollbackApplied:true.
+# shellcheck disable=SC2016 # o corpo do stub é literal de propósito: a expansão acontece quando o stub roda, não agora
 printf '#!/usr/bin/env bash\nif [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
 rev2_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
     PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \

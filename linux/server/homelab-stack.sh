@@ -1373,6 +1373,7 @@ prepare_install_deps() {
     }
     plan_id="$(jq -r '.planId // .plan_id // .id // empty' <<< "$plan_json")"
     token="$(jq -r '.confirmToken // .confirm_token // .token // empty' <<< "$plan_json")"
+    # shellcheck disable=SC2015 # guarda: sem plano/token, aborta com erro
     [ -n "$plan_id" ] && [ -n "$token" ] || {
         pz_error "capabilities plan returned no plan-id/token"
         return 1

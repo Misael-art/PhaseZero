@@ -79,7 +79,16 @@ def test_essential_packages_resolve_in_repo():
 
 
 def test_optional_preflight_never_blocks(tmp_path):
-    """A profile with only an unavailable optional completes (best effort)."""
+    """A profile with only an unavailable optional completes (best effort).
+
+    Perfil legado é caminho pacman: fora de host Arch, `pz_run_profile`
+    recusa por contrato ("use 'pz capabilities'"), que é a resposta certa
+    e não o que este teste mede. O job arch-clean-host cobre isto de fato.
+    """
+    if shutil.which("pacman") is None:
+        import pytest
+
+        pytest.skip("no pacman on this host")
     profile = tmp_path / "opt.json"
     profile.write_text(json.dumps({
         "name": "pz-test-optional",

@@ -350,6 +350,7 @@ write_image_pins_env() {
     local tmp key digest var
     tmp="$(pz_tempfile)"
     while IFS=$'\t' read -r key digest; do
+        # shellcheck disable=SC2015 # guarda: sem key/digest, pula a entrada
         [ -n "$key" ] && [ -n "$digest" ] || continue
         var="$(pins_env_var_for_key "$key")"
         printf '%s=%s\n' "$var" "$digest"

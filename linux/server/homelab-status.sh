@@ -222,12 +222,14 @@ except Exception:
 functional_probes_json() {
     # PZ-AUD-006/008: per-recipe HTTP proof for each expected RUNNING app.
     # Skipped entirely when nothing runs, so hermetic runs stay silent.
-    local expected="$1" running="$2"
+    # Nome distinto de `running`, que neste arquivo é um array (health_probe):
+    # reusá-lo como string faz o shellcheck ler expansão de array sem índice.
+    local expected="$1" running_json="$2"
     local -a failed=() passed=()
     local key container port path expect_max
     while IFS=$'\t' read -r key container port path expect_max; do
         [ -n "$key" ] || continue
-        if ! jq -e --arg c "$container" 'index($c) != null' <<< "$running" >/dev/null 2>&1; then
+        if ! jq -e --arg c "$container" 'index($c) != null' <<< "$running_json" >/dev/null 2>&1; then
             continue
         fi
         if probe_http "$port" "$path" "$expect_max"; then
