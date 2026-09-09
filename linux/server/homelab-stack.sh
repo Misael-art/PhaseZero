@@ -499,7 +499,7 @@ profile_coverage_json() {
           maturity:($profile.maturity // "preview"),
           installable:($profile.installable // false),
           installNote:($profile.installNote // "no install recipe yet"),
-          complete:([$profile.services[] as $service | select(($compose|index($service)) == null) | $service]|length)==0,
+          complete:(([$profile.services[] as $service | select(($compose|index($service)) == null) | $service]|length)==0),
           composeManaged:[$profile.services[] as $service | select(($compose|index($service)) != null) | $service],
           unmanaged:[$profile.services[] as $service | select(($compose|index($service)) == null) | $service],
           reason:"profile registry is declarative; homelab-stack may start only services present in rendered Compose"}'
