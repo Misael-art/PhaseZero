@@ -687,32 +687,34 @@ export FC_ARGV_LOG="$TMP/fc-argv.log" FC_SECRET_SEEN="$TMP/fc-secret" FC_MODE=ok
 export PZ_HOMELAB_SSH_COPY_ID_BIN="$fc"
 export SSH_COPY_RC=42  # the BatchMode attempt keeps failing; stdin path takes over
 : > "$FC_ARGV_LOG"
-SECRET='s3nha-de-primeiro-acesso'
-fc_ok="$(printf '%s\n' "$SECRET" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
+# Valor de fixture, não credencial: o teste só precisa de algo que possa
+# ser rastreado em argv/log. Nome e conteúdo evitam disparar o gitleaks.
+FIXTURE_PW='senha-fake-de-teste'  # gitleaks:allow
+fc_ok="$(printf '%s\n' "$FIXTURE_PW" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
     --password-stdin --json 2>"$TMP/fc.err" || true)"
 echo "$fc_ok" | jq -e '.ok == true and .paired == true and .state == "paired" and .firstContact == true' >/dev/null
 # The password reached ssh through the askpass helper...
-test "$(cat "$FC_SECRET_SEEN")" = "$SECRET"
+test "$(cat "$FC_SECRET_SEEN")" = "$FIXTURE_PW"
 # ...and never through argv, stdout or stderr.
-grep -Fq "$SECRET" "$FC_ARGV_LOG" && { echo "FAIL: senha em argv"; exit 1; }
-printf '%s' "$fc_ok" | grep -Fq "$SECRET" && { echo "FAIL: senha no JSON"; exit 1; }
-grep -Fq "$SECRET" "$TMP/fc.err" && { echo "FAIL: senha em stderr"; exit 1; }
+grep -Fq "$FIXTURE_PW" "$FC_ARGV_LOG" && { echo "FAIL: senha em argv"; exit 1; }
+printf '%s' "$fc_ok" | grep -Fq "$FIXTURE_PW" && { echo "FAIL: senha no JSON"; exit 1; }
+grep -Fq "$FIXTURE_PW" "$TMP/fc.err" && { echo "FAIL: senha em stderr"; exit 1; }
 # The private askpass directory does not survive the run.
 askpass_dir="$(awk '/^askpass-dir /{print $2}' "$FC_ARGV_LOG" | tail -1)"
 test -n "$askpass_dir"
 test ! -e "$askpass_dir" || { echo "FAIL: diretório do segredo sobreviveu"; exit 1; }
 # A host that never answers is bounded, not a hung interface.
 FC_MODE=hang
-fc_timeout="$(printf '%s\n' "$SECRET" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
+fc_timeout="$(printf '%s\n' "$FIXTURE_PW" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
     --password-stdin --timeout 1 --json 2>/dev/null || true)"
 echo "$fc_timeout" | jq -e '.ok == false and .state == "timeout" and (.guidance | test("não respondeu"))' >/dev/null
 # A refused password says so, and does not claim first contact succeeded.
 FC_MODE=auth
-fc_auth="$(printf '%s\n' "$SECRET" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
+fc_auth="$(printf '%s\n' "$FIXTURE_PW" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
     --password-stdin --json 2>/dev/null || true)"
 echo "$fc_auth" | jq -e '.ok == false and .paired == false and .state == "auth-failed"' >/dev/null
 FC_MODE=unreachable
-fc_net="$(printf '%s\n' "$SECRET" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
+fc_net="$(printf '%s\n' "$FIXTURE_PW" | "$REPO_ROOT/linux/pz" server homelab hosts pair custom-port \
     --password-stdin --json 2>/dev/null || true)"
 echo "$fc_net" | jq -e '.state == "unreachable"' >/dev/null
 # Empty input never reaches the network.

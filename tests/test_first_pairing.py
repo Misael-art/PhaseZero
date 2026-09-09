@@ -73,7 +73,8 @@ def _failure(state: str, guidance: str, alias: str = "garagem") -> bytes:
     }).encode("utf-8")
 
 
-SECRET = "s3nha-de-primeiro-acesso"
+# Valor de fixture, não credencial: só precisa ser rastreável em argv.
+FIXTURE_PW = "senha-fake-de-teste"  # gitleaks:allow
 
 
 def test_first_contact_asks_for_the_password_instead_of_a_terminal(page, monkeypatch):
@@ -82,7 +83,7 @@ def test_first_contact_asks_for_the_password_instead_of_a_terminal(page, monkeyp
     asked: list[str] = []
     monkeypatch.setattr(
         type(page), "_ask_first_contact_password",
-        lambda self, alias: asked.append(alias) or SECRET,
+        lambda self, alias: asked.append(alias) or FIXTURE_PW,
     )
 
     page._on_pair_done(1, _needs_first_contact(), b"", "garagem")
@@ -91,9 +92,9 @@ def test_first_contact_asks_for_the_password_instead_of_a_terminal(page, monkeyp
     assert spawn.calls, "primeiro acesso não foi tentado"
     args, password = spawn.calls[-1]
     assert "--password-stdin" in args
-    assert password == SECRET
+    assert password == FIXTURE_PW
     # A senha nunca vira argumento — nem em pedaço.
-    assert not any(SECRET in arg for arg in args)
+    assert not any(FIXTURE_PW in arg for arg in args)
 
 
 def test_cancelling_leaves_the_host_unpaired(page, monkeypatch):
@@ -126,13 +127,13 @@ def test_failed_first_contact_explains_and_offers_another_try(page, monkeypatch,
         QMessageBox, "question",
         staticmethod(lambda *a, **k: shown.append(a[2]) or QMessageBox.Yes),
     )
-    monkeypatch.setattr(type(page), "_ask_first_contact_password", lambda self, alias: SECRET)
+    monkeypatch.setattr(type(page), "_ask_first_contact_password", lambda self, alias: FIXTURE_PW)
 
     page._on_pair_done(1, _failure(state, guidance), b"", "garagem")
 
     assert shown and guidance in shown[0], "causa não apresentada"
     assert spawn.calls, "nova tentativa não foi oferecida"
-    assert spawn.calls[-1][1] == SECRET
+    assert spawn.calls[-1][1] == FIXTURE_PW
 
 
 def test_declining_the_retry_states_the_cause_without_a_command(page, monkeypatch):
@@ -151,7 +152,7 @@ def test_declining_the_retry_states_the_cause_without_a_command(page, monkeypatc
 def test_retry_keeps_the_onboarding_intent(page, monkeypatch):
     spawn = _Spawn()
     spawn.install(page, monkeypatch)
-    monkeypatch.setattr(type(page), "_ask_first_contact_password", lambda self, alias: SECRET)
+    monkeypatch.setattr(type(page), "_ask_first_contact_password", lambda self, alias: FIXTURE_PW)
     page._pair_advance = True
 
     page._on_pair_done(1, _needs_first_contact(), b"", "garagem")
@@ -165,7 +166,7 @@ def test_result_for_another_host_is_still_dropped(page, monkeypatch):
     asked: list[str] = []
     monkeypatch.setattr(
         type(page), "_ask_first_contact_password",
-        lambda self, alias: asked.append(alias) or SECRET,
+        lambda self, alias: asked.append(alias) or FIXTURE_PW,
     )
 
     page._on_pair_done(1, _needs_first_contact("outro"), b"", "outro")
