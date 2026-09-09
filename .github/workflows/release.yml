@@ -28,7 +28,7 @@ jobs:
   ci-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
@@ -86,7 +86,7 @@ jobs:
             base-devel git jq python python-pip python-pytest pyside6 \
             dpkg rpm-tools squashfs-tools curl sudo
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
@@ -135,7 +135,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
 
@@ -161,7 +161,7 @@ jobs:
     needs: [ci-gate, linux-packages, flatpak]
     if: always() && needs.ci-gate.result == 'success' && needs.linux-packages.result == 'success'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
 
