@@ -117,6 +117,26 @@ a entrada GRUB "PhaseZero Windows VM" rodaria a versão velha. A correção é
 `phasezero-admin pz windows-vm boot install` — **não executei**: mexe em boot, e
 o combinado desta sessão era não tocar em boot nem reiniciar.
 
+## Correções aplicadas (738ec28)
+
+| Defeito | Correção | Prova |
+|---|---|---|
+| doctor morria com SIGPIPE | ordenação sem pipe, e o glob visita só diretórios `op-*` | **44 → 136 checks** neste host; teste dirige o `pz doctor` real contra um diretório montado para disparar o crash antigo |
+| `--json` ignorado | envelope objeto (`schemaVersion`, `summary`, `ok`, `checks[]`), saída 0 como comando de status, e flag desconhecida agora é recusada | primeira linha é `{`, relatório humano não vaza, `--nao-existe` falha |
+| estado sem poda | check `STATE01` conta e aponta `pz installation prune` | `WARN … 5126 registros … poda: pz installation prune` |
+
+Sem as correções, a suíte morre com 141 — verifiquei revertendo só os arquivos
+de produto e mantendo os testes.
+
+## Achado adicional: suíte órfã
+
+`tests/audit-doctor.sh` **falha** neste host (caso `default_conservative`,
+expectativa de WAYDROID) e **nunca roda no CI**: o `tests/runner.sh` varre
+`tests/linux-*.sh` e `tests/test_*.sh`, e esse arquivo não casa com nenhum dos
+dois padrões. A falha é anterior às minhas mudanças — confirmei revertendo-as.
+Não corrigi: não estava no escopo pedido, e mexer numa expectativa que ninguém
+executa merece decisão explícita.
+
 ## Limites desta verificação
 
 - Nada foi exercido de ponta: nenhum app instalado, nenhuma primeira conta
