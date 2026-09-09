@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 )
 
 from .catalog import WINDOWS_VM_GRAPHICS_OPTIONS
+from .graphics_profiles import (
+    host_profile_state, recommended_profile, simple_graphics_options,
+)
 from .platform import state_dir
 
 
@@ -54,7 +57,8 @@ def completed_image_indices(operations_dir: Path | None = None) -> set[int]:
 class WindowsInstallDialog(QDialog):
     """Collect the complete install contract before the provision player opens."""
 
-    def __init__(self, parent: QWidget | None = None, *, used_indices: set[int] | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, used_indices: set[int] | None = None,
+                 graphics_status: dict | None = None, advanced: bool = False) -> None:
         super().__init__(parent, Qt.Dialog)
         self.setObjectName("windowsInstallDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -63,6 +67,9 @@ class WindowsInstallDialog(QDialog):
         self.setWindowModality(Qt.WindowModal)
         self.setMinimumWidth(620)
         self._used_indices = set(used_indices if used_indices is not None else completed_image_indices())
+        # UX-010: what this host can actually do decides what is offered.
+        self._graphics_status = graphics_status or {}
+        self._advanced = advanced
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -95,12 +102,39 @@ class WindowsInstallDialog(QDialog):
         iso_row.addWidget(choose)
         form.addRow("ISO do Windows:", iso_row)
 
+        # UX-010: simple mode offers only what is stable on THIS host, and
+        # says which display is recommended and why. Experimental paths —
+        # including anything the host reports as experimental or blocked —
+        # exist only in the advanced list, labelled as such.
         self.graphics_combo = QComboBox()
         self.graphics_combo.setObjectName("windowsGraphicsProfile")
-        for value, label, helper in WINDOWS_VM_GRAPHICS_OPTIONS:
+        options = (
+            WINDOWS_VM_GRAPHICS_OPTIONS if self._advanced
+            else simple_graphics_options(self._graphics_status)
+        ) or simple_graphics_options({})
+        for value, label, helper in options:
+            host_mode, blockers = host_profile_state(self._graphics_status, value)
+            if host_mode in ("experimental", "blocked"):
+                label = f"{label} — {'indisponível neste host' if host_mode == 'blocked' else 'experimental neste host'}"
+                if blockers:
+                    helper = f"{helper}\nNeste host: {blockers[0]}"
             self.graphics_combo.addItem(label, (value, helper))
         self.graphics_combo.currentIndexChanged.connect(self._graphics_changed)
         form.addRow("Aceleração gráfica:", self.graphics_combo)
+
+        profile, reason = recommended_profile(self._graphics_status)
+        for row in range(self.graphics_combo.count()):
+            data = self.graphics_combo.itemData(row)
+            if isinstance(data, tuple) and data and data[0] == profile:
+                self.graphics_combo.setCurrentIndex(row)
+                break
+        self.graphics_recommendation = QLabel(
+            f"Recomendado para esta máquina: {profile}." + (f" {reason}" if reason else "")
+        )
+        self.graphics_recommendation.setObjectName("cardDescription")
+        self.graphics_recommendation.setAccessibleName("Display recomendado e motivo")
+        self.graphics_recommendation.setWordWrap(True)
+        form.addRow("", self.graphics_recommendation)
 
         self.graphics_help = QLabel()
         self.graphics_help.setObjectName("cardDescription")

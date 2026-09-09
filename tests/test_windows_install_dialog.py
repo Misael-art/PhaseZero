@@ -70,14 +70,23 @@ def test_dialog_limits_editions_and_disables_used_index(qapp) -> None:
 
 
 def test_dialog_exposes_only_installable_profiles_and_returns_iso_before_player(qapp, tmp_path: Path) -> None:
+    # UX-010: sem medição do host, o modo simples fica no perfil compatível.
+    # virtio-gl é experimental e só aparece no avançado, dito como tal.
     iso = tmp_path / "Windows.iso"
     iso.touch()
-    dialog = WindowsInstallDialog(used_indices=set())
+    simple = WindowsInstallDialog(used_indices=set())
+    simple_ids = [simple.graphics_combo.itemData(i)[0] for i in range(simple.graphics_combo.count())]
+    assert simple_ids == ["compat"]
+    simple.close()
+    simple.deleteLater()
+
+    dialog = WindowsInstallDialog(used_indices=set(), advanced=True)
     dialog.iso_edit.setText(str(iso))
     ids = [dialog.graphics_combo.itemData(index)[0] for index in range(dialog.graphics_combo.count())]
     labels = [dialog.graphics_combo.itemText(index) for index in range(dialog.graphics_combo.count())]
     assert ids == ["compat", "virtio-gl"]
-    assert labels == ["compat — máxima compatibilidade", "virtio-gl — aceleração OpenGL"]
+    assert labels[0] == "compat — máxima compatibilidade"
+    assert "experimental" in labels[1] and "sem 3D garantido" in labels[1]
     assert not hasattr(dialog, "custom_graphics")
     assert not hasattr(dialog, "custom_label")
     dialog.graphics_combo.setCurrentIndex(1)
