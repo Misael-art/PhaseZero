@@ -3,6 +3,16 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.2] - 2026-09-09
+
+Correção encontrada ao iniciar o Windows num host real, depois de rodar `boot install` com privilégio.
+
+### Corrigido
+- **VM não iniciava depois de um comando elevado**: o `windows-vm` já resolvia a base do runtime para `/run/user/<uid do usuário>` quando rodava como root, mas criava o diretório sem devolver o dono. Ele nascia `root:root` dentro do runtime dir do próprio usuário, e a partir daí todo `windows-vm start` sem privilégio parava em `install: não foi possível mudar permissões de "/run/user/1000/phasezero-windows-vm"`. Bastava um `pz windows-vm boot install` pela ponte admin para deixar a VM do usuário travada até alguém corrigir o dono à mão. Os três pontos que criam o diretório passam por um helper que o devolve ao usuário alvo.
+
+### Interface
+- **Ajustes de host pulados viram um resumo com ação**: iniciar a VM sem privilégio imprimia treze avisos `requires root; skipped` seguidos — a maioria um por núcleo de CPU —, sem dizer o que fazer com aquilo. Agora sai uma linha com o que ficou de fora e outra com o comando que aplica (`phasezero-admin pz windows-vm optimize`). A VM inicia com ou sem esses ajustes; eles são otimização, não requisito.
+
 ## [1.20.1] - 2026-09-09
 
 Correções encontradas ao instalar a 1.20.0 num host real e rodar o diagnóstico.
