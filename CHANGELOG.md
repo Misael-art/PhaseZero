@@ -3,6 +3,18 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.1] - 2026-09-09
+
+Correções encontradas ao instalar a 1.20.0 num host real e rodar o diagnóstico.
+
+### Corrigido
+- **`pz doctor` terminava sem terminar**: o comando morria com SIGPIPE no meio do relatório, quando o diretório de operações era grande o bastante para o `ls` ainda estar escrevendo enquanto o `head` já tinha saído. No host de teste o relatório parava no check 44 de 136 — toda a parte de gráficos do Windows VM, TPM e swtpm era pulada em silêncio, e a saída ainda parecia completa.
+- **`pz doctor --json` ignorava a flag** e imprimia o relatório humano; qualquer flag desconhecida era aceita sem aviso. Agora emite o mesmo envelope objeto dos demais comandos de status (`schemaVersion`, `summary`, `ok`, `checks[]`), sai 0 como relatório deve sair, e recusa o que não conhece.
+- O caso 9 de `tests/audit-doctor.sh` exigia `WARN` para subsistema opcional sem configuração, regra que o produto abandonou de propósito em favor de `INFO: not opted in`. O arquivo nunca era executado pelo runner — o nome não casava com os padrões varridos —, então a contradição sobreviveu sem ser vista. Renomeado para `tests/linux-audit-doctor.sh` e alinhado à regra atual.
+
+### Adicionado
+- Check `STATE01`: conta os registros locais de operação e aponta `pz installation prune` quando passam de 500. A poda já existia; faltava alguém dizer que era hora. O host de teste tinha 5126 registros acumulados.
+
 ## [1.20.0] - 2026-09-08
 
 ### Adicionado
