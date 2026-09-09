@@ -106,33 +106,77 @@ Sem captura visual: o aceite aqui é por destino alcançado e por controle em fo
 não por layout. Continua sendo aceite local — nenhuma jornada foi percorrida por
 um participante real, e o pareamento remoto de verdade (R2/UX-008) segue pendente.
 
+## Rodada UX-008 — o primeiro pareamento remoto acontece na interface (a549f82)
+
+Diagnóstico antes de mexer: máquina sem chave contra host novo terminava em
+`state: needs-first-contact` e num aviso — *"Primeiro acesso sempre pede a senha
+no terminal"* — com o comando `ssh-copy-id` para copiar à mão. O fluxo guiado não
+conseguia terminar o que começava, que é exatamente o que o aceite proíbe.
+
+| Mudança | Prova |
+|---|---|
+| `hosts pair --password-stdin [--timeout S]` conclui o primeiro contato; a senha vai por stdin e chega ao ssh por um helper askpass lendo arquivo 0600 dentro de diretório 0700, destruídos em toda saída | stub no lugar do `ssh-copy-id` confirma que a senha chegou **pelo askpass** e que não aparece em argv, no JSON nem em stderr; o diretório do segredo não existe mais depois da execução |
+| Espera limitada: host que não responde não trava a interface, e matar o processo é cancelamento seguro | `--timeout 1` contra stub que dorme devolve `state: timeout` com a causa em linguagem de produto |
+| Desfechos distintos em vez de uma falha só: `paired`, `auth-failed`, `timeout`, `unreachable`, `empty-password` | cada estado conferido no JSON; entrada vazia não chega à rede (log do stub permanece vazio) |
+| A página pede a senha, explica a recusa, oferece nova tentativa e preserva a intenção do onboarding; recusar deixa o host sem pareamento | 8 testes na página real: cancelar não dispara comando algum, `_pair_advance` sobrevive à retomada, e resultado de outro host continua descartado |
+
+O teste legado de pareamento fixava o aviso de terminal (porta 2222 na mensagem);
+foi reescrito contra a nova regra — primeiro acesso pedido na interface, sem aviso
+de terminal. A senha continua fora de argv por asserção explícita sobre o código
+de `start_pair`.
+
+### Falha dualscreen: verificada, reproduzida e corrigida
+
+O relatório anterior registrava que a falha dualscreen alegada pelo agente **não
+tinha sido verificada**. A execução completa desta rodada a produziu:
+`test_status_contract.py::test_status_command_always_reports[emulation.dualscreen.status]`
+estourou os 90s. Reproduzida isolada, e também **em HEAD limpo com `git stash`** —
+portanto anterior a este diff. Causa observada em processos vivos: `kscreen-doctor -o`
+fica pendurado sem sessão KDE (havia órfãos com mais de 10 minutos na máquina), e
+`dualscreen_kwin_indices` chamava sem limite, então `emulation dualscreen detect`
+nunca retornava sob runner de teste ou serviço. A chamada passou a ser limitada;
+detect responde com os conectores e marca os índices KWin como `unknown`.
+`tests/linux-dualscreen.sh` ganhou guarda com `kscreen-doctor` travado de propósito.
+
+Resultado desta rodada: **pytest 891 passaram, 0 falhas**; `tests/linux-homelab.sh`
+exit 0; `tests/linux-dualscreen.sh` exit 0.
+
+Limite honesto desta rodada: **nenhum pareamento foi feito contra um servidor SSH
+real**. O primeiro contato é provado contra um stub que representa o `ssh-copy-id`,
+o que cobre o contrato (senha por askpass, fora de argv, limites e estados) mas não
+prova a negociação real com um sshd — inclusive host key desconhecida, teclado
+interativo e senha expirada. R2 só fecha de verdade com uma máquina remota nova.
+
 ## Próxima etapa
 
-UX-005/006/007/009 têm aceite local pelas rodadas acima: jornada por app real,
+UX-005/006/007/008/009 têm aceite local pelas rodadas acima: jornada por app real,
 instalação distinta de simulação de orçamento, plano em linguagem de produto,
-recuperação por controle visível e objetivos do Início que chegam à jornada que
-prometem. O que a direção original pedia e ainda **não** foi feito: medir a jornada
-com quem não conhece o produto, e prová-la contra um servidor de verdade — instalar
-um app, criar a primeira conta, abrir a solução. Nenhum destino de objetivo foi
-percorrido até o fim contra hardware real.
+recuperação por controle visível, objetivos do Início que chegam à jornada que
+prometem e primeiro pareamento concluído sem terminal. O que a direção original
+pedia e ainda **não** foi feito: medir a jornada com quem não conhece o produto, e
+prová-la contra máquinas de verdade — instalar um app, criar a primeira conta,
+abrir a solução, parear um host remoto novo. Nenhum destino de objetivo foi
+percorrido até o fim contra hardware real; UX-008 está provado contra stub, não
+contra um sshd.
 
-Em aberto no roadmap: R2/UX-008 (primeiro pareamento remoto), R3/UX-010 (contrato
-gráfico do Windows) e UX-011 (acessibilidade e usabilidade). Permanecem pendentes tema light, escala150/200%, leitor de tela,
-usabilidade com participantes, CI/PR/release, banco↔anexos e snapshots por serviço.
-Não verifiquei a falha dualscreen alegada pelo agente.
+Em aberto no roadmap: R3/UX-010 (contrato gráfico do Windows) e UX-011
+(acessibilidade e usabilidade). Permanecem pendentes tema light, escala150/200%,
+leitor de tela, usabilidade com participantes, CI/PR/release, banco↔anexos e
+snapshots por serviço. A falha dualscreen deixou de ser alegação: foi reproduzida
+em HEAD limpo e corrigida nesta rodada.
 
 ## Handoff
 
 ```text
 Objetivo: verificar retorno de70d959f e fechar contrarrevisão UX-001..004.
 Branch/worktree: codex/verify-ux-70d959f; /mnt/sdcard/Projects/pz-verify-ux-70d959f-tree.
-HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5; UX-005/007 7099ef4; UX-006 a4ad262.
+HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5; UX-005/007 7099ef4; UX-006 a4ad262; UX-008 + dualscreen a549f82.
 Arquivos: reports/verify-ux-70d959f; notas Estado vivo/Ledger Homelab e roadmap REV.
 Testes: validation.json/pytest-final.txt; QA dark e medidas de viewport.
-Depois: pytest completo883 verde; tests/linux-homelab.sh exit0 (última execução na rodada UX-005/007).
+Depois: pytest completo891 verde; tests/linux-homelab.sh e tests/linux-dualscreen.sh exit0 na rodada UX-008.
 CI/PR: nenhum; host sem alteração de workloads/serviços/VM/boot/pacotes.
 Segredos: ambiente allowlist, fixtures sintéticas, diff revisto; gitleaks não executado.
 Limitações: aceite local; demais UX e certificação física continuam pendentes.
-Próximo passo: UX-005/006/007/009 com aceite local; faltam R2/UX-008 (pareamento)
-e R3/UX-010 (contrato gráfico); UX-011 segue aberto.
+Próximo passo: UX-005/006/007/008/009 com aceite local; UX-008 falta prova contra
+sshd real. Falta R3/UX-010 (contrato gráfico); UX-011 segue aberto.
 ```
