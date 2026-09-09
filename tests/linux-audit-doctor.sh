@@ -273,8 +273,12 @@ test_subsystem_partial_waydroid() {
     echo "ok"
 }
 
-# case 9: no subsystems.conf → default conservative (all checks run at stated severity)
-test_default_conservative() {
+# case 9: sem subsystems.conf → subsistema opcional fica em INFO, não em WARN.
+# CCS-016 inverteu a regra antiga ("ausência de conf = opted, WARN cheio"):
+# host novo não pode virar parede de avisos por subsistema que o usuário nunca
+# pediu. Este caso guardava a regra antiga e ninguém percebeu, porque o arquivo
+# ficava fora do runner.
+test_optional_subsystem_stays_quiet_without_config() {
     rm -rf "$MOCK_BIN"
     stub_all_subscripts
     mock_install_free "$(FREE_VALID)"
@@ -283,9 +287,13 @@ test_default_conservative() {
     mkdir -p "$XDG_CONFIG_HOME/phasezero"
     local output
     output=$(mock_run)
-    if ! echo "$output" | grep -Eq '(WARN.*WAYDROID|WAYDROID.*WARN)'; then
-        echo "FAIL: case 9 (default-conservative) — expected WAYDROID WARN with no config" >&2
+    if ! echo "$output" | grep -Eq '\[INFO\] WAYDROID00.*not opted in'; then
+        echo "FAIL: sem config, Waydroid deveria ficar em INFO 'not opted in'" >&2
         echo "WAYDROID lines: $(echo "$output" | grep WAYDROID || true)" >&2
+        return 1
+    fi
+    if echo "$output" | grep -Eq '(WARN.*WAYDROID|WAYDROID.*WARN)'; then
+        echo "FAIL: subsistema não solicitado virou WARN num host sem config" >&2
         return 1
     fi
     echo "ok"
@@ -296,7 +304,7 @@ echo "=== audit/doctor.sh engine hardening tests ==="
 for case in test_snap_not_fail test_mem_localized_error test_mem_valid_pass \
             test_pct_malformed_error test_stdout_id test_host_profile_deck_winvm06 \
             test_subsystem_never_waydroid test_subsystem_partial_waydroid \
-            test_default_conservative; do
+            test_optional_subsystem_stays_quiet_without_config; do
     printf "  case %s: " "${case#test_}"
     mock_cleanup 2>/dev/null || true
     if "$case"; then
