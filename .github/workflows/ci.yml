@@ -120,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           jq -e '.schemaVersion == 1 and (.profiles|length) == 6' assets/home-server/homelab-profiles.json >/dev/null
-          jq -e '.schemaVersion == 1 and (.images|type == "object") and (.images|length) == 13 and all(.images[]; (test(":latest") | not))' assets/home-server/docker-compose.lock.json >/dev/null
+          jq -e '.schemaVersion == 1 and (.images|type == "object") and (.images|length) == 14 and all(.images[]; (test(":latest") | not))' assets/home-server/docker-compose.lock.json >/dev/null
           jq -e '.schemaVersion == 1 and (.apps|length) >= 10 and all(.apps[].imageRef; (test(":latest") | not))' assets/home-server/apps/catalog.json >/dev/null
 
       - name: Run hermetic homelab fault suite (no docker daemon expected)
@@ -129,6 +129,13 @@ jobs:
           # docker is present in the runner; the suite must still pass without
           # a daemon because it only exercises env-overridable paths.
           bash tests/linux-homelab.sh
+
+      - name: Proxy manifest contract holds (PZ-AUD-019)
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/fake-home"
+          mkdir -p "$HOME"
+          ./linux/pz ai proxies manifest | jq -e '.ok == true'
 
       - name: Run tuning suites (apply/revert/status contract)
         run: |
@@ -181,6 +188,32 @@ jobs:
           test "$(docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox cat /data/db.sqlite)" = "db-secret-42"
           test "$(docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox cat /data/a.txt)" = "sentinel-sync"
           echo "restore data equality ok (real docker volumes)"
+
+      - name: Restore converges exact state on real volumes (PZ-AUD-010)
+        run: |
+          set -euo pipefail
+          run_pz() { sudo -n PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" \
+            PZ_HOMELAB_BACKUP_ROOT="$PZ_HOMELAB_BACKUP_ROOT" \
+            PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' "$@"; }
+          export PZ_HOMELAB_STATE="$RUNNER_TEMP/pz-state"
+          export PZ_HOMELAB_BACKUP_ROOT="$RUNNER_TEMP/pz-backups"
+          # Unlisted archives are never applied; post-backup files are removed.
+          docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox sh -c 'echo posterior-data > /data/posterior.txt'
+          # Os backups sao criados pelo passo anterior sob sudo e ficam do
+          # root, como devem: sao dados de aplicacao, nao artefato publico.
+          # Plantar o arquivo nao listado exige o mesmo privilegio de quem
+          # escreveu o diretorio — copiar como runner so provava o umask.
+          sudo -n cp "$PZ_HOMELAB_BACKUP_ROOT/bk1/vaultwarden_data.tgz" "$PZ_HOMELAB_BACKUP_ROOT/bk1/evil_extra.tgz"
+          rs="$(run_pz ./linux/pz server homelab restore --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" --yes 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.ok == true' <<<"$rs" >/dev/null
+          test "$(docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox cat /data/db.sqlite)" = "db-secret-42"
+          if docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox test -e /data/posterior.txt; then
+            echo "post-backup file survived restore" >&2; exit 1
+          fi
+          if docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox test -e /data/evil_extra/evil.txt; then
+            echo "unlisted archive was applied" >&2; exit 1
+          fi
+          echo "restore exactness ok (real docker volumes)"
 
   homelab-apps-disposable:
     runs-on: ubuntu-latest
@@ -274,6 +307,57 @@ jobs:
           curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           /tmp/gitleaks detect --source . --no-banner -v
+
+  # PZ-AUD-027/001: official Arch repos + release asset install on a clean
+  # host. Ubuntu runners cannot prove Arch; this container can.
+  arch-clean-host:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Base tools on the clean host
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed base-devel python python-pytest jq git sudo
+          # Product-declared extra repos (profiles archRepos) are enabled by
+          # the installer at runtime; CI enables them here so the live
+          # resolution gate proves the full story on disposable iron.
+          if grep -Eq '^\[multilib\]' /etc/pacman.conf; then
+            :
+          elif grep -Eq '^#\[multilib\]' /etc/pacman.conf; then
+            sed -i '/^#\[multilib\]/,/^#Include/s/^#//' /etc/pacman.conf
+          else
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+          fi
+          grep -Eq '^\[multilib\]' /etc/pacman.conf
+          pacman -Sy
+
+      - name: Profile manifests resolve in official Arch repos
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_profile_packages.py -q
+
+      - name: Build the release asset as an unprivileged user
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE' && bash packaging/linux/arch/build-arch.sh"
+
+      - name: Install the asset, prove entrypoints and fail-closed status
+        run: |
+          set -euo pipefail
+          pacman -U --noconfirm "$GITHUB_WORKSPACE"/dist/phasezero-control-center-*.pkg.tar.zst
+          test -x /usr/bin/pz
+          test -x /usr/bin/phasezero-control-center
+          pz --version
+          # Packaged tree serves diagnostics with no checkout and no daemon.
+          out="$(pz server homelab status --json 2>/dev/null)"
+          jq -e '.schemaVersion == "1" and .ready == false and (.reasons | type == "array")' <<<"$out" >/dev/null
+          out="$(pz server homelab prepare --dry-run --json 2>/dev/null)"
+          jq -e '.action == "prepare" and .dryRun == true' <<<"$out" >/dev/null
 
   package-smoke:
     runs-on: ubuntu-latest

@@ -137,15 +137,25 @@ Se a linha do pacote não for `OK`, **pare**. Não instale.
 
 | Sistema | Ficheiro | Comando |
 |---|---|---|
-| Arch / Manjaro / BigLinux | `phasezero-control-center-*-any.pkg.tar.zst` | `phasezero-admin pacman -U ./ficheiro.pkg.tar.zst` |
+| Arch / Manjaro / BigLinux | `phasezero-control-center-*-any.pkg.tar.zst` | `sudo pacman -U ./ficheiro.pkg.tar.zst` |
 | Debian / Ubuntu | `phasezero-control-center_*_all.deb` | `sudo apt install ./ficheiro.deb` |
 | Fedora / openSUSE | `phasezero-control-center-*.noarch.rpm` | `sudo dnf install ./ficheiro.rpm` |
 | Qualquer Linux (sem root) | `PhaseZero-*-x86_64.AppImage` | `chmod +x PhaseZero-*.AppImage && ./PhaseZero-*.AppImage` |
 | Flatpak | `PhaseZero-*.flatpak` | `flatpak install --user PhaseZero-*.flatpak` |
 
-No Arch, prefira `phasezero-admin` (ou `bigsudo`) em vez de `sudo` sem contexto. **Nunca** configure sudo sem senha por causa disto.
+A instalação acima usa o `sudo`/`pkexec` do sistema uma única vez — a bridge
+`phasezero-admin` ainda não existe num host limpo. Em seguida, prepare a
+bridge (sem root, uma vez por usuário) e confirme o CLI no PATH:
 
-O pacote instala o binário `phasezero-control-center` (atalho *PhaseZero*) e o CLI `linux/pz`. A UI só chama `pz` com argumentos de um catálogo fechado.
+```bash
+pz --version                    # /usr/bin/pz vem no pacote; sem checkout
+pz ai setup admin               # cria ~/.local/bin/phasezero-admin
+pz ai admin status              # ready=true antes de qualquer mutação
+```
+
+A partir daqui prefira `phasezero-admin` (ou `bigsudo`) em vez de `sudo` sem contexto. **Nunca** configure sudo sem senha por causa disto.
+
+O pacote instala o binário `phasezero-control-center` (atalho *PhaseZero*) e o CLI `pz` (`/usr/bin/pz` → `linux/pz`). A UI só chama `pz` com argumentos de um catálogo fechado; o acesso remoto (SSH) usa `pz` com fallback para `/usr/lib/phasezero/linux/pz`.
 
 Windows: `bootstrap-ui.bat` / `install-cli.bat` no checkout; PowerShell 5.1. Perfis `safe-base` (default) e `full-workstation` (opt-in). Sem `result.json` a corrida é erro do produto. Detalhe abaixo.
 

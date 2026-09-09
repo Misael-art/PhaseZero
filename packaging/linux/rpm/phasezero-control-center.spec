@@ -27,6 +27,8 @@ install -d %{buildroot}%{_datadir}/applications %{buildroot}%{_datadir}/metainfo
 install -d %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
 cp -a linux profiles assets version.json %{buildroot}%{_libdir}/phasezero/
 install -m755 packaging/linux/phasezero-control-center %{buildroot}%{_bindir}/
+# PZ-AUD-001: ship `pz` on PATH (SSH bridge calls it remotely).
+install -m755 packaging/linux/pz %{buildroot}%{_bindir}/
 install -m644 packaging/linux/io.phasezero.ControlCenter.desktop %{buildroot}%{_datadir}/applications/
 install -m644 packaging/linux/io.phasezero.ControlCenter.metainfo.xml %{buildroot}%{_datadir}/metainfo/
 install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/

@@ -48,7 +48,71 @@ mimo-ai-proxy|https://github.com/pedrofariasx/mimo-ai-proxy.git|3013|go
 EOF
 }
 
+# PZ-AUD-018: one supported set for every aggregate action. install all,
+# ensure all and start all operate on exactly these; anything else is
+# experimental (explicit id only) or externally managed (9router).
+SUPPORTED_PROXY_IDS="kimiproxy qwenproxy deepsproxy mimo-ai-proxy"
+
+proxy_tier() {
+    case " $SUPPORTED_PROXY_IDS " in
+        *" $1 "*) printf 'supported\n' ;;
+        *) [ "$1" = 9router ] && printf 'external-manager\n' || printf 'experimental\n' ;;
+    esac
+}
+
+supported_rows() {
+    local id
+    for id in $SUPPORTED_PROXY_IDS; do
+        lookup_proxy_row "$id"
+    done
+}
+
+MANIFEST_FILE="${PZ_AI_PROXY_MANIFEST_FILE:-$PZ_ROOT/assets/ai/proxy-manifest.json}"
+
+manifest_check_json() {
+    # PZ-AUD-019: the manifest is the cross-OS contract; Linux rows, IDE
+    # rows and approved snapshots must agree with it (repo, pin, port,
+    # runtime, default model). Prints {ok, checks[]}.
+    local manifest="$MANIFEST_FILE" fail=0
+    local -a reasons=()
+    [ -f "$manifest" ] || { pz_error "proxy manifest missing: $manifest"; return 2; }
+    local id repo port kind pin mrepo mport mruntime mmodel mcommit
+    while IFS='|' read -r id repo port kind; do
+        [ -n "$id" ] || continue
+        [ "$(proxy_tier "$id")" = supported ] || continue
+        mrepo="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .repository // empty' "$manifest")"
+        mport="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .port // empty' "$manifest")"
+        mcommit="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .pin.commit // empty' "$manifest")"
+        mruntime="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .runtime // empty' "$manifest")"
+        mmodel="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .defaultModel // empty' "$manifest")"
+        [ -z "$mrepo" ] && { reasons+=("$id: missing from manifest"); fail=1; continue; }
+        [ "$mrepo" = "$repo" ] || { reasons+=("$id: repo drift (manifest=$mrepo catalog=$repo)"); fail=1; }
+        [ "$mport" = "$port" ] || { reasons+=("$id: port drift (manifest=$mport catalog=$port)"); fail=1; }
+        if [ "$id" != "mimo-ai-proxy" ]; then
+            [ "$mruntime" = "$kind" ] || { reasons+=("$id: runtime drift (manifest=$mruntime catalog=$kind)"); fail=1; }
+        fi
+        pin="$(trusted_source_record "$id" 2>/dev/null | jq -r '.commit // empty' || true)"
+        if [ -n "$mcommit" ] && [ -n "$pin" ] && [ "$mcommit" != "$pin" ]; then
+            reasons+=("$id: pin drift (manifest=$mcommit snapshot=$pin)")
+            fail=1
+        fi
+        [ -n "$mmodel" ] || { reasons+=("$id: manifest missing defaultModel"); fail=1; }
+    done < <(supported_rows)
+    local out
+    out="$(jq -cn --argjson ok "$([ "$fail" -eq 0 ] && echo true || echo false)" \
+        --argjson checks "$(printf '%s\n' "${reasons[@]}" | jq -R . | jq -cs 'map(select(length > 0))')" \
+        '{schemaVersion:1, action:"manifest-check", ok:$ok, checks:$checks}')"
+    printf '%s\n' "$out"
+    [ "$fail" -eq 0 ]
+}
+
 selected_rows() {
+    if [ "$TARGET" = all ]; then supported_rows; else proxy_rows | awk -F'|' -v id="$TARGET" '$1 == id'; fi
+}
+
+inventory_rows() {
+    # Reporting scope: the whole universe for `all`, the single row for an
+    # explicit id. Action scope (selected_rows) is narrower by design.
     if [ "$TARGET" = all ]; then proxy_rows; else proxy_rows | awk -F'|' -v id="$TARGET" '$1 == id'; fi
 }
 
@@ -337,7 +401,8 @@ provenance_ready() {
 provenance_status_json() {
     local id first=true item ready_count=0 approved_count=0 installed_count=0 invalid_installed=0 total=0 all_ready=true ids=()
     if [ "$TARGET" = all ]; then
-        ids=(kimiproxy qwenproxy deepsproxy mimo-ai-proxy)
+        # shellcheck disable=SC2206
+        ids=($SUPPORTED_PROXY_IDS)
     else
         ids=("$TARGET")
     fi
@@ -388,14 +453,53 @@ clone_approved_snapshot() {
     mv -- "$stage" "$dir"
 }
 
+verify_proxy_artifacts() {
+    # PZ-AUD-016/017: no launcher may point at a missing binary, and no
+    # "installed" record may exist without runnable artifacts.
+    local id="$1" kind="$2" dir="$3"
+    case "$kind" in
+        node|worker|library)
+            [ -f "$dir/package.json" ] || { pz_error "$id: package.json missing after build"; return 1; }
+            if [ "$kind" = node ] && jq -er '.scripts.start // ""' "$dir/package.json" 2>/dev/null | grep -q 'dist/'; then
+                [ -d "$dir/dist" ] || { pz_error "$id: dist/ missing (build did not emit it)"; return 1; }
+            fi
+            ;;
+        go)
+            [ -x "$dir/.phasezero-bin/$id" ] || { pz_error "$id: go binary missing after build"; return 1; }
+            ;;
+    esac
+    return 0
+}
+
+verify_playwright_chromium() {
+    # PZ-AUD-016: the browser binary must actually launch; a bare download
+    # without OS libs is a deferred failure, not a success.
+    local id="$1" dir="$2"
+    local chromium
+    chromium="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 -name 'headless_shell' -o -maxdepth 3 -name 'chrome' 2>/dev/null | head -1)"
+    [ -n "$chromium" ] || { pz_error "$id: no Playwright chromium binary after install"; return 1; }
+    if ! "$chromium" --headless --no-sandbox --dump-dom about:blank >/dev/null 2>&1; then
+        pz_error "$id: chromium binary present but cannot launch (missing OS libraries?). Install system deps, e.g.: pz dependencies install, then retry"
+        return 1
+    fi
+    return 0
+}
+
 install_one() {
-    local id="$1" repo="$2" port="$3" kind="$4" dir
+    local id="$1" repo="$2" port="$3" kind="$4" dir fresh_clone=false
     if [ "$id" = 9router ] && [ "$kind" = npm ]; then
         bash "$PZ_ROOT/linux/ai/9router-manager.sh" install
         return
     fi
     dir="$ROOT/$id"
     install -d "$ROOT" "$BIN" "$UNITS"
+    # PZ-AUD-016: toolchains resolve BEFORE any clone/build, from every entry
+    # point (install and ensure share this path).
+    command -v git >/dev/null || { pz_error "git required"; return 1; }
+    case "$kind" in
+        node|worker|library) ensure_node_runtime || return 1 ;;
+        go) command -v go >/dev/null || { pz_error "go toolchain required for $id"; return 1; } ;;
+    esac
     if [ -d "$dir/.git" ]; then
         if ! provenance_ready "$id"; then
             pz_error "blocked: installed $id differs from approved snapshot; inspect 'pz ai proxies provenance $id'"
@@ -403,41 +507,54 @@ install_one() {
         fi
     else
         [ ! -e "$dir" ] || { pz_error "blocked: $dir exists but is not a Git checkout"; return 69; }
-        clone_approved_snapshot "$id" "$repo" "$dir"
+        clone_approved_snapshot "$id" "$repo" "$dir" || return $?
+        fresh_clone=true
     fi
+    # PZ-AUD-017: every stage is explicit-checked (errexit is suppressed in
+    # `if` contexts); on failure a fresh clone is removed for a clean retry.
+    _proxy_fail_build() {
+        pz_error "$id: build step failed: $1"
+        if [ "$fresh_clone" = true ]; then
+            rm -rf -- "$dir"
+            pz_info "$id: removed partial clone for a clean retry"
+        fi
+        return 1
+    }
     case "$kind" in
         node|worker|library)
-            if [ -f "$dir/package-lock.json" ]; then run_npm "$dir" ci --ignore-scripts=false
-            elif [ -f "$dir/package.json" ]; then run_npm "$dir" install --ignore-scripts=false
+            if [ -f "$dir/package-lock.json" ]; then run_npm "$dir" ci --ignore-scripts=false || return "$(_proxy_fail_build "npm ci")"
+            elif [ -f "$dir/package.json" ]; then run_npm "$dir" install --ignore-scripts=false || return "$(_proxy_fail_build "npm install")"
             fi
-            apply_loopback_patch "$id" "$dir"
+            apply_loopback_patch "$id" "$dir" || return "$(_proxy_fail_build "loopback patch")"
             if [ "$kind" = node ] && jq -er '.scripts.start // ""' "$dir/package.json" 2>/dev/null | grep -q 'dist/'; then
-                run_npm "$dir" run build
+                run_npm "$dir" run build || return "$(_proxy_fail_build "npm run build")"
             fi
             case "$id" in
                 kimiproxy|qwenproxy|deepsproxy)
-                    run_npm "$dir" exec -- playwright install chromium
+                    run_npm "$dir" exec -- playwright install chromium || return "$(_proxy_fail_build "playwright install chromium")"
+                    verify_playwright_chromium "$id" "$dir" || return "$(_proxy_fail_build "chromium launch smoke")"
                     ;;
             esac
             if [ "$id" = qwenproxy ] && [ -f "$dir/web/package.json" ]; then
                 # prestart runs `npm --prefix web run build` (vite). Root npm ci
                 # does not install web/ node_modules, so the unit crash-loops.
                 if [ -f "$dir/web/package-lock.json" ]; then
-                    run_npm "$dir/web" ci --ignore-scripts=false
+                    run_npm "$dir/web" ci --ignore-scripts=false || return "$(_proxy_fail_build "web npm ci")"
                 else
-                    run_npm "$dir/web" install --ignore-scripts=false
+                    run_npm "$dir/web" install --ignore-scripts=false || return "$(_proxy_fail_build "web npm install")"
                 fi
-                run_npm "$dir" run build:admin
+                run_npm "$dir" run build:admin || return "$(_proxy_fail_build "npm run build:admin")"
             fi
             ;;
         go)
-            apply_loopback_patch "$id" "$dir"
+            apply_loopback_patch "$id" "$dir" || return "$(_proxy_fail_build "loopback patch")"
             if [ -f "$dir/go.mod" ]; then
                 install -d "$dir/.phasezero-bin"
-                (cd "$dir" && go build -o "$dir/.phasezero-bin/$id" .)
+                (cd "$dir" && go build -o "$dir/.phasezero-bin/$id" .) || return "$(_proxy_fail_build "go build")"
             fi
             ;;
     esac
+    verify_proxy_artifacts "$id" "$kind" "$dir" || return "$(_proxy_fail_build "artifact verification")"
     if [ "$kind" = node ] || [ "$kind" = go ]; then
         local run_command
         if [ "$kind" = node ]; then
@@ -519,8 +636,9 @@ status_json() {
         first=false
         jq -cn --arg id "$id" --arg repo "$repo" --arg kind "$kind" --arg path "$dir" \
             --arg service "${service:-inactive}" --argjson port "$port" --argjson installed "$installed" \
-            '{id:$id,repo:$repo,kind:$kind,path:$path,port:$port,installed:$installed,service:$service}'
-    done < <(selected_rows)
+            --arg tier "$(proxy_tier "$id")" \
+            '{id:$id,repo:$repo,kind:$kind,path:$path,port:$port,installed:$installed,service:$service,tier:$tier}'
+    done < <(inventory_rows)
     printf ']\n'
 }
 
@@ -530,9 +648,7 @@ service_rows() {
         selected_rows
         return
     fi
-    for id in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
-        lookup_proxy_row "$id"
-    done
+    supported_rows
 }
 
 service_action() {
@@ -670,6 +786,22 @@ mimo_official_configured() {
 mimo_official_provider_values() {
     mimo_official_configured || return 1
     jq -r '[.baseUrl,.model] | @tsv' "$MIMO_PROVIDER_CONFIG"
+}
+
+mimo_chat_probe() {
+    # PZ-AUD-020: configured != authenticated. A tiny real completion
+    # proves key, model, quota and reachability; a stored 200 from setup
+    # time proves none of those. The key travels in a header (same as the
+    # setup validation), never in argv dumps, logs or stored config.
+    local base_url="$1" model="$2" key http_code body
+    key="$(cat "$MIMO_PROVIDER_KEY" 2>/dev/null || true)"
+    [ -n "$key" ] || return 1
+    body="$(jq -nc --arg m "$model" \
+        '{model:$m,messages:[{role:"user",content:"reply with: ok"}],max_tokens:4,temperature:0}')"
+    http_code="$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+        -d "$body" "$base_url/chat/completions" 2>/dev/null || true)"
+    [ "$http_code" = 200 ]
 }
 
 configure_mimo_official_clients() {
@@ -898,9 +1030,11 @@ port_open() {
 # nohup/disown), reliably launches headed and survives this script exiting
 # (background jobs of a non-interactive script are not SIGHUP'd on exit).
 LOGIN_CAPABLE_PROXIES=(kimiproxy qwenproxy deepsproxy)
-# Cards the Control Center "Usar" flow prepares. Legacy sources remain
+# Cards the Control Center "Usar" flow prepares: identical to the
+# supported set by construction (PZ-AUD-018). Legacy sources remain
 # catalog-only until they receive their own reviewed snapshots.
-USER_FACING_PROXIES=(kimiproxy qwenproxy deepsproxy mimo-ai-proxy)
+# shellcheck disable=SC2206
+USER_FACING_PROXIES=($SUPPORTED_PROXY_IDS)
 
 is_login_capable_proxy() {
     local id="$1" p
@@ -1281,16 +1415,18 @@ auth_status_json() {
             --arg webStatus "$web_status" --arg command "$command" --arg loginLog "$log_path" \
             --argjson port "$port" --argjson installed "$installed" --argjson required "$required" \
             --argjson apiKeyConfigured "$api_configured" --argjson missing "$missing_json" \
+            --arg tier "$(proxy_tier "$id")" \
             '{
               id:$id, repo:$repo, kind:$kind, path:$path, port:$port,
               installed:$installed, service:$service, envPath:$envPath,
               apiKeyConfigured:$apiKeyConfigured,
+              tier:$tier,
               webValidation:{
                 required:$required, kind:$webKind, status:$webStatus,
                 command:$command, loginLog:$loginLog, missing:$missing
               }
             }'
-    done < <(selected_rows)
+    done < <(inventory_rows)
     printf ']\n'
 }
 
@@ -1597,16 +1733,44 @@ ensure_one() {
             _ensure_steps_add "$steps_file" start skipped "API remota; serviço local desnecessário"
             if [ "$dry" = 1 ]; then
                 summary="MiMo oficial já está configurado. Vai sincronizar o provedor nas IDEs."
+                jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                    --argjson dryRun true \
+                    --argjson steps "$(cat "$steps_file")" \
+                    '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
+                      status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
+                      dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:false}}'
             else
-                configure_mimo_official_clients >>"$log" 2>&1 || true
-                summary="MiMo oficial está configurado e pronto no OpenCode."
+                local mimo_values mimo_base mimo_model
+                mimo_values="$(mimo_official_provider_values)"
+                mimo_base="${mimo_values%%$'\t'*}"
+                mimo_model="${mimo_values#*$'\t'}"
+                # PZ-AUD-020: only a real answer closes readiness.
+                if mimo_chat_probe "$mimo_base" "$mimo_model"; then
+                    _ensure_steps_add "$steps_file" inference ok "resposta real da API oficial"
+                    configure_mimo_official_clients >>"$log" 2>&1 || true
+                    summary="MiMo oficial está configurado e respondeu na API oficial."
+                    jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                        --argjson dryRun false \
+                        --argjson steps "$(cat "$steps_file")" \
+                        '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
+                          status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
+                          dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:true,httpCode:"200"}}'
+                else
+                    _ensure_steps_add "$steps_file" inference failed "sem resposta de chat (chave revogada, quota, modelo ou rede)"
+                    summary="MiMo tem chave armazenada, mas a API oficial não respondeu a uma pergunta real."
+                    jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                        --argjson dryRun false \
+                        --argjson steps "$(cat "$steps_file")" \
+                        '{schemaVersion:1,id:$id,name:$name,ok:false,ready:false,completed:false,resumable:true,
+                          status:"needs-credentials",
+                          summary:$summary,
+                          next:"Confira quota/modelo da conta, gere nova chave se preciso e rode set-credentials de novo.",
+                          nextAction:"linux/pz ai proxies set-credentials mimo-ai-proxy",needsUser:"api-key",
+                          dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:true,httpCode:"non-200"}}'
+                    rm -f "$steps_file"
+                    return 1
+                fi
             fi
-            jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
-                --argjson dryRun "$([ "$dry" = 1 ] && echo true || echo false)" \
-                --argjson steps "$(cat "$steps_file")" \
-                '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
-                  status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
-                  dryRun:$dryRun,installed:true,steps:$steps}'
         else
             _ensure_steps_add "$steps_file" credentials missing "chave da API oficial"
             _ensure_steps_add "$steps_file" start deferred "aguarda chave oficial"
@@ -2046,10 +2210,12 @@ case "$ACTION" in
             elif record="$(trusted_source_record "$id" 2>/dev/null || true)" && [ -n "$record" ]; then
                 printf 'would install %s from %s at commit %s (%s)\n' \
                     "$id" "$repo" "$(jq -r '.commit' <<< "$record")" "$kind"
+            elif [ "$(proxy_tier "$id")" = experimental ]; then
+                printf 'preview %s: experimental, install explicitly after review (no approved snapshot)\n' "$id"
             else
                 printf 'blocked %s: no approved snapshot\n' "$id"
             fi
-        done < <(selected_rows)
+        done < <(inventory_rows)
         ;;
     install|setup|update|repair)
         install_selected
@@ -2057,6 +2223,7 @@ case "$ACTION" in
         ;;
     auth|auth-status|login-status) auth_status_json ;;
     provenance|sources|source-status) provenance_status_json ;;
+    manifest|manifest-check) manifest_check_json ;;
     detailed-status|detailed|overview) detailed_status_json ;;
     configure-ides|ides|configure) configure_ides ;;
     test|verify)

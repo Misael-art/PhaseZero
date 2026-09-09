@@ -451,6 +451,7 @@ Actualizar esta seção no início e fim de cada sessão.
 
 | Item | Estado atual | Verificado por | Data |
 |---|---|---|---|
+| Verificação70d959f | QA dark confirma UX-001..004 nos cenários locais; próxima UX-005/007/009 | `reports/verify-ux-70d959f/README.md` e validation.json | 2026-09-08 |
 | Base | `origin/main` `a85c7a4` (v1.17.4) | `git fetch` + `git log origin/main` | 2026-08-26 |
 | Player v2 | mergeado: PR #70 `1f86913`; `f7746de` ancestral | `git merge-base --is-ancestor f7746de origin/main` | 2026-08-26 |
 | CI da base | success run `32965735176` | GitHub Actions `ci.yml` push `main` | 2026-08-26 |
@@ -460,6 +461,7 @@ Actualizar esta seção no início e fim de cada sessão.
 | WIP alheio (checkout principal) | untracked `.mimosa/`, `uber-defesa-privada/`; NÃO tocar `dashboard.py` nem `test_status_journey_contract.py`; NÃO stashar/commitar no checkout `feat/homelab-player-v2` | `git status` em `/mnt/sdcard/Projects/PhaseZero` | 2026-08-26 |
 | Homelab real | segue sem workload desta frente; nenhum apply | herdado do v1.15.1; revalidar | 2026-08-26 |
 | Catálogo atual | 10 apps user-facing em `apps/catalog.json`; `up --extras` ainda all-or-nothing; lock por tag | `assets/home-server/apps/` + compose legado | 2026-08-26 |
+| Auditoria host limpo 2026-09-06 | main `2180c94`, v1.19.0; 31 itens abertos (1 P0 restore). Bootstrap incompleto, sucesso falso e divergências IA/proxies documentados; nenhum workload implantado | [relatório e provas](../../reports/portfolio-clean-host-2026-09-06/README.md); 364 pytest direcionados, 4 suítes shell, 13 Compose cliente, asset Arch verificado | 2026-09-06 |
 
 ## Ledger de execução
 
@@ -467,6 +469,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
+| 2026-09-08 | Codex | codex/verify-ux-70d959f, dedicada | verificação UX | base70d959f; docs via git log | QA dark800→1280→800; pytest-final/validation.json | aceite local; nenhum host mutado; próxima jornada simples |
+| 2026-09-06 | Codex | `codex/portfolio-clean-host-audit` / `pz-portfolio-clean-host-audit` | diagnóstico transversal | documentação; base `2180c94` | 364 pytest; 4 shell; 12 registros reproduzidos; 2 contratos PS; 13 Compose válidos sem healthchecks declarados | PZ-AUD-001..031 pending; [plano/handoff](../../reports/portfolio-clean-host-2026-09-06/PLANO.md); priorizar integridade do restore e estados honestos. Nenhum runtime alterado |
 | 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |
@@ -476,6 +480,10 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | `a8f7da1` | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI 33006026031: python/homelab-python verdes; **shell-lint 0.11 SC2030**; disposable skipped |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 5 | `075abf4` | SC2030 via `env`; host-facts honestos; onboarding Player | CI 33009994646: lint/python/disposable verdes; **shell-test** falhou (runner globou disposable) |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 6 | este commit | runner skip `# Disposable CI`; porta ocupada + cert corrupto | CI shell-test + homelab-python-test |
+| 2026-09-07 | ZCode | `codex/rev-remediation` (`pz-rev-remediation`) | R0 (revisão REV: onboarding Fase 5) | `87c31a1` (+ `8686279` backend) | pytest player 40 passed (6 regressões REV novas); contratos agent/web 38 passed | Correções de auditoria no onboarding do Player (HL-ONB-001): parser de documento único (pretty/compact/envelope `--host`), pair=false bloqueia avanço, plano amarrado a host capturado (troca de host invalida pair/revisão), perfil revisado transmitido via `prepare --profile`. Base `9d6be9d`; ver matriz em `docs/roadmaps/rev-remediation-v1.md`. |
+| 2026-09-07 (2) | ZCode | `codex/rev-remediation` (`pz-rev-remediation`) | Contrarrevisão R01 (onboarding) | `b447312`, `6d8cf39` | pytest player 44 passed; suíte shell exit 0 2× | R01-002: pareamento tardio captura alias e descarta resultado de outro host (sem ingest/avanço/ping). R01-003: plano declara `profileInstallable/profileNote/profileServices/budget/appsSource` e UI exibe aviso ORÇAMENTO; `profile.active` documentado como seleção de orçamento, não entrega de appliance. |
+| 2026-09-07 (3) | ZCode | `codex/rev-remediation` (`pz-rev-remediation`) | UX Player: confirmação e responsividade | `408d7e9`, `85bedf1` | pytest player 47 passed (E2E por cliques + geometria 800×600); windows_vm 30 passed | UX-001: revisão confirmável por botão visível (onboard_confirm_review ligado ao fluxo); UX-002: plano estável sob telemetria variável (intent hash, verdict fail bloqueia); UX-003: Player com scroll vertical global sem corte em 800×600; UX-004: página Windows VM reflow para 1 coluna com CTA intacto (afeta HL-ONB-001 e HL-APP-003). UX-005..011 permanecem planned na matriz REV. |
+| 2026-09-07 (4) | ZCode | `codex/rev-remediation` (`pz-rev-remediation`) | Retorno ux004: confirmação e tema real | `c784373` | pytest player 49 + windows_vm 30 (aceite temático com alternância e hit-test real) | Duplicata de `_refresh_onboard_label` removida (causa-raiz do botão invisível); E2E exige visível E habilitado com clique via `widgetAt`; reflow de header/perfil/ações do Player e de hero/manutenção da página Windows validado com MainWindow + tema real (zero overflow horizontal na alternância 800→1280→800). |
 
 ## Formato obrigatório de handoff
 

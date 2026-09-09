@@ -115,7 +115,7 @@ def _dashboard_page(monkeypatch, *, records):
     monkeypatch.setattr(mod.OperationLedger, "records", lambda self, limit=100: records)
     by_id = {
         "system.doctor.system": ActionSpec(id="system.doctor.system", title="Saúde", description="d", icon="i", category="t", args=("doctor",)),
-        "ai.compat": ActionSpec(id="ai.compat", title="Agentes", description="d", icon="i", category="t", args=("ai",)),
+        "profile.safe-base": ActionSpec(id="profile.safe-base", title="Base segura", description="d", icon="i", category="t", args=("profile",)),
         "ai.backup.export": ActionSpec(id="ai.backup.export", title="Backup IA", description="d", icon="i", category="t", args=("backup",)),
     }
     page = mod.DashboardPage(ROOT, None, [], by_id=by_id)
@@ -134,8 +134,10 @@ def test_dashboard_first_run_shows_onboarding(app, tmp_path, monkeypatch):
     assert "Vamos configurar" in welcome
     assert heroes, "faixa Comece por aqui ausente no primeiro uso"
     texts = " ".join(l.text() for l in heroes[0].findChildren(QLabel))
-    for step in ("Diagnosticar o sistema", "Preparar agentes de IA", "Criar primeiro backup"):
+    # UX-006: nenhum passo do primeiro uso exige IA.
+    for step in ("Diagnosticar o sistema", "Preparar este computador"):
         assert step in texts
+    assert "IA" not in texts and "agentes" not in texts.casefold()
 
 
 def test_dashboard_returning_run_keeps_old_copy(app, monkeypatch):

@@ -188,6 +188,45 @@ def test_install_cli_shows_token_once(tmp_path, monkeypatch):
     assert rc == 0
 
 
+def test_install_starts_unit_and_proves_https(tmp_path, monkeypatch):
+    """PZ-AUD-015: install chains daemon-reload/start and proves serving."""
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_STATE", str(tmp_path / "agent"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_UNIT_DIR", str(tmp_path / "units"))
+    from linux.server import homelab_agent as mod
+
+    calls = []
+    monkeypatch.setattr(mod, "_systemctl", lambda *a: (calls.append(a) or (0, "")))
+    monkeypatch.setattr(mod, "_loginctl", lambda *a: (0, "Linger=yes"))
+    monkeypatch.setattr(mod, "_probe_https", lambda host, port: True)
+    agent = mod.HomelabAgent(state_dir=tmp_path / "agent2", bind="127.0.0.1", port=17432)
+    payload = agent.install()
+    assert ("daemon-reload",) in calls
+    assert ("enable", "--now", "phasezero-agent.service") in calls
+    assert payload["systemdStarted"] is True
+    assert payload["httpsReachable"] is True
+    assert payload["linger"] == {"active": True, "detail": "linger already on"}
+    assert payload["ok"] is True
+    assert (tmp_path / "units" / "phasezero-agent.service").is_file()
+
+
+def test_install_reports_failed_start_honestly(tmp_path, monkeypatch):
+    """PZ-AUD-015: a unit that never activates is ok:false, never ready."""
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_STATE", str(tmp_path / "agent"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_UNIT_DIR", str(tmp_path / "units"))
+    from linux.server import homelab_agent as mod
+
+    monkeypatch.setattr(mod, "_systemctl", lambda *a: (1, "no bus"))
+    monkeypatch.setattr(mod, "_loginctl", lambda *a: (1, "no loginctl"))
+    agent = mod.HomelabAgent(state_dir=tmp_path / "agent3", bind="127.0.0.1", port=17432)
+    payload = agent.install()
+    assert payload["systemdStarted"] is False
+    assert payload["httpsReachable"] is False
+    assert payload["ok"] is False
+    assert payload["linger"]["active"] is False
+
+
 def test_allowlist_does_not_include_yes():
     joined = " ".join(v for args in ALLOWLIST.values() for v in args)
     assert "--yes" not in joined

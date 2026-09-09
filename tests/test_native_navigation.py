@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.models import ActionSpec
@@ -145,4 +145,41 @@ def test_homelab_reachable_from_sidebar_and_registry(qapp):
         page = window.registry.page_for("Homelab")
         assert page is not None
         assert page.__class__.__name__ == "HomelabPage"
+        window.close()
+
+
+def test_home_journeys_cover_objectives_with_single_entry(qapp):
+    """PZ-AUD-029: Início mostra objetivos (não taxonomias), cada um com
+    UMA ação de entrada real mais requisito, custo e maturidade."""
+    from linux.ui_native.main_window import MainWindow
+    from unittest.mock import patch
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        page = window.registry.page_for("Início")
+        assert page is not None
+        cards = getattr(page, "journey_cards", [])
+        assert len(cards) == 6, f"expected 6 journey cards, got {len(cards)}"
+        seen_actions = set()
+        for card in cards:
+            labels = [w.text() for w in card.findChildren(QLabel)]
+            joined = "\n".join(labels)
+            assert "Precisa:" in joined
+            assert "Custo:" in joined
+            assert "Maturidade:" in joined
+            # UX-006: one entry control per card — it either runs the
+            # entry action or opens the page that carries the journey.
+            buttons = [b for b in card.findChildren(QPushButton)
+                       if b.text() in ("Preparar e usar", "Abrir jornada")]
+            assert len(buttons) == 1
+        from linux.ui_native.pages.dashboard import JOURNEYS
+
+        for _key, _title, action_id, _req, _cost, _mat, dest, _focus in JOURNEYS:
+            assert action_id in window.registry.by_id, action_id
+            if dest:
+                assert window.registry.page_for(dest) is not None, dest
+            seen_actions.add(action_id)
+        assert len(seen_actions) == 6
         window.close()

@@ -14,6 +14,9 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=linux/lib/common.sh
 source "$PZ_ROOT/linux/lib/common.sh"
+# shellcheck source=linux/server/homelab-governor.sh
+# Guarded (no dispatch on source): single WinVM-reserve definition (PZ-AUD-031).
+source "$PZ_ROOT/linux/server/homelab-governor.sh"
 
 COMPOSE_DIR="${PZ_HOMELAB_COMPOSE_DIR:-$PZ_ROOT/assets/home-server}"
 CATALOG_FILE="${PZ_HOMELAB_APPS_CATALOG:-$COMPOSE_DIR/apps/catalog.json}"
@@ -22,6 +25,7 @@ HOMELAB_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
 ENV_FILE="${PZ_HOMELAB_ENV_FILE:-$HOMELAB_STATE/.env}"
 ENABLED_FILE="${PZ_HOMELAB_APPS_ENABLED:-$HOMELAB_STATE/apps.enabled.json}"
 DIGESTS_FILE="${PZ_HOMELAB_IMAGE_DIGESTS:-$HOMELAB_STATE/image-digests.json}"
+PINS_ENV="${PZ_HOMELAB_IMAGE_PINS:-$HOMELAB_STATE/image-pins.env}"
 PROJECT="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
 SCHEMA_VERSION="1"
 HEADROOM_PCT="${PZ_HOMELAB_APP_HEADROOM:-20}"
@@ -94,7 +98,13 @@ app_record() {
 }
 
 lock_ref_for() {
-    local key="$1"
+    # PZ-AUD-030: an executed pin (recorded digest) wins over the lock tag.
+    local key="$1" var pin
+    var="$(pins_env_var_for_key "$key")"
+    if [ -f "$PINS_ENV" ]; then
+        pin="$(awk -F= -v k="$var" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$PINS_ENV")"
+        [ -n "$pin" ] && { printf '%s\n' "$pin"; return 0; }
+    fi
     [ -f "$LOCK_FILE" ] || { printf '%s\n' ""; return 0; }
     jq -r --arg k "$key" '.images[$k] // empty' "$LOCK_FILE"
 }
@@ -256,22 +266,28 @@ dependents_of() {
 }
 
 governor_for_keys() {
+    # PZ-AUD-031: same capacity source as the profile governor
+    # (MemAvailable, shared helper) plus the WinVM guest reserve, so app
+    # and profile verdicts agree on one host.
     local -a keys=("$@")
-    local available usable need verdict reasons
-    available="$(awk '/^MemTotal:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null || true)"
-    if [ -n "${PZ_HOMELAB_RAM_TOTAL_OVERRIDE:-}" ]; then
-        available="$PZ_HOMELAB_RAM_TOTAL_OVERRIDE"
-    fi
-    if [ -z "$available" ]; then
-        jq -cn --arg verdict "fail" --arg reason "cannot read total RAM" \
-            '{verdict:$verdict, availableMB:null, budgetMB:null, reasons:[$reason]}'
+    local available total usable need verdict reasons winvm_mb=0 winvm_active=false disk_mb
+    if ! available="$(pz_mem_available_mb)"; then
+        jq -cn --arg verdict "fail" --arg reason "cannot read available RAM" \
+            '{verdict:$verdict, availableMB:null, totalMB:null, budgetMB:null, reasons:[$reason]}'
         return 0
     fi
+    total="$(pz_mem_total_mb 2>/dev/null || printf 'null')"
+    disk_mb="$(pz_disk_available_mb "$HOMELAB_STATE" 2>/dev/null || printf 'null')"
     need="$(catalog_json | jq -r --args '
         .apps as $apps
         | [$ARGS.positional[] as $k | ($apps[] | select(.key == $k) | .budgetMB // 0)] | add // 0
     ' -- "${keys[@]}")"
     usable=$((available - available * HEADROOM_PCT / 100))
+    if [ "$(pz_governor_winvm_status)" = "active" ]; then
+        winvm_active=true
+        winvm_mb="$(pz_governor_winvm_mb 2>/dev/null || echo 2048)"
+        usable=$((usable - winvm_mb))
+    fi
     [ "$usable" -lt 0 ] && usable=0
     if [ "$need" -le "$usable" ]; then
         verdict="pass"
@@ -280,9 +296,16 @@ governor_for_keys() {
         verdict="fail"
         reasons="$(jq -cn --arg m "app overcommits memory: budget ${need} MiB > usable ${usable} MiB (headroom ${HEADROOM_PCT}%)" '[$m]')"
     fi
-    jq -cn --argjson availableMB "$available" --argjson budgetMB "$need" \
+    if [ "$winvm_active" = "true" ]; then
+        reasons="$(jq -cn --argjson r "$reasons" --arg w "winvm active: guest reserved ${winvm_mb} MiB" '$r + [$w]')"
+    fi
+    jq -cn --argjson availableMB "$available" --argjson totalMB "${total:-null}" \
+        --argjson diskAvailableMB "${disk_mb:-null}" --argjson budgetMB "$need" \
         --argjson headroomPct "$HEADROOM_PCT" --arg verdict "$verdict" --argjson reasons "$reasons" \
-        '{verdict:$verdict, availableMB:$availableMB, budgetMB:$budgetMB, headroomPct:$headroomPct, reasons:$reasons}'
+        --argjson winvmActive "$winvm_active" --argjson winvmWeightMB "$winvm_mb" \
+        '{verdict:$verdict, availableMB:$availableMB, totalMB:$totalMB, diskAvailableMB:$diskAvailableMB,
+          budgetMB:$budgetMB, headroomPct:$headroomPct, winvmActive:$winvmActive,
+          winvmWeightMB:$winvmWeightMB, reasons:$reasons}'
 }
 
 missing_secrets_for_keys() {
@@ -301,7 +324,8 @@ missing_secrets_for_keys() {
 
 running_names_json() {
     if docker_reachable; then
-        docker ps --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
+        # PZ-AUD-011: same project scoping as homelab-stack.sh.
+        docker ps --filter "label=com.docker.compose.project=$PROJECT" --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
     else
         echo '[]'
     fi
@@ -311,6 +335,38 @@ digest_for_lock_key() {
     local key="$1"
     [ -f "$DIGESTS_FILE" ] || { printf '\n'; return 0; }
     jq -r --arg k "$key" '.digests[$k] // empty' "$DIGESTS_FILE" 2>/dev/null || true
+}
+
+pins_env_var_for_key() {
+    # lockKey -> PZ_IMAGE_* override consumed by every compose module.
+    printf 'PZ_IMAGE_%s\n' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+}
+
+write_image_pins_env() {
+    # PZ-AUD-030: the digest recorded at update time becomes the digest
+    # actually executed: compose resolves ${PZ_IMAGE_X:-tag} with the pin
+    # winning over the tag default on every up/reconcile.
+    [ -f "$DIGESTS_FILE" ] || { rm -f "$PINS_ENV"; return 0; }
+    local tmp key digest var
+    tmp="$(pz_tempfile)"
+    while IFS=$'\t' read -r key digest; do
+        # shellcheck disable=SC2015 # guarda: sem key/digest, pula a entrada
+        [ -n "$key" ] && [ -n "$digest" ] || continue
+        var="$(pins_env_var_for_key "$key")"
+        printf '%s=%s\n' "$var" "$digest"
+    done < <(jq -r '.digests // {} | to_entries[] | [.key, .value] | @tsv' "$DIGESTS_FILE" 2>/dev/null) > "$tmp"
+    if [ -s "$tmp" ]; then
+        install -m 0600 "$tmp" "$PINS_ENV"
+    else
+        rm -f "$PINS_ENV"
+    fi
+    rm -f "$tmp"
+}
+
+compose_env_args() {
+    # Shared --env-file selection: user config first, executed pins second.
+    [ -f "$ENV_FILE" ] && printf '%s\0' --env-file "$ENV_FILE"
+    [ -f "$PINS_ENV" ] && printf '%s\0' --env-file "$PINS_ENV"
 }
 
 emit_app_row() {
@@ -338,22 +394,29 @@ emit_app_row() {
         url="http://$host:$port"
     fi
     digest="$(digest_for_lock_key "$lock_key")"
+    local first_use open_url
+    first_use="$(jq -c '.firstUse // null' <<< "$rec")"
+    open_url=""
+    if [ -n "$url" ]; then
+        open_url="$url$(jq -r '.firstUse.openPath // "/"' <<< "$rec")"
+    fi
     jq -cn \
         --arg key "$key" --arg title "$title" --arg layer "$layer" \
         --arg imageRef "$image_ref" --arg digest "$digest" \
-        --arg bind "$bind" --arg url "$url" --arg container "$container" \
+        --arg bind "$bind" --arg url "$url" --arg openUrl "$open_url" --arg container "$container" \
         --argjson port "${port:-0}" \
         --argjson userFacing "$user_facing" \
         --argjson enabled "$enabled" --argjson running "$running" \
         --argjson budgetMB "$(jq -r '.budgetMB' <<< "$rec")" \
         --argjson secrets "$(jq -c '.secrets' <<< "$rec")" \
         --argjson dependsOn "$(jq -c '.dependsOn' <<< "$rec")" \
+        --argjson firstUse "$first_use" \
         '{
             key:$key, title:$title, layer:$layer, userFacing:$userFacing,
             enabled:$enabled, running:$running, budgetMB:$budgetMB,
             imageRef:$imageRef, digest:(if $digest == "" then null else $digest end),
-            port:$port, bind:$bind, url:$url, container:$container,
-            secrets:$secrets, dependsOn:$dependsOn,
+            port:$port, bind:$bind, url:$url, openUrl:$openUrl, container:$container,
+            secrets:$secrets, dependsOn:$dependsOn, firstUse:$firstUse,
             usesLatest:( ($imageRef | test(":latest$")) or ($imageRef == "latest") )
         }'
 }
@@ -418,7 +481,7 @@ compose_config_subset() {
     local -a files=() args=()
     mapfile -t files
     [ "${#files[@]}" -gt 0 ] || return 1
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     local f
     for f in "${files[@]}"; do
@@ -438,7 +501,7 @@ compose_up_subset() {
         esac
     done
     services=("$@")
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     for f in "${files[@]}"; do
         args+=(-f "$f")
@@ -456,7 +519,7 @@ compose_rm_subset() {
         esac
     done
     services=("$@")
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     for f in "${files[@]}"; do
         args+=(-f "$f")
@@ -543,19 +606,42 @@ cmd_enable() {
                 --arg action "enable" --arg app "$APP" --argjson ok false --argjson enabled true \
                 --arg reason "$reason" \
                 '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok,
-                  enabled:$enabled, started:false, reason:$reason}'
+                  enabled:$enabled, started:false, state:"failed", deferred:false, reason:$reason}'
             return 1
         fi
     else
+        # PZ-AUD-005: desired recorded, nothing applied. Never report ok
+        # while the workload is not running; the reconciler retries later.
         reason="docker daemon not reachable; app marked enabled, start deferred"
     fi
+    if [ "$started" = true ]; then
+        # PZ-AUD-008: point at the usable journey, not just the container.
+        local first_use next_action open_path
+        first_use="$(jq -c '.firstUse // null' <<< "$rec")"
+        open_path="$(jq -r '.firstUse.openPath // "/"' <<< "$rec")"
+        next_action="open the app and follow its first-use steps"
+        if [ "$first_use" != "null" ]; then
+            next_action="$(jq -r --arg app "$APP" '.firstUse.steps[0] // "open the app"' <<< "$rec")"
+        fi
+        emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
+            --arg action "enable" --arg app "$APP" --argjson ok true --argjson dryRun false \
+            --argjson enabled true --argjson started true --argjson composeValidated "$validated" \
+            --argjson governor "$gov" --argjson keys "$keys_json" \
+            --argjson firstUse "$first_use" --arg openPath "$open_path" --arg nextAction "$next_action" \
+            '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
+              enabled:$enabled, started:$started, state:"applied", deferred:false,
+              composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:null,
+              firstUse:$firstUse, openPath:$openPath, nextAction:$nextAction}'
+        return 0
+    fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
-        --arg action "enable" --arg app "$APP" --argjson ok true --argjson dryRun false \
-        --argjson enabled true --argjson started "$started" --argjson composeValidated "$validated" \
+        --arg action "enable" --arg app "$APP" --argjson ok false --argjson dryRun false \
+        --argjson enabled true --argjson started false --argjson composeValidated "$validated" \
         --argjson governor "$gov" --argjson keys "$keys_json" --arg reason "$reason" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
-          enabled:$enabled, started:$started, composeValidated:$composeValidated, enabledKeys:$keys,
-          governor:$governor, reason:(if $reason == "" then null else $reason end)}'
+          enabled:$enabled, started:$started, state:"deferred", deferred:true,
+          composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:$reason}'
+    return 1
 }
 
 cmd_disable() {
@@ -590,7 +676,7 @@ cmd_disable() {
         return 0
     fi
     apps_lock || return 1
-    local new_enabled stopped=false reason=""
+    local new_enabled stopped=false reason="" state="applied" ok=true
     new_enabled="$(subtract_enabled "$keys_json")" || { apps_unlock; return 1; }
     write_enabled_json "$new_enabled" || { apps_unlock; return 1; }
     apps_unlock
@@ -598,18 +684,28 @@ cmd_disable() {
         if compose_rm_subset "${files[@]}" -- "${services[@]}"; then
             stopped=true
         else
+            # PZ-AUD-005: desired (disabled) recorded, removal failed.
+            # Report failure so the reconciler retries; never ok:true.
             reason="compose rm failed; app unmarked enabled"
+            state="failed"
+            ok=false
         fi
-    elif ! docker_reachable; then
+    elif ! apps_may_apply; then
+        # PZ-AUD-005: covers daemon down AND hermetic/no-docker mode:
+        # containers are unchanged, removal is deferred to the reconciler.
         reason="docker daemon not reachable; app unmarked enabled, containers unchanged"
+        state="deferred"
+        ok=false
     fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
-        --arg action "disable" --arg app "$APP" --argjson ok true --argjson dryRun false \
+        --arg action "disable" --arg app "$APP" --argjson ok "$ok" --argjson dryRun false \
         --argjson enabled false --argjson stopped "$stopped" --argjson keys "$keys_json" \
-        --argjson remaining "$new_enabled" --arg reason "$reason" \
+        --argjson remaining "$new_enabled" --arg reason "$reason" --arg state "$state" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
-          enabled:$enabled, stopped:$stopped, disabledKeys:$keys, remaining:$remaining,
+          enabled:$enabled, stopped:$stopped, state:$state, deferred:($state != "applied"),
+          disabledKeys:$keys, remaining:$remaining,
           reason:(if $reason == "" then null else $reason end)}'
+    [ "$ok" = true ]
 }
 
 uses_latest() {
@@ -646,7 +742,7 @@ cmd_update() {
         fi
         rows="$(jq -c --arg key "$key" --arg imageRef "$ref" --arg lockKey "$lock_key" \
             --arg digest "$(digest_for_lock_key "$lock_key")" \
-            '. + [{key:$key, imageRef:$imageRef, lockKey:$lockKey, digest:(if $digest=="" then null else $digest end), usesLatest:($imageRef | test(":latest$"))}]' <<< "$rows")"
+            '. + [{key:$key, imageRef:$imageRef, lockKey:$lockKey, digest:(if $digest=="" then null else $digest end), usesLatest:(($imageRef | test(":latest$")) or ($imageRef == "latest"))}]' <<< "$rows")"
     done
     if [ "$latest_hit" = true ]; then
         emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
@@ -667,7 +763,7 @@ cmd_update() {
         mapfile -t files < <(compose_files_for_keys "${targets[@]}")
         mapfile -t services < <(services_for_keys "${targets[@]}")
         local args=() f
-        [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+        while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
         args+=(-p "$PROJECT")
         for f in "${files[@]}"; do
             args+=(-f "$f")
@@ -692,6 +788,12 @@ cmd_update() {
             printf '%s\n' "$digest_map" > "$tmp"
             install -m 0600 "$tmp" "$DIGESTS_FILE"
             rm -f "$tmp"
+            write_image_pins_env
+            # The pin written above must drive this same up, not the next one.
+            case " ${args[*]} " in
+                *" $PINS_ENV "*) ;;
+                *) [ -f "$PINS_ENV" ] && args+=(--env-file "$PINS_ENV") ;;
+            esac
             docker_cli "${args[@]}" up -d "${services[@]}" || reason="pull ok; compose up failed"
         else
             reason="compose pull failed"
@@ -703,14 +805,26 @@ cmd_update() {
     else
         reason="docker daemon not reachable; update not applied"
     fi
-    local ok=true
-    [ -z "$reason" ] || [ "$pulled" = true ] || ok=false
-    [ "$pulled" = true ] && ok=true
+    # PZ-AUD-005: pull ok + up failed is NOT success; daemon down is NOT
+    # success. ok requires pulled images actually running.
+    local ok=false state="failed"
+    if [ "${#targets[@]}" -eq 0 ]; then
+        ok=true
+        state="noop"
+        reason=""
+    elif [ -z "$reason" ] && [ "$pulled" = true ]; then
+        ok=true
+        state="applied"
+    elif [ "$reason" = "docker daemon not reachable; update not applied" ]; then
+        state="deferred"
+    fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
         --arg action "update" --argjson ok "$ok" --argjson dryRun false --argjson pulled "$pulled" \
-        --argjson apps "$rows" --arg reason "$reason" \
+        --argjson apps "$rows" --arg reason "$reason" --arg state "$state" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, ok:$ok, dryRun:$dryRun,
-          pulled:$pulled, apps:$apps, reason:(if $reason == "" then null else $reason end)}'
+          pulled:$pulled, state:$state, deferred:($state != "applied"),
+          apps:$apps, reason:(if $reason == "" then null else $reason end)}'
+    [ "$ok" = true ]
 }
 
 case "$SUB" in

@@ -199,7 +199,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
     profile_meta = {
         "safe-base": ("Base segura", "Essenciais para uso diário.", "Seguro"),
-        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos.", "Dev"),
+        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Hermes é experimental e opcional (skip explicado quando bloqueado).", "Dev"),
         "gaming": ("Gaming", "Steam, Heroic, Lutris e telemetria local.", "Jogos"),
         "steamdeck-linux": ("Steam Deck Linux", "UX SteamOS, hotkeys e Gamepad UI.", "Recomendado"),
         "windows-vm-linux": ("Windows VM", "QEMU/KVM, OVMF, TPM e compartilhamentos.", "VM"),
@@ -397,6 +397,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
             _a("homelab.restore", "Homelab", "Restaurar backup (plano)", "Verifica o backup e mostra o impacto; aplicar exige confirmação explícita na CLI (--yes).", ("server", "homelab", "restore", "--source", "{input}", "--plan"), "document-revert", input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação", keywords=("restaurar", "backup", "resgate")),
             _a("homelab.policy", "Homelab", "Política AI", "Broker conservative/permissive e ações negadas.", ("ai", "policy", "status"), "dialog-password", badge="JSON", keywords=("policy", "broker", "ollama", "hermes")),
+            _a("homelab.hosts", "Homelab", "Hosts pareados", "Computadores remotos registrados, pareamento e ponte SSH.", ("server", "homelab", "hosts", "list", "--json"), "folder-remote", badge="JSON", keywords=("host", "remoto", "parear", "ssh")),
         ]
     )
 

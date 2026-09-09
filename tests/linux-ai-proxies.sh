@@ -31,7 +31,10 @@ jq -e '
 ' <<< "$status" >/dev/null
 plan="$("$ROOT/linux/pz" ai proxies plan all)"
 [ "$(grep -c '^would install ' <<< "$plan")" -eq 4 ]
-[ "$(grep -c '^blocked ' <<< "$plan")" -eq 6 ]
+# PZ-AUD-018: one supported set for batch actions; the rest is explicit
+# preview, never an indistinct blocked batch.
+[ "$(grep -c '^preview ' <<< "$plan")" -eq 6 ]
+[ "$(grep -c '^blocked ' <<< "$plan")" -eq 0 ]
 grep -Eq '^would install kimiproxy .* at commit [0-9a-f]{40} ' <<< "$plan"
 auth="$("$ROOT/linux/pz" ai proxies auth all)"
 [ "$(jq 'length' <<< "$auth")" -eq 11 ]
@@ -176,6 +179,27 @@ fi
 mimo_ready="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy)"
 jq -e '.ok == true and .ready == true and (.steps[1].detail | contains("desnecessário"))' \
     <<< "$mimo_ready" >/dev/null
+jq -e '.inference.probed == true and .inference.httpCode == "200"' \
+    <<< "$mimo_ready" >/dev/null
+
+# PZ-AUD-020: a stored key without a real answer is never ready.
+cat > "$WORK/bin/curl" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */chat/completions) printf '401'; exit 0 ;;
+        */models) printf '200'; exit 0 ;;
+    esac
+done
+printf '200'
+SH
+chmod +x "$WORK/bin/curl"
+mimo_dead="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy 2>/dev/null || true)"
+jq -e '.ok == false and .ready == false and .resumable == true and .needsUser == "api-key"' \
+    <<< "$mimo_dead" >/dev/null
+if grep -q 'sk-phasezero-test-key' <<< "$mimo_dead"; then
+    echo "FAIL: MiMo probe failure leaked the key"; exit 1
+fi
 
 # A commit mismatch blocks runtime before systemctl can start anything.
 git -C "$HOME/.local/share/phasezero/ai-proxies/mimo-ai-proxy" config user.name PhaseZero
@@ -199,4 +223,60 @@ PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
     | jq -e '.sources[0].ready == false and .sources[0].commitMatch == false' >/dev/null
 grep -q 'start_proxy_service' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'wait_proxy_chat' "$ROOT/linux/ai/proxy-suite.sh"
+
+echo "=== proxy build is transactional with validated runtimes (PZ-AUD-016/017) ==="
+export PZ_AI_PROXY_ROOT="$WORK/tx-proxies" PZ_LOCAL_BIN="$WORK/tx-bin"
+mkdir -p "$PZ_AI_PROXY_ROOT" "$PZ_LOCAL_BIN"
+# A failing npm step rejects the install and removes the fresh clone.
+if bash -c '
+    set -- status kimiproxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    ensure_node_runtime() { return 0; }
+    clone_approved_snapshot() {
+        mkdir -p "$3/.git"
+        printf "%s\n" "{\"scripts\":{\"start\":\"node dist/index.js\"}}" > "$3/package.json"
+        printf "%s\n" "{}" > "$3/package-lock.json"
+    }
+    run_npm() { echo fixture-npm-failed >&2; return 42; }
+    apply_loopback_patch() { return 0; }
+    install_one kimiproxy https://example.invalid/fixture.git 3010 node
+' "$ROOT" >/dev/null 2>&1; then
+    echo "FAIL: failed npm build was accepted"; exit 1
+fi
+[ ! -e "$PZ_AI_PROXY_ROOT/kimiproxy" ] || { echo "FAIL: partial clone left behind"; exit 1; }
+# A missing Go toolchain fails closed with an actionable reason.
+go_out="$(bash -c '
+    set -- status mimo-ai-proxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    command() { [ "$1" = "-v" ] && [ "$2" = "git" ] && return 0; return 1; }
+    install_one mimo-ai-proxy https://example.invalid/fixture.git 3013 go
+' "$ROOT" 2>&1 || true)"
+if grep -qi "go toolchain" <<< "$go_out"; then
+    :
+else
+    echo "FAIL: missing go toolchain not reported"; exit 1
+fi
+# A node proxy installed without dist/ fails artifact verification.
+if bash -c '
+    set -- status kimiproxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    verify_proxy_artifacts kimiproxy node "$0/nonexistent-dir"
+' "$ROOT" >/dev/null 2>&1; then
+    echo "FAIL: artifact verification accepted missing dist"; exit 1
+fi
+echo "  transactional build ok"
+
+echo "=== proxy manifest is the cross-OS contract (PZ-AUD-019) ==="
+manifest_out="$("$ROOT/linux/pz" ai proxies manifest 2>/dev/null)"
+echo "$manifest_out" | jq -e '.ok == true and (.checks | length == 0)' >/dev/null
+# Manifest pins/ports/repos agree with approved snapshots and catalog rows.
+for pid in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
+    mrepo="$(jq -r --arg i "$pid" '.proxies[] | select(.id == $i) | .repository' "$ROOT/assets/ai/proxy-manifest.json")"
+    mcommit="$(jq -r --arg i "$pid" '.proxies[] | select(.id == $i) | .pin.commit // empty' "$ROOT/assets/ai/proxy-manifest.json")"
+    srepo="$(jq -r --arg i "$pid" '.sources[] | select(.id == $i) | .repository' "$ROOT/assets/ai/proxy-suite-trusted-sources.json")"
+    scommit="$(jq -r --arg i "$pid" '.sources[] | select(.id == $i) | .commit' "$ROOT/assets/ai/proxy-suite-trusted-sources.json")"
+    [ "$mrepo" = "$srepo" ] || { echo "FAIL: manifest repo drift for $pid"; exit 1; }
+    [ "$mcommit" = "$scommit" ] || { echo "FAIL: manifest pin drift for $pid"; exit 1; }
+done
+echo "  manifest contract ok"
 echo "linux-ai-proxies smoke ok"

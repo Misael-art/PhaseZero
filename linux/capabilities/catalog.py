@@ -123,6 +123,7 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
 
     # Development
     _c("development.docker", "Docker", "Engine e CLI para containers.", "development", packages={"arch": "docker", "debian": "docker.io", "fedora": "moby-engine", "suse": "docker"}, risk="elevated", reboot="recommended", immutable="layered"),
+    _c("development.docker-compose", "Docker Compose", "Orquestração multi-container (plugin compose).", "development", packages={"arch": "docker-compose", "debian": "docker-compose-plugin", "fedora": "docker-compose-plugin", "suse": "docker-compose"}, requires=("development.docker",), risk="elevated", immutable="layered"),
     _c("development.virt-manager", "Virt-Manager", "Gerenciamento gráfico de libvirt/QEMU.", "development", packages={"arch": "virt-manager", "debian": "virt-manager", "fedora": "virt-manager", "suse": "virt-manager"}),
     _c("development.kind", "Kind", "Clusters Kubernetes locais em containers.", "development", packages={"arch": "kind", "debian": "kind", "fedora": "kind"}, requires=("development.docker",)),
     _c("development.dotnet", ".NET SDK", "SDK moderno da plataforma .NET.", "development", packages={"arch": "dotnet-sdk", "debian": "dotnet-sdk-8.0", "fedora": "dotnet-sdk-8.0", "suse": "dotnet-sdk-8.0"}),

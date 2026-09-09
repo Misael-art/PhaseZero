@@ -506,6 +506,51 @@ def test_homelab_open_dashboard_url_local_and_remote(app):
     assert "--yes" not in src
 
 
+def test_homelab_onboarding_discover_runs_real_discovery(app):
+    # PZ-AUD-013: advancing on discover spawns agent discovery, it does
+    # not record a placeholder.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page.start_onboarding()
+    assert page.onboard_step_name() == "discover"
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.onboard_advance()
+    finally:
+        mod.QProcess = real_qprocess
+    assert "discover" not in page._onboard_state
+    argv = calls[-1][2]
+    assert argv == ["server", "homelab", "agent", "discover", "--json"]
+    # A real result advances; a failure stays with a message.
+    import json as _json
+
+    page._proc = None
+    page._on_discover_done(0, _json.dumps({"manualFallback": "IP:17432"}).encode(), b"")
+    assert page._onboard_state["discover"] == {"manualFallback": "IP:17432"}
+    assert page.onboard_step_name() == "pair"
+
+
+def test_homelab_onboarding_pair_needs_real_result(app):
+    # PZ-AUD-013: an alias alone is not pairing; local host is explicit.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    # Local machine: recorded explicitly, no fake remote pairing.
+    page._host_combo.setCurrentIndex(0)
+    page.onboard_advance()
+    assert page._onboard_state.get("pair") is True
+    assert page.onboard_step_name() == "profile"
+
+
 def test_homelab_onboarding_reaches_apply_without_yes(app):
     import linux.ui_native.pages.homelab as mod
 
@@ -534,25 +579,113 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
     FakeQProcess._calls = calls
     page._proc = None
     try:
+        # PZ-AUD-013: first press renders the plan, never executes.
         page.onboard_apply()
     finally:
         mod.QProcess = real_qprocess
     argv = calls[-1][2]
-    assert argv[:3] == ["server", "homelab", "repair"]
+    assert argv[:3] == ["server", "homelab", "prepare"]
+    assert "--dry-run" in argv
     assert "--json" in argv
     assert "--yes" not in argv
+    # Plan unchanged on second press: executes the reviewed plan.
+    import json as _json
+
+    plan = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    page._proc = None
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
+        assert page._onboard_state.get("review_plan") is not None
+        page._proc = None
+        page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
+        assert ran and ran[-1][0][:1] == ["prepare"] and "--dry-run" not in ran[-1][0]
+        assert "--yes" not in ran[-1][0]
+    finally:
+        mod.QProcess = real_qprocess
+        page.run_cmd = real_run_cmd
 
 
-def test_homelab_pair_uses_ssh_copy_id_without_password(app):
+def test_homelab_pair_goes_through_hosts_pair(app):
+    # PZ-AUD-014: pairing honors registry port/keys via `hosts pair`;
+    # no raw ssh-copy-id argv. UX-008 added the first contact, and the
+    # secret still never becomes an argument: only the `--password-stdin`
+    # flag is appended, and the value goes to the child's stdin.
     import inspect
 
     import linux.ui_native.pages.homelab as mod
 
     src = inspect.getsource(mod.HomelabPage.start_pair)
-    assert "ssh-copy-id" in src
-    assert "BatchMode=yes" in src
-    assert "--password" not in src
+    assert "hosts" in src and "pair" in src
+    assert "ssh-copy-id" not in src
+    assert "BatchMode=yes" not in src
     assert "sshpass" not in src
+    assert "args.append(password)" not in src
+    assert 'args.append("--password-stdin")' in src
+    assert "proc.write" in src
+
+
+def test_homelab_pair_done_ingests_states(app):
+    import json
+
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page._proc = None
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = []
+    real_run_cmd = page.run_cmd
+    seen = []
+    page.run_cmd = lambda args: seen.append(args)  # noqa: E731
+    warned = []
+
+    class FakeBox:  # noqa: N801
+        @staticmethod
+        def warning(*a, **k):
+            warned.append(a)
+
+        @staticmethod
+        def question(*a, **k):
+            return 0
+
+        @staticmethod
+        def information(*a, **k):
+            warned.append(a)
+
+    real_box = mod.QMessageBox
+    mod.QMessageBox = FakeBox
+    try:
+        paired = json.dumps({"paired": True, "state": "paired"}).encode()
+        page._on_pair_done(0, paired, b"")
+        assert page._onboard_state.get("pair") is True
+        assert seen and seen[-1][:2] == ["hosts", "ping"]
+        # UX-008: first contact is completed in the interface. Declining to
+        # type a password leaves the host unpaired instead of printing a
+        # terminal command to copy.
+        asked = []
+        real_ask = mod.HomelabPage._ask_first_contact_password
+        mod.HomelabPage._ask_first_contact_password = \
+            lambda self, alias: asked.append(alias) or ""
+        try:
+            first = json.dumps({
+                "paired": False, "state": "needs-first-contact",
+                "guidance": "first contact needs one terminal login",
+            }).encode()
+            page._on_pair_done(1, first, b"")
+        finally:
+            mod.HomelabPage._ask_first_contact_password = real_ask
+        assert page._onboard_state.get("pair") is False
+        assert asked, "senha do primeiro acesso não foi pedida"
+        assert not warned, "primeiro acesso não deve terminar em aviso de terminal"
+    finally:
+        mod.QMessageBox = real_box
+        mod.QProcess = real_qprocess
+        page.run_cmd = real_run_cmd
 
 
 def test_homelab_page_cancel_timeout_on_finish(app):
@@ -590,6 +723,33 @@ def test_homelab_page_refresh_profiles_uses_roadmap_contract(app):
         mod.QProcess = real_qprocess
     assert calls[-1][1].endswith("linux/pz")
     assert calls[-1][2] == ["server", "homelab", "profiles", "--json"]
+
+
+def test_homelab_page_marks_preview_profiles(app):
+    # PZ-AUD-022: non-installable profiles show maturity, never an install
+    # promise; the note is kept for the apply dialog.
+    page = _page()
+    payload = json.dumps({
+        "profiles": [
+            {"key": "edge", "title": "Edge", "maturity": "experimental",
+             "installable": False, "installNote": "zeroclaw worker not implemented"},
+            {"key": "core", "title": "Core", "maturity": "stable",
+             "installable": True, "installNote": ""},
+        ],
+    }).encode()
+    page._last_status = {}
+    page._on_profiles_done(0, payload, b"")
+    # UX-005: in simple mode a budget-only profile is not offered at all —
+    # it cannot be mistaken for an install.
+    labels = [page._profile_combo.itemText(i) for i in range(page._profile_combo.count())]
+    assert not any("edge" in label for label in labels)
+    # Asking for a simulation reveals it, still marked by maturity and with
+    # the note that no service is installed.
+    page._simulate_check.setChecked(True)
+    labels = [page._profile_combo.itemText(i) for i in range(page._profile_combo.count())]
+    assert any("[experimental]" in label for label in labels)
+    assert not any("[stable]" in label for label in labels)
+    assert "zeroclaw worker not implemented" in page._profile_map["edge:note"]
 
 
 def test_homelab_page_no_blocking_event_loop(app):
@@ -655,3 +815,454 @@ def test_restore_summary_mentions_volumes_and_rollback():
     text = page._restore_summary_text(plan, "/backups/bk1")
     assert "aprovada" in text and "(2/2 provas)" in text
     assert "vaultwarden_data" in text and "pré-backup" in text
+
+
+# ---------------------------------------------------------------------------
+# REV-004..007: document parser, pair gate, host-bound plan, typed plan.
+# ---------------------------------------------------------------------------
+
+def test_parse_json_payload_reads_multiline_document(app):
+    # REV-004: `jq -n` output is pretty (multiline) JSON; the old line-based
+    # parser returned {} and dropped a valid plan.
+    page = _page()
+    doc = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    pretty = json.dumps(doc, indent=2).encode()
+    assert page._parse_json_payload(pretty) == doc
+    # compact single line still works
+    assert page._parse_json_payload(json.dumps(doc).encode()) == doc
+    # leading non-JSON lines do not break parsing
+    noisy = b"INFO: collecting\n" + json.dumps(doc, indent=2).encode()
+    assert page._parse_json_payload(noisy) == doc
+    # garbage stays {} (never raises)
+    assert page._parse_json_payload(b"not json at all\n{broken") == {}
+
+
+def test_parse_json_payload_unwraps_remote_host_envelope(app):
+    # REV-006: `--host alias` wraps the payload in {hostAlias, rc, payload};
+    # callers must see the payload plus the bound hostAlias.
+    page = _page()
+    inner = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    envelope = {
+        "schemaVersion": "1", "tool": "homelab-hosts", "action": "exec",
+        "hostAlias": "appliance", "rc": 0, "payload": inner, "error": None,
+    }
+    payload = page._parse_json_payload(json.dumps(envelope, indent=2).encode())
+    assert payload["action"] == "prepare"
+    assert payload["hostAlias"] == "appliance"
+    assert "payload" not in payload
+
+
+def test_onboarding_pair_false_blocks_advance(app):
+    # REV-005: pair=false must keep the flow on the pair step; only a real
+    # success for the selected host advances.
+    page = _page()
+    page._host_combo.addItem("fixture B", "fixture-b")
+    page._host_combo.setCurrentIndex(1)
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    page.onboard_ingest_pair(False)
+    page._pair_advance = False
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    # a success recorded for ANOTHER host does not unlock this one
+    page.onboard_ingest_pair(True, {"alias": "fixture-other"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    page.onboard_ingest_pair(True, {"alias": "fixture-b"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "profile"
+
+
+def test_onboarding_host_change_invalidates_pair_and_confirmation(app):
+    # REV-005/006: authorization is bound to one host; switching targets
+    # rewinds the flow to pair and drops the reviewed plan.
+    page = _page()
+    page.start_onboarding()
+    page.onboard_ingest_pair(True, {"local": True})
+    page._onboard_step = 4  # apply
+    page.onboard_confirm_review()
+    page._onboard_state["review_plan"] = json.dumps({"action": "prepare"})
+    page._host_combo.addItem("fixture B", "fixture-b")
+    page._host_combo.setCurrentIndex(1)  # fires _on_host_changed
+    assert page._onboard_confirmed is False
+    assert "review_plan" not in page._onboard_state
+    assert "pair" not in page._onboard_state
+    assert page.onboard_step_name() == "pair"
+
+
+def test_plan_callback_from_other_host_is_dropped(app):
+    # REV-006 acceptance: review A, select B, receive A's late callback —
+    # nothing may execute and the stale plan must not be kept.
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = "fixture-a"
+    page._onboard_state["review_plan"] = json.dumps({"action": "prepare"})
+    plan = {"action": "prepare", "dryRun": True, "host": "fixture-a"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+        assert ran == []
+        assert "review_plan" not in page._onboard_state
+        # captured A vs current B: the host-switch guard fires
+        assert "novo plano" in page._state_label.text()
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+def test_onboard_plan_binds_captured_host_and_carries_profile(app):
+    # REV-007: the reviewed profile reaches the backend in both phases, and
+    # execution targets the captured host.
+    page = _page()
+    page._host_combo.addItem("fixture A", "fixture-a")
+    page._host_combo.setCurrentIndex(1)  # fires _on_host_changed (no-op here)
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    import linux.ui_native.pages.homelab as mod
+
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.onboard_apply()
+    finally:
+        mod.QProcess = real_qprocess
+    argv = calls[-1][2]
+    assert argv[:2] == ["server", "homelab"]
+    assert argv[2:5] == ["--host", "fixture-a", "prepare"]
+    assert "--dry-run" in argv and "--json" in argv
+    assert argv[-2:] == ["--profile", "edge"]
+    # matching plan -> second callback executes the same profile on the
+    # captured host, never a re-derivation from widget state.
+    plan = {"action": "prepare", "dryRun": True, "host": "fixture-a", "profile": "edge"}
+    page._onboard_state["review_plan"] = json.dumps(plan, sort_keys=True)
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+        assert ran == [(
+            ["prepare", "--json", "--profile", "edge"], "fixture-a",
+        )]
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# R01-002: late pairing results never touch the wrong host.
+# ---------------------------------------------------------------------------
+
+def _to_pair_step_with_host(page, alias: str) -> None:
+    page._host_combo.addItem(f"host {alias}", alias)
+    page._host_combo.setCurrentIndex(page._host_combo.count() - 1)
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()  # local-free: runs start_pair; blocked by BusyProc
+    assert page.onboard_step_name() == "pair"
+
+
+def test_late_pair_result_for_old_host_is_dropped(app):
+    # Pair A in flight, operator selects B, A reports success: B stays
+    # unpaired, the step does not advance, nothing runs against B.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    _to_pair_step_with_host(page, "fixture-a")
+    page._pair_advance = True
+    # operator switches to B while the pairing runs
+    page._host_combo.addItem("host fixture-b", "fixture-b")
+    page._host_combo.setCurrentIndex(page._host_combo.count() - 1)
+    assert page._pair_advance is False  # invalidated by the host switch
+    paired = {"paired": True, "hostAlias": "fixture-a"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append(args)  # noqa: E731
+    try:
+        page._on_pair_done(0, json.dumps(paired).encode(), b"", "fixture-a")
+        assert page._onboard_state.get("pair") is not True
+        assert page.onboard_step_name() == "pair"
+        assert "outro host" in page._state_label.text()
+        assert ran == []  # no ping / follow-up on B from A's result
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+def test_late_pair_result_for_selected_host_advances(app):
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    _to_pair_step_with_host(page, "fixture-b")
+    page._pair_advance = True
+    paired = {"paired": True, "hostAlias": "fixture-b"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append(args)  # noqa: E731
+    try:
+        page._on_pair_done(0, json.dumps(paired).encode(), b"", "fixture-b")
+        assert page._onboard_state.get("pair") is True
+        assert (page._onboard_state.get("pair_detail") or {}).get("alias") == "fixture-b"
+        assert page.onboard_step_name() == "profile"
+        assert ran and ran[-1][:2] == ["hosts", "ping"]
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# R01-003: the plan states budget-only profile truth in the UI.
+# ---------------------------------------------------------------------------
+
+def test_plan_renders_budget_only_profile_warning(app):
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = ""
+    plan = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "profile": "edge", "profileInstallable": False,
+        "profileNote": "zeroclaw worker not implemented",
+        "appsSource": "catalog-defaults",
+    }
+    page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+    assert page._onboard_state.get("review_plan") is not None
+    # UX-007: the truth is stated on the page, in product language, and
+    # recorded in the output pane as well.
+    summary = page._plan_summary.text()
+    assert page._plan_summary.isVisibleTo(page)
+    for text in (summary, page._output.toPlainText()):
+        assert "só reserva recursos" in text
+        assert "zeroclaw worker not implemented" in text
+
+
+def test_plan_without_warning_for_installable_profile(app):
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = ""
+    plan = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "profile": "edge", "profileInstallable": True,
+        "appsSource": "catalog-defaults",
+    }
+    page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+    assert "só reserva recursos" not in page._output.toPlainText()
+    assert "só reserva recursos" not in page._plan_summary.text()
+
+
+# ---------------------------------------------------------------------------
+# UX-001/UX-002: confirmation reachable by public input; stable plan intent.
+# ---------------------------------------------------------------------------
+
+def test_review_confirmation_reachable_by_clicks(app):
+    # UX-001 acceptance: clicking through the PUBLIC controls must reach
+    # apply. The button must be PRESENTED (visible AND enabled, whole
+    # rectangle inside the scroll viewport) and the click is delivered to
+    # the viewport AT the button's position — a hidden-but-enabled control
+    # fails here. No private flags; onboard_confirm_review is never called
+    # directly by the test.
+    from PySide6.QtCore import Qt, QPoint, QRect
+    from PySide6.QtTest import QTest
+
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()  # BusyProc keeps real spawns blocked
+    page.resize(800, 600)
+    page.show()
+    app.processEvents()
+    scroll = page._page_scroll
+
+    def click_in_viewport(btn) -> None:
+        scroll.ensureWidgetVisible(btn, 12, 12)
+        app.processEvents()
+        assert btn.isVisible() and btn.isEnabled(), \
+            f"controle '{btn.text()}' não foi apresentado"
+        assert not btn.visibleRegion().isEmpty()
+        vp = scroll.viewport()
+        rect = QRect(btn.mapTo(vp, QPoint(0, 0)), btn.size())
+        assert vp.rect().contains(rect), \
+            f"controle '{btn.text()}' parcialmente fora do viewport"
+        # real hit-test: whatever the user's click would land on at the
+        # button's position must be the button itself (a covered or clipped
+        # control fails here)
+        center_global = btn.mapToGlobal(btn.rect().center())
+        hit = QApplication.widgetAt(center_global)
+        assert hit is not None and (hit is btn or btn.isAncestorOf(hit)), \
+            f"clique na posição de '{btn.text()}' atingiria {type(hit).__name__}"
+        QTest.mouseClick(hit, Qt.MouseButton.LeftButton,
+                         pos=hit.mapFromGlobal(center_global))
+
+    spawned = []
+    real_spawn = page._spawn
+    page._spawn = lambda args, cb: spawned.append(list(args))  # noqa: E731
+    try:
+        page.start_onboarding()
+        page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+        click_in_viewport(page._onboard_next)
+        assert page.onboard_step_name() == "pair"
+        click_in_viewport(page._onboard_next)
+        assert page.onboard_step_name() == "profile"
+        click_in_viewport(page._onboard_next)
+        assert page.onboard_step_name() == "review"
+        # the confirm control is presented whole and the click lands on it
+        click_in_viewport(page._onboard_confirm)
+        assert page._onboard_confirmed is True
+        assert not page._onboard_confirm.isVisible()
+        click_in_viewport(page._onboard_next)
+        assert page.onboard_step_name() == "apply"
+        # apply by clicks only: first press renders the plan
+        click_in_viewport(page._onboard_next)
+        assert spawned and spawned[-1][2:5] == ["prepare", "--dry-run", "--json"]
+    finally:
+        page._spawn = real_spawn
+        page.hide()
+
+
+def test_ui_pages_have_no_duplicate_method_definitions():
+    # Prevention for UX-001: a later duplicate definition silently
+    # overrides the earlier one (the confirm-button logic was lost that
+    # way). Scans the page modules touched by this front.
+    import re
+
+    for name in ("homelab.py", "windows_vm.py", "base.py"):
+        source = (ROOT / "linux" / "ui_native" / "pages" / name).read_text()
+        names = re.findall(r"^    def (\w+)\(", source, re.M)
+        dups = sorted({n for n in names if names.count(n) > 1})
+        assert not dups, f"{name}: métodos duplicados {dups}"
+
+
+# ---------------------------------------------------------------------------
+# UX-003/UX-004 acceptance: real app window + real stylesheet, no horizontal
+# overflow and every public control fully inside the viewport after
+# scrolling — across the 800 -> 1280 -> 800 alternation.
+# ---------------------------------------------------------------------------
+
+def test_pages_reflow_in_real_window_with_theme(app):
+    from unittest.mock import patch
+
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QComboBox, QPushButton
+
+    from linux.ui_native.app import apply_theme
+    from linux.ui_native.main_window import MainWindow
+
+    previous_qss = app.styleSheet()
+    previous_style = app.style().objectName() if app.style() is not None else ""
+    apply_theme(app, "dark")
+    with patch.object(MainWindow, "_host_summary"), \
+         patch("linux.ui_native.status_loader.StatusLoader.fetch_action"):
+        win = MainWindow(ROOT)
+        win.show()
+        try:
+            for width, height in ((800, 600), (1280, 800), (800, 600)):
+                win.resize(width, height)
+                for _ in range(8):
+                    app.processEvents()
+                for category in ("Homelab", "Windows VM"):
+                    win.show_category(category)
+                    for _ in range(8):
+                        app.processEvents()
+                    page = win.registry.page_for(category)
+                    scroll = page._page_scroll
+                    assert scroll.horizontalScrollBar().maximum() == 0, \
+                        f"{category}: overflow horizontal em {width}x{height}"
+                    host = scroll.widget()
+                    vp = scroll.viewport()
+                    def _label(w) -> str:
+                        return w.text() if hasattr(w, "text") else w.currentText() or w.accessibleName()
+
+                    controls = [
+                        w for w in host.findChildren(QPushButton) + host.findChildren(QComboBox)
+                        if w.isVisibleTo(host) and _label(w)
+                    ]
+                    assert controls, f"{category}: nenhum controle público"
+                    for control in controls:
+                        scroll.ensureWidgetVisible(control, 12, 12)
+                        for _ in range(2):
+                            app.processEvents()
+                        rect = QRect(control.mapTo(vp, QPoint(0, 0)), control.size())
+                        label = _label(control)
+                        assert vp.rect().contains(rect), \
+                            f"{category} {width}x{height}: '{label}' cortado no viewport"
+        finally:
+            win.hide()
+            win.close()
+    app.setStyleSheet(previous_qss)
+    if previous_style:
+        app.setStyle(previous_style)
+
+
+def test_plan_survives_telemetry_drift_blocks_on_verdict_fail(app):
+    # UX-002: availableMB drift (16000 -> 15999) must NOT revoke the
+    # review; a crossed limit (verdict fail) blocks execution with a
+    # reason; an app change still forces a new review.
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["plan_host"] = ""
+    base = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "apps": ["vaultwarden"], "access": "local",
+        "budget": {"availableMB": 16000, "verdict": "pass"},
+    }
+    page._on_apply_plan_done(0, json.dumps(base).encode(), b"")
+    assert page._onboard_state.get("review_plan") is not None
+
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        drifted = dict(base, budget={"availableMB": 15999, "verdict": "pass"})
+        page._on_apply_plan_done(0, json.dumps(drifted).encode(), b"")
+        assert ran, "1 MiB RAM drift wrongly invalidated the review"
+        assert ran[-1][0][:2] == ["prepare", "--json"]
+
+        # re-arm review with a different app set: material change forces a
+        # new review (run_cmd is armed but must not fire yet)
+        changed = dict(base, apps=["vaultwarden", "jellyfin"])
+        page._on_apply_plan_done(0, json.dumps(changed).encode(), b"")
+        assert len(ran) == 1
+        assert page._onboard_state.get("review_plan") is not None
+
+        # same intent as `changed`, but the budget crossed a limit
+        crossed = dict(changed, budget={"availableMB": 512, "verdict": "fail"})
+        page._on_apply_plan_done(0, json.dumps(crossed).encode(), b"")
+        assert len(ran) == 1  # blocked
+        assert "insuficientes" in page._state_label.text()
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# UX-003: every control stays reachable by vertical scroll at small sizes.
+# ---------------------------------------------------------------------------
+
+def test_homelab_actions_reachable_by_vertical_scroll_at_800x600(app):
+    from PySide6.QtTest import QTest
+
+    page = _page()
+    page.resize(800, 600)
+    page.show()
+    QTest.qWaitForWindowExposed(page)
+    try:
+        scroll = page._page_scroll
+        assert scroll.widgetResizable()
+        # the page never demands horizontal scrolling
+        assert scroll.horizontalScrollBar().maximum() == 0
+        for btn in page._action_buttons:
+            scroll.ensureWidgetVisible(btn, 8, 8)
+            app.processEvents()
+            assert not btn.visibleRegion().isEmpty(), \
+                f"botão '{btn.text()}' inalcançável em 800x600"
+            assert btn.width() >= 60, f"botão '{btn.text()}' colapsado"
+            assert btn.height() >= max(20, btn.sizeHint().height() - 4)
+    finally:
+        page.hide()

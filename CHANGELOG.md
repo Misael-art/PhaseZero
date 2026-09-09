@@ -3,6 +3,27 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.0] - 2026-09-08
+
+### Adicionado
+- **Jornada por solução no Homelab**: cada aplicativo do catálogo percorre não instalado → preparando → configurar acesso → pronto para usar, com os passos de primeiro uso em português no próprio cartão. "Rodando" deixou de significar "pronto": sem sonda funcional respondendo, o cartão continua em preparação.
+- **Primeiro pareamento remoto sem terminal** (`hosts pair --password-stdin [--timeout S]`): a senha é lida de stdin e entregue ao ssh por um helper askpass em arquivo 0600 dentro de diretório 0700, destruídos em toda saída — nunca em argumento, variável de ambiente, JSON ou log. Espera limitada, cancelamento seguro, e desfechos distintos (`paired`, `auth-failed`, `timeout`, `unreachable`, `empty-password`) com o que fazer a seguir.
+- **Início por objetivo**: os cartões abrem a jornada que nomeiam — hospedar leva ao Homelab, cuidar de outro computador leva à etapa de pareamento, e o novo objetivo de Windows leva ao controle de instalação. Tarefa interrompida volta com um cartão para retomar de onde parou.
+- **Gate de acessibilidade na suíte**: contraste WCAG AA nos temas escuro e claro, nome acessível e alcance por teclado em todas as páginas, e ausência de overflow horizontal em 150% e 200%.
+
+### Corrigido
+- **Perfil de orçamento parou de fingir instalação**: um perfil sem receita reservava memória e seguia instalando os aplicativos padrão, como se atendesse o objetivo escolhido. Agora a interface nomeia os serviços que aquele perfil não instala e exige decisão explícita entre simular recursos e instalar a base do servidor.
+- **Windows não promete mais 3D que não pode provar**: `virtio-gl` era anunciado como estável e "aceleração OpenGL" enquanto o próprio backend o classifica como experimental. O modo simples passa a oferecer só o que esta máquina mede como estável, com o display recomendado e o motivo; sem medição, fica no perfil compatível.
+- **Canal de instalação sob elevação**: `pz` executado via sudo/pkexec lia `XDG_DATA_HOME` de quem invocou, e reportava como ausente uma instalação de usuário que existia.
+- **`emulation dualscreen detect` não trava mais**: `kscreen-doctor` bloqueia indefinidamente sem sessão KDE e era chamado sem limite, deixando o diagnóstico pendurado sob serviço ou runner de teste.
+- Contraste abaixo do mínimo WCAG AA em dois pares de estado (erro no tema escuro, aviso no claro) e anel de foco imperceptível sobre superfícies escuras, agora com token próprio.
+- Windows VM saía do viewport em escala de 200%: o limiar de reflow era fixo em pixels e a página permitia rolagem horizontal.
+
+### Interface
+- Abrir uma solução deixou de marcar o primeiro acesso sozinho: quem confirma que a conta foi criada é o operador, com os passos daquela solução à vista.
+- Plano de instalação resumido em linguagem de produto — servidor, aplicativos, acesso, memória e etapas —, com o JSON preservado na visão avançada.
+- Falha de comando explica a causa e oferece retomar por um controle visível, sem exigir leitura de log.
+
 ## [1.19.0] - 2026-08-27
 
 ### Adicionado

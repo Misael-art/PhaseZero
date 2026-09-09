@@ -60,7 +60,11 @@ dualscreen_kwin_indices() {
     [ -n "$ext" ] && [ -n "$int" ] || return 0
     # kscreen-doctor -o prints "Output: <idx> <name>"; map names to indices.
     local out ext_idx int_idx
-    out="$(kscreen-doctor -o 2>/dev/null)"
+    # kscreen-doctor blocks forever when it cannot reach a KDE session (no
+    # DBus/Wayland handle — e.g. a service, a test runner, or a fresh HOME).
+    # A diagnostic must never hang: without indices, detect still reports
+    # connectors and marks the KWin indices unknown.
+    out="$(timeout 5 kscreen-doctor -o 2>/dev/null || true)"
     ext_idx="$(printf '%s\n' "$out" | sed -nE "s/.*Output:[[:space:]]*([0-9]+)[[:space:]]+$ext.*/\1/p" | head -n1)"
     int_idx="$(printf '%s\n' "$out" | sed -nE "s/.*Output:[[:space:]]*([0-9]+)[[:space:]]+$int.*/\1/p" | head -n1)"
     [ -n "$ext_idx" ] && [ -n "$int_idx" ] || return 0

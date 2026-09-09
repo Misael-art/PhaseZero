@@ -2,6 +2,11 @@
 services:
   node-exporter:
     image: ${PZ_IMAGE_NODE_EXPORTER:-prom/node-exporter:v1.9.1}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-node-exporter
     restart: unless-stopped
     init: true

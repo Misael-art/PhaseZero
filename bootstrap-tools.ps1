@@ -17879,6 +17879,34 @@ function Get-BootstrapAiProxyCatalog {
     return $catalog
 }
 
+function Get-PhaseZeroProxyManifest {
+    # PZ-AUD-019: canonical cross-OS proxy contract (assets/ai/proxy-manifest.json).
+    $manifestPath = Join-Path $PSScriptRoot 'assets/ai/proxy-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { return $null }
+    return (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
+function Test-PhaseZeroProxyManifestParity {
+    # Compares the Windows catalog against the manifest. Returns mismatches;
+    # known migrations stay visible via the manifest `migration` notes.
+    $manifest = Get-PhaseZeroProxyManifest
+    $catalog = Get-BootstrapAiProxyCatalog
+    $issues = @()
+    if ($null -eq $manifest) { return @('proxy manifest missing') }
+    foreach ($entry in $manifest.proxies) {
+        if ($entry.tier -ne 'supported') { continue }
+        $id = [string]$entry.id
+        if (-not $catalog.Contains($id)) { $issues += ("{0}: missing from Windows catalog" -f $id); continue }
+        if ([string]$catalog[$id].RepoUrl -ne [string]$entry.repository) {
+            $issues += ("{0}: RepoUrl drift (catalog={1} manifest={2})" -f $id, $catalog[$id].RepoUrl, $entry.repository)
+        }
+        if ([int]$catalog[$id].Port -ne [int]$entry.port) {
+            $issues += ("{0}: Port drift (catalog={1} manifest={2})" -f $id, $catalog[$id].Port, $entry.port)
+        }
+    }
+    return $issues
+}
+
 function Get-BootstrapAiToolCatalog {
     $catalog = [ordered]@{}
     $catalog['rtk'] = [ordered]@{

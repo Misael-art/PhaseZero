@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
             page.action_requested.connect(self.request_action)
             page.actions_requested.connect(self.request_actions)
             page.action_selected.connect(self.inspect_action)
+            page.category_requested.connect(self.show_journey)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -450,6 +451,32 @@ class MainWindow(QMainWindow):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
 
+    def _graphics_status(self) -> dict:
+        """Measured graphics capability of this host, or {} when unknown.
+
+        Bounded and never fatal: an unavailable measurement means the
+        install dialog falls back to the compatible profile, never to an
+        optimistic one.
+        """
+        import json
+        import subprocess
+
+        try:
+            proc = subprocess.run(
+                [str(self.root / "linux" / "pz"), "windows-vm", "graphics", "status", "--json"],
+                capture_output=True, text=True, timeout=20, check=False,
+            )
+            return json.loads(proc.stdout) if proc.returncode == 0 else {}
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return {}
+
+    def show_journey(self, category: str, focus: str = "") -> None:
+        """UX-006: open a goal's destination and land on its entry step."""
+        self.show_category(category)
+        page = self.registry.page_for(category)
+        if page is not None and focus:
+            page.focus_journey(focus)
+
     def inspect_action(self, action: ActionSpec) -> None:
         self.inspector.set_action(action)
         self.inspector.show()
@@ -558,7 +585,12 @@ class MainWindow(QMainWindow):
             return
         values: dict[str, str] = {}
         if action.id == "windows.provision.player":
-            dialog = WindowsInstallDialog(self)
+            # UX-010: the dialog only promises what this host measured.
+            dialog = WindowsInstallDialog(
+                self,
+                graphics_status=self._graphics_status(),
+                advanced=self.preferences.advanced_mode,
+            )
             if dialog.exec() != WindowsInstallDialog.Accepted:
                 return
             values = dialog.values()

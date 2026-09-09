@@ -315,4 +315,67 @@ grep -Fq -- '--env-file "$ROUTER_ENV" --env-file "$ENV_FILE"' "$ROOT/linux/ai/od
 # shellcheck disable=SC2016 # assertion intentionally matches literal Compose interpolation
 grep -Fq 'OPENAI_API_KEY: \${PHASEZERO_9ROUTER_API_KEY:' "$ROOT/linux/ai/odysseus-manager.sh"
 
+echo "=== hermes stays optional in broad profiles (PZ-AUD-021) ==="
+# The gate block (rc 69) becomes an explained skip, never a profile abort.
+# Chamar como o produto chama: pz_run_profile executa scripts de perfil com
+# `bash "$script"`, e o bit de execução não faz parte do contrato — este
+# arquivo está commitado como 100644, como outros do repositório.
+skip_out="$(env -u PZ_HOMELAB_ALLOW_HOST_WORKLOADS bash "$ROOT/linux/ai/setup-hermes-optional.sh" setup 2>&1 || true)"
+echo "$skip_out" | rg -qi "SKIP|experimental|blocked" || {
+    # Sem a saída real, a falha só diz que algo não bateu: mostre o que o
+    # script respondeu, que é a única evidência que decide o caso.
+    echo "FAIL: hermes gate block not explained; saída real:"
+    printf '%s\n' "$skip_out" | head -10
+    exit 1
+}
+# ...but a real failure still propagates.
+if bash "$ROOT/linux/ai/setup-hermes-optional.sh" bogus-action >/dev/null 2>&1; then
+    echo "FAIL: hermes misuse accepted"; exit 1
+fi
+rg -q 'setup-hermes-optional\.sh' "$ROOT/profiles/dev-ai.json" \
+    || { echo "FAIL: dev-ai still calls raw setup-hermes"; exit 1; }
+if rg -q '"linux/ai/setup-hermes\.sh"' "$ROOT/profiles/dev-ai.json"; then
+    echo "FAIL: dev-ai references blocking hermes setup"; exit 1
+fi
+echo "  hermes optional ok"
+
+echo "=== llm model proven by inference, never backgrounded (PZ-AUD-024) ==="
+LLMBIN="$TMP_ROOT/llmbin"
+mkdir -p "$LLMBIN"
+cat > "$LLMBIN/ollama" <<'EOS'
+#!/usr/bin/env bash
+if [ "${1:-}" = "list" ]; then
+    printf 'NAME\nqwen2.5-coder:1.5b\n'
+    exit 0
+fi
+exit 0
+EOS
+cat > "$LLMBIN/curl" <<'EOS'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */api/generate) printf '{"model":"qwen2.5-coder:1.5b","response":"ok","done":true}'; exit 0 ;;
+    esac
+done
+exit 1
+EOS
+chmod +x "$LLMBIN/ollama" "$LLMBIN/curl"
+export PZ_LLM_SERVER_STATE="$TMP_ROOT/llm-server.json"
+if ! PATH="$LLMBIN:$PATH" PZ_DRY_RUN=0 "$ROOT/linux/server/llm-server.sh" install >/dev/null 2>&1; then
+    echo "FAIL: llm install with answering model failed"; exit 1
+fi
+jq -e '.defaultModel == "qwen2.5-coder:1.5b" and .inference.probed == true and .inference.httpCode == "200"' \
+    "$PZ_LLM_SERVER_STATE" >/dev/null
+rg -q 'nohup ollama pull' "$ROOT/linux/server/llm-server.sh" && { echo "FAIL: background pull still present"; exit 1; }
+# A present model that cannot answer is not ready.
+cat > "$LLMBIN/curl" <<'EOS'
+#!/usr/bin/env bash
+exit 1
+EOS
+chmod +x "$LLMBIN/curl"
+if PATH="$LLMBIN:$PATH" PZ_DRY_RUN=0 "$ROOT/linux/server/llm-server.sh" install >/dev/null 2>&1; then
+    echo "FAIL: silent model reported ready"; exit 1
+fi
+echo "  llm inference proof ok"
+
 echo "linux-agent-workspaces smoke ok"
