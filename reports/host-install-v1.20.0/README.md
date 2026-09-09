@@ -128,14 +128,21 @@ o combinado desta sessão era não tocar em boot nem reiniciar.
 Sem as correções, a suíte morre com 141 — verifiquei revertendo só os arquivos
 de produto e mantendo os testes.
 
-## Achado adicional: suíte órfã
+## Achado adicional: suíte órfã — corrigido
 
-`tests/audit-doctor.sh` **falha** neste host (caso `default_conservative`,
-expectativa de WAYDROID) e **nunca roda no CI**: o `tests/runner.sh` varre
-`tests/linux-*.sh` e `tests/test_*.sh`, e esse arquivo não casa com nenhum dos
-dois padrões. A falha é anterior às minhas mudanças — confirmei revertendo-as.
-Não corrigi: não estava no escopo pedido, e mexer numa expectativa que ninguém
-executa merece decisão explícita.
+`tests/audit-doctor.sh` falhava neste host e **nunca rodava no CI**: o
+`tests/runner.sh` varre `tests/linux-*.sh` e `tests/test_*.sh`, e o nome não
+casava com nenhum dos dois padrões.
+
+O caso `default_conservative` guardava uma regra que o produto abandonou de
+propósito. O commit `82460f7` (CCS-016) inverteu a política — *"ausência de conf
+= nunca optou; host fresco não pode virar parede de WARN por subsistema que o
+usuário nunca pediu"* — e o doctor passou a responder `INFO: not opted in`. O
+teste continuou exigindo `WARN`, e ninguém viu, porque ninguém o executava.
+
+Correção: o caso passa a afirmar a regra atual (INFO, e **nenhum** WARN para
+subsistema não solicitado), e o arquivo virou `tests/linux-audit-doctor.sh`,
+que o runner enxerga. 9 casos, todos verdes.
 
 ## Limites desta verificação
 
