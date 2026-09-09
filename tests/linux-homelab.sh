@@ -894,7 +894,15 @@ echo "$exp_out" | jq -e '.ready == false
 echo "  strict readiness ok"
 
 echo "=== prepare plan states profile truth (R01-003) ==="
-r03_a="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" "$REPO_ROOT/linux/pz" server homelab prepare --dry-run --json --profile edge 2>/dev/null)"
+# Um comando que morre aqui derruba a suite pelo set -e sem dizer por quê:
+# guardar stderr e o rc torna a falha legível em vez de "exit 3" mudo.
+r03_rc=0
+r03_a="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" "$REPO_ROOT/linux/pz" server homelab prepare --dry-run --json --profile edge 2>"$TMP/r03.err")" || r03_rc=$?
+[ "$r03_rc" -eq 0 ] || {
+    echo "FAIL: prepare --profile edge saiu $r03_rc (R01-003):"
+    tail -5 "$TMP/r03.err"
+    exit 1
+}
 echo "$r03_a" | jq -e '.dryRun == true and .host == "local" and .profile == "edge"
     and .profileInstallable == false and (.profileNote | length > 0)
     and (.profileServices | index("zeroclaw") != null)
