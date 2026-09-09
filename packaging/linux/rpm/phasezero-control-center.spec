@@ -47,6 +47,9 @@ fi
 
 %files
 %{_bindir}/phasezero-control-center
+# PZ-AUD-001: instalado em %install desde que `pz` passou a ir para o PATH;
+# sem esta linha o rpmbuild aborta com "installed (but unpackaged) file".
+%{_bindir}/pz
 %{_libdir}/phasezero
 %{_datadir}/applications/io.phasezero.ControlCenter.desktop
 %{_datadir}/metainfo/io.phasezero.ControlCenter.metainfo.xml
