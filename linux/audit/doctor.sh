@@ -6,6 +6,16 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 PASS=0 WARN=0 FAIL=0 ERROR=0 INFO=0
 RESULTS=()
+RESULTS_JSON=()
+# PZ: `--json` promete saída de máquina. Sem isto a flag era ignorada em
+# silêncio e o consumidor recebia o relatório humano.
+JSON_OUTPUT="${PZ_DOCTOR_JSON:-0}"
+if [ "$JSON_OUTPUT" = "1" ]; then
+    # O relatório humano — inclusive o que os subcomandos escrevem — vai para
+    # /dev/null; só o envelope sai, pelo descritor 3. Guardar cada `echo` com
+    # um `if` deixaria qualquer linha nova vazando para dentro do JSON.
+    exec 3>&1 1>/dev/null
+fi
 
 check() {
     local id="$1" desc="$2" status="$3" msg="$4"
@@ -17,6 +27,8 @@ check() {
         INFO) INFO=$((INFO + 1)) ;;
     esac
     RESULTS+=("[$status] $id: $desc — $msg")
+    RESULTS_JSON+=("$(jq -cn --arg id "$id" --arg title "$desc" --arg status "$status" \
+        --arg detail "$msg" '{id:$id, title:$title, status:$status, detail:$detail}')")
     echo "[$status] $id: $desc"
 }
 
@@ -34,6 +46,19 @@ footer() {
     [ "$FAIL" -gt 0 ] && echo ">>> Some checks FAILED" || echo ">>> All checks passed"
 }
 finish() {
+    if [ "$JSON_OUTPUT" = "1" ]; then
+        # Envelope objeto, como os demais comandos de status do produto.
+        printf '%s\n' "${RESULTS_JSON[@]}" | jq -s \
+            --arg scope "${PZ_DOCTOR_SCOPE:-full}" \
+            --argjson pass "$PASS" --argjson warn "$WARN" --argjson fail "$FAIL" \
+            --argjson error "$ERROR" --argjson info "$INFO" \
+            '{schemaVersion:1, tool:"doctor", scope:$scope,
+              summary:{pass:$pass, warn:$warn, fail:$fail, error:$error, info:$info,
+                       total:($pass+$warn+$fail+$error+$info)},
+              ok:(($fail+$error) == 0),
+              checks:.}' >&3
+        return 0
+    fi
     footer
     echo
     echo "Results JSON:"
@@ -143,6 +168,24 @@ if [[ "$root_fs" =~ btrfs|ext4|xfs ]]; then check FS01 "Root filesystem type" PA
 
 if command -v btrfs &>/dev/null && timeout 5 btrfs filesystem show / &>/dev/null 2>&1; then
     check FS02 "Btrfs available" PASS "yes"
+fi
+
+# Estado local cresce sem poda automática: cada operação deixa um registro.
+# `pz installation prune` já sabe podar; o que faltava era alguém dizer que
+# está na hora. Aqui foram encontrados 5122 arquivos num único diretório.
+pz_state_ops="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/operations"
+if [ -d "$pz_state_ops" ]; then
+    ops_files=0
+    for _entry in "$pz_state_ops"/*.json; do
+        [ -e "$_entry" ] || break
+        ops_files=$((ops_files + 1))
+    done
+    if [ "$ops_files" -gt 500 ]; then
+        check STATE01 "Local operation records bounded" WARN \
+            "$ops_files registros em $pz_state_ops; poda: pz installation prune"
+    else
+        check STATE01 "Local operation records bounded" PASS "$ops_files registros"
+    fi
 fi
 
 header "CPU / Temperature"
@@ -376,8 +419,23 @@ winvm_user_home="${HOME}"
 winvm_ops_dir="${XDG_STATE_HOME:-$winvm_user_home/.local/state}/phasezero/operations"
 winvm_latest_resolved=""
 if [ -d "$winvm_ops_dir" ]; then
-    # shellcheck disable=SC2012 # ls for sorting by time is intentional
-    last_op_dir="$(ls -t "$winvm_ops_dir" 2>/dev/null | head -1)"
+    # `ls | head -1` mata o doctor: sob `set -euo pipefail`, head fecha o
+    # pipe, ls leva SIGPIPE e o pipeline devolve 141. Com muitas operações
+    # gravadas (aqui: 5118) isso acontece sempre, e o relatório terminava
+    # em silêncio no meio, sem avaliar nada depois deste ponto. Ordenar com
+    # o próprio shell não usa pipe e não depende do tamanho do diretório.
+    last_op_dir=""
+    newest_mtime=0
+    # Só diretórios de operação interessam; o mesmo diretório guarda milhares
+    # de arquivos soltos e varrer todos custaria caro por nada.
+    for op_entry in "$winvm_ops_dir"/op-*; do
+        [ -d "$op_entry" ] || continue
+        op_mtime="$(stat -c %Y "$op_entry" 2>/dev/null || echo 0)"
+        if [ "$op_mtime" -gt "$newest_mtime" ]; then
+            newest_mtime="$op_mtime"
+            last_op_dir="$(basename "$op_entry")"
+        fi
+    done
     [ -n "$last_op_dir" ] && winvm_latest_resolved="$(jq -r '.graphicsResolved.profile // ""' "$winvm_ops_dir/$last_op_dir/operation.json" 2>/dev/null || true)"
 fi
 # Steam Deck VFIO note (VanGogh APU unica, sem VFIO)
