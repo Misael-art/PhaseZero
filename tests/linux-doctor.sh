@@ -63,8 +63,11 @@ echo "$doc_json" | jq -e '[.checks[].id] | index("WINVM11") != null' >/dev/null 
 echo "  doctor completa com diretório cheio ok"
 
 echo "=== doctor --json é contrato de máquina, não relatório humano ==="
-printf '%s' "$doc_json" | head -1 | grep -q '^{' \
-    || { echo "FAIL: --json não emitiu objeto na primeira linha"; exit 1; }
+printf '%s' "$doc_json" | head -1 | grep -q '^{' || {
+    echo "FAIL: --json não emitiu objeto na primeira linha; começo real:"
+    printf '%s' "$doc_json" | head -5
+    exit 1
+}
 printf '%s' "$doc_json" | grep -q "=== System Info ===" \
     && { echo "FAIL: relatório humano vazou para dentro do JSON"; exit 1; }
 XDG_STATE_HOME="$big_state" bash "$REPO_ROOT/linux/pz" doctor --json >/dev/null 2>&1 \

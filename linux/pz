@@ -773,7 +773,14 @@ cmd_doctor() {
             *) pz_error "usage: pz doctor [--scope system|full] [--json]"; return 1 ;;
         esac
     done
-    PZ_DOCTOR_SCOPE="$scope" PZ_DOCTOR_JSON="$json" \
+    if [ "$json" = 1 ]; then
+        # fd 3 = stdout de verdade (só o envelope); stdout do script = lixeira.
+        PZ_DOCTOR_SCOPE="$scope" PZ_DOCTOR_JSON=1 \
+            timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh" \
+            3>&1 1>/dev/null
+        return $?
+    fi
+    PZ_DOCTOR_SCOPE="$scope" PZ_DOCTOR_JSON=0 \
         timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 

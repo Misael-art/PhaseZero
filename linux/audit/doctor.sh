@@ -10,12 +10,10 @@ RESULTS_JSON=()
 # PZ: `--json` promete saída de máquina. Sem isto a flag era ignorada em
 # silêncio e o consumidor recebia o relatório humano.
 JSON_OUTPUT="${PZ_DOCTOR_JSON:-0}"
-if [ "$JSON_OUTPUT" = "1" ]; then
-    # O relatório humano — inclusive o que os subcomandos escrevem — vai para
-    # /dev/null; só o envelope sai, pelo descritor 3. Guardar cada `echo` com
-    # um `if` deixaria qualquer linha nova vazando para dentro do JSON.
-    exec 3>&1 1>/dev/null
-fi
+# Em modo JSON quem monta o encanamento é o `pz`: ele abre o descritor 3 para
+# o stdout real e manda o stdout deste script para /dev/null. Assim o relatório
+# humano — daqui e de todo subcomando — não tem como vazar para dentro do
+# envelope, e nenhuma linha nova precisa lembrar de se silenciar.
 
 check() {
     local id="$1" desc="$2" status="$3" msg="$4"
