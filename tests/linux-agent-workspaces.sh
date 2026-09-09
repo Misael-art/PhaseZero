@@ -318,8 +318,13 @@ grep -Fq 'OPENAI_API_KEY: \${PHASEZERO_9ROUTER_API_KEY:' "$ROOT/linux/ai/odysseu
 echo "=== hermes stays optional in broad profiles (PZ-AUD-021) ==="
 # The gate block (rc 69) becomes an explained skip, never a profile abort.
 skip_out="$(env -u PZ_HOMELAB_ALLOW_HOST_WORKLOADS "$ROOT/linux/ai/setup-hermes-optional.sh" setup 2>&1 || true)"
-echo "$skip_out" | rg -qi "SKIP|experimental|blocked" \
-    || { echo "FAIL: hermes gate block not explained"; exit 1; }
+echo "$skip_out" | rg -qi "SKIP|experimental|blocked" || {
+    # Sem a saída real, a falha só diz que algo não bateu: mostre o que o
+    # script respondeu, que é a única evidência que decide o caso.
+    echo "FAIL: hermes gate block not explained; saída real:"
+    printf '%s\n' "$skip_out" | head -10
+    exit 1
+}
 # ...but a real failure still propagates.
 if "$ROOT/linux/ai/setup-hermes-optional.sh" bogus-action >/dev/null 2>&1; then
     echo "FAIL: hermes misuse accepted"; exit 1
