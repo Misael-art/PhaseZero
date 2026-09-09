@@ -69,6 +69,10 @@ class WindowsVmPage(BasePage):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        # UX-011: rolar na vertical, nunca na horizontal. Sem isto o
+        # conteúdo mantém a largura que quer (em 200% de escala, mais do
+        # que a janela) e os controles saem pela lateral em vez de refluir.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(2, 2, 8, 12)
@@ -97,11 +101,42 @@ class WindowsVmPage(BasePage):
         self.status_loader.status_ready.connect(self._on_status_ready)
         self.status_loader.status_failed.connect(self._on_status_failed)
 
+    def _wide_layout_min_width(self) -> int:
+        """Largura que a linha única do hero realmente exige, agora.
+
+        UX-011: um limiar fixo em pixels assume o tamanho de fonte padrão.
+        Em 200% os mesmos controles ficam muito maiores, continuam na
+        arrumação larga e vazam pela lateral. Perguntar aos widgets o que
+        eles precisam faz o reflow acompanhar a escala do sistema.
+        """
+        def row_width(grid, widgets) -> int:
+            present = [widget for widget in widgets if widget is not None]
+            if not grid or not present:
+                return 0
+            margins = grid.contentsMargins()
+            return (
+                sum(widget.sizeHint().width() for widget in present)
+                + grid.horizontalSpacing() * max(0, len(present) - 1)
+                + margins.left() + margins.right()
+            )
+
+        hero = row_width(self._hero_grid, (
+            self._hero_icon, self._hero_copy, self.refresh_button,
+            self.install_button, self.power_button,
+        ))
+        # A linha do card de instalação é a mais larga da arrumação ampla:
+        # o texto mais todos os botões de manutenção lado a lado.
+        setup = row_width(
+            getattr(self, "_setup_grid", None),
+            (getattr(self, "_setup_copy", None), *getattr(self, "_setup_buttons", ())),
+        )
+        return max(1000, hero, setup)
+
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().resizeEvent(event)
         if self._cards is None or self._hero_grid is None:
             return
-        self._apply_reflow(self.width() < 1000)
+        self._apply_reflow(self.width() < self._wide_layout_min_width())
 
     def _reflow_hero(self, narrow: bool) -> None:
         g = self._hero_grid

@@ -133,7 +133,7 @@ QMainWindow {
     selection-background-color: {{accent}};
 }
 #searchBox:focus {
-    border: 1px solid {{accent}};
+    border: 1px solid {{focus_ring}};
     background: {{surface_alt}};
 }
 #modeSwitchLabel {
@@ -154,7 +154,7 @@ QScrollArea, QScrollArea > QWidget > QWidget {
 }
 #actionCard:hover, #actionCard:focus {
     background: {{surface_alt}};
-    border: 1px solid {{accent}};
+    border: 1px solid {{focus_ring}};
 }
 #actionCard[variant="danger"]:hover, #actionCard[variant="danger"]:focus {
     border: 1px solid {{danger_hover}};
@@ -165,7 +165,7 @@ QScrollArea, QScrollArea > QWidget > QWidget {
 }
 #actionCard[hero="true"]:hover, #actionCard[hero="true"]:focus {
     background: {{surface_hero_alt}};
-    border: 1px solid {{accent}};
+    border: 1px solid {{focus_ring}};
 }
 #serviceHero, #healthHero {
     background: {{surface_hero}};
@@ -438,7 +438,7 @@ QPushButton:disabled {
     border-left: 3px solid {{accent}};
 }
 #actionListRow:focus {
-    border: 2px solid {{accent_border}};
+    border: 2px solid {{focus_ring}};
 }
 #actionRowIcon {
     background: {{surface_inset}};
@@ -763,7 +763,7 @@ QComboBox:hover {
     border-color: {{accent_border}};
 }
 QComboBox:focus {
-    border-color: {{accent}};
+    border-color: {{focus_ring}};
 }
 QComboBox::drop-down {
     border: 0;
@@ -808,7 +808,7 @@ QComboBox QAbstractItemView {
     text-align: left;
 }
 #advancedAction:hover, #advancedAction:focus {
-    border-color: {{accent}};
+    border-color: {{focus_ring}};
     background: {{surface_alt}};
 }
 
@@ -904,7 +904,7 @@ QCheckBox::indicator:checked {
     color: {{text}};
     min-height: 28px;
 }
-#hubSearch:focus { border: 1px solid {{accent}}; }
+#hubSearch:focus { border: 1px solid {{focus_ring}}; }
 #hubFilterChip {
     background: transparent;
     border: 1px solid {{border}};

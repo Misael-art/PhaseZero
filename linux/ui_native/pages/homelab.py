@@ -319,6 +319,9 @@ class HomelabPage(BasePage):
         self._profile_grid.setContentsMargins(0, 0, 0, 0)
         self._profile_grid.setHorizontalSpacing(8)
         self._profile_combo = QComboBox()
+        # UX-011: o rótulo "Perfil:" é buddy, não nome acessível — sem isto o
+        # leitor de tela anuncia só o valor atual, sem dizer do que se trata.
+        self._profile_combo.setAccessibleName("Perfil do Homelab")
         self._budget_label = QLabel("—")
         profile_caption = QLabel("Perfil:")
         self._profile_caption = profile_caption

@@ -42,6 +42,10 @@ class ThemeTokens:
     accent_hover: str
     accent_pressed: str
     on_accent: str
+    # UX-011: anel de foco. Separado do accent porque precisa de 3:1 contra
+    # a superfície do próprio controle (WCAG 1.4.11) sem clarear a marca —
+    # clarear o accent derrubaria o texto branco sobre ele abaixo de 4.5.
+    focus_ring: str
     # Estados (foreground, bg, border para cada)
     success: str
     success_bg: str
@@ -118,6 +122,7 @@ DARK = ThemeTokens(
     # accent
     accent="#7c4dff",
     accent_hover="#8f66ff",
+    focus_ring="#a48cff",
     accent_pressed="#6a3ce6",
     on_accent="#ffffff",
     # states
@@ -127,7 +132,7 @@ DARK = ThemeTokens(
     warning="#ff9800",
     warning_bg="#3d2f16",
     warning_border="#7a5a20",
-    error="#e53935",
+    error="#f26d6d",
     error_bg="#3d1f1f",
     error_border="#7a2e2e",
     info="#7c4dff",
@@ -197,13 +202,14 @@ LIGHT = ThemeTokens(
     # accent (brand kept identical)
     accent="#7c4dff",
     accent_hover="#9166ff",
+    focus_ring="#6a3ae0",
     accent_pressed="#6a3ce6",
     on_accent="#ffffff",
     # states
     success="#2e7d32",
     success_bg="#e8f5e9",
     success_border="#a5d6a7",
-    warning="#ed6c02",
+    warning="#8a5000",
     warning_bg="#fff4e5",
     warning_border="#ffcc80",
     error="#c62828",
