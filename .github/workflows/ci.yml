@@ -199,7 +199,11 @@ jobs:
           export PZ_HOMELAB_BACKUP_ROOT="$RUNNER_TEMP/pz-backups"
           # Unlisted archives are never applied; post-backup files are removed.
           docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox sh -c 'echo posterior-data > /data/posterior.txt'
-          cp "$PZ_HOMELAB_BACKUP_ROOT/bk1/vaultwarden_data.tgz" "$PZ_HOMELAB_BACKUP_ROOT/bk1/evil_extra.tgz"
+          # Os backups sao criados pelo passo anterior sob sudo e ficam do
+          # root, como devem: sao dados de aplicacao, nao artefato publico.
+          # Plantar o arquivo nao listado exige o mesmo privilegio de quem
+          # escreveu o diretorio — copiar como runner so provava o umask.
+          sudo -n cp "$PZ_HOMELAB_BACKUP_ROOT/bk1/vaultwarden_data.tgz" "$PZ_HOMELAB_BACKUP_ROOT/bk1/evil_extra.tgz"
           rs="$(run_pz ./linux/pz server homelab restore --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" --yes 2>/dev/null | grep -v '^INFO:')"
           jq -e '.ok == true' <<<"$rs" >/dev/null
           test "$(docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox cat /data/db.sqlite)" = "db-secret-42"

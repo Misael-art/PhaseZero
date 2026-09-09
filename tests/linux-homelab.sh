@@ -120,7 +120,11 @@ PZ_DRY_RUN=1 bash -c '
     source "$0/linux/lib/common.sh"
     pz_run_profile "$0/profiles/gaming.json"
 ' "$REPO_ROOT" >"$TMP/archrepos.out" 2>&1 || true
-rg -q "repo \[multilib\]" "$TMP/archrepos.out" \
+# Duas redações corretas, decididas pelo host: onde /etc/pacman.conf já traz
+# [multilib], o dry-run diz "already enabled"; onde não há pacman.conf algum
+# (runner Ubuntu), diz o que faria. O que o teste exige é que o repositório
+# apareça no plano — nunca que seja habilitado em silêncio.
+rg -q "repo \[multilib\] already enabled|would enable \[multilib\]" "$TMP/archrepos.out" \
     || { echo "FAIL: archRepos not planned in dry-run:"; head -8 "$TMP/archrepos.out"; exit 1; }
 printf '%s\n' '{"name":"pz-test-badrepo","packages":{"linux":{"archRepos":["nope"]}}}' > "$TMP/bad-repo.json"
 if PZ_DRY_RUN=1 bash -c 'source "$0/linux/lib/common.sh"; pz_run_profile "$1"' "$REPO_ROOT" "$TMP/bad-repo.json" >/dev/null 2>&1; then
