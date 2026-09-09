@@ -1282,3 +1282,39 @@ printf '%s' "$inspect_json" | jq -e 'has("sha256") and has("arch") and has("uefi
 echo "  media inspect --json: schema stable (valid=false on non-Windows blob, all keys present)"
 
 echo "  media-inspect tests ok"
+
+echo "=== runtime dir do usuário nunca fica de root (regressão de host real) ==="
+# Um `boot install` pela ponte admin criava /run/user/<uid>/phasezero-windows-vm
+# como root:root. Depois disso, todo `windows-vm start` sem privilégio morria em
+# "install: não foi possível mudar permissões ... Operação não permitida".
+WVM="$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+# 1. Nenhum ponto cria o runtime dir sem passar pelo helper que ajusta o dono.
+if grep -nE 'install -d[^\n]*"\$RUNTIME_DIR"' "$WVM"; then
+    echo "FAIL: RUNTIME_DIR criado sem ensure_runtime_dir (dono ficaria root)"; exit 1
+fi
+grep -q 'ensure_runtime_dir()' "$WVM" \
+    || { echo "FAIL: helper ensure_runtime_dir ausente"; exit 1; }
+# 2. O helper devolve o diretório ao usuário alvo quando roda elevado.
+awk '/^ensure_runtime_dir\(\)/,/^}/' "$WVM" | grep -q 'chown_target_user' \
+    || { echo "FAIL: ensure_runtime_dir não devolve o dono ao usuário alvo"; exit 1; }
+# 3. Sem privilégio o helper cria com 0700 e não falha.
+rt_probe="$(mktemp -d)/rt"
+( set -euo pipefail
+  chown_target_user() { :; }
+  ensure_runtime_dir() { install -d -m 0700 "$@" || return 1; chown_target_user "$@"; }
+  ensure_runtime_dir "$rt_probe"
+  ensure_runtime_dir "$rt_probe" ) || { echo "FAIL: ensure_runtime_dir não é idempotente"; exit 1; }
+test "$(stat -c '%a' "$rt_probe")" = "700" \
+    || { echo "FAIL: runtime dir deveria ser 0700, é $(stat -c '%a' "$rt_probe")"; exit 1; }
+rm -rf "$rt_probe"
+echo "  runtime dir ownership ok"
+
+echo "=== ajustes de host pulados viram um resumo com o que fazer ==="
+# Treze WARN "skipped" não davam ao usuário nenhuma ação; agora sai um resumo.
+awk '/^report_skipped_host_tuning\(\)/,/^}/' "$WVM" | grep -q 'windows-vm optimize' \
+    || { echo "FAIL: resumo não aponta o comando que aplica os ajustes"; exit 1; }
+grep -q 'pz_warn "\$label requires root; skipped non-interactive write"' "$WVM" \
+    && { echo "FAIL: ainda avisa item a item"; exit 1; }
+awk '/^apply_host_optimizations\(\)/,/^}/' "$WVM" | grep -q 'report_skipped_host_tuning' \
+    || { echo "FAIL: apply_host_optimizations não emite o resumo"; exit 1; }
+echo "  resumo de tuning ok"

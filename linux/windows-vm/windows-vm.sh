@@ -251,6 +251,11 @@ run_privileged_noninteractive() {
     return 1
 }
 
+# Ajustes de host pulados por falta de privilégio. Treze WARN seguidos dizendo
+# "skipped" não dão ao usuário nada para fazer; o resumo sai uma vez, no fim,
+# com o comando que aplica tudo de uma vez.
+SKIPPED_HOST_TUNING=()
+
 write_root_value() {
     local path="$1" value="$2"
     local label="${3:-$path}"
@@ -266,7 +271,7 @@ write_root_value() {
     if run_privileged_noninteractive tee "$path" >/dev/null <<< "$value"; then
         return 0
     fi
-    pz_warn "$label requires root; skipped non-interactive write"
+    SKIPPED_HOST_TUNING+=("$label")
     return 0
 }
 
@@ -281,6 +286,15 @@ sysctl_set_noninteractive() {
     elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
         sudo -n sysctl -w "$key=$value" >/dev/null 2>&1 || true
     fi
+}
+
+report_skipped_host_tuning() {
+    [ "${#SKIPPED_HOST_TUNING[@]}" -gt 0 ] || return 0
+    local how="sudo"
+    command -v phasezero-admin >/dev/null 2>&1 && how="phasezero-admin"
+    pz_warn "${#SKIPPED_HOST_TUNING[@]} ajuste(s) de host exigem privilégio e ficaram de fora: ${SKIPPED_HOST_TUNING[*]}"
+    pz_warn "a VM inicia assim mesmo; para aplicá-los: $how pz windows-vm optimize"
+    SKIPPED_HOST_TUNING=()
 }
 
 apply_host_optimizations() {
@@ -299,11 +313,25 @@ apply_host_optimizations() {
     write_root_value /sys/kernel/mm/ksm/run 1 "KSM"
     write_root_value /sys/kernel/mm/ksm/pages_to_scan 1000 "KSM pages_to_scan"
     write_root_value /sys/kernel/mm/ksm/sleep_millisecs 20 "KSM sleep_millisecs"
-    local governor
+    local governor governors=0
     for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
         [ -e "$governor" ] || continue
+        governors=$((governors + 1))
         write_root_value "$governor" performance "CPU governor"
     done
+    # Um governor por núcleo vira uma linha por núcleo; conta como um item.
+    if [ "$governors" -gt 1 ] && [ "${#SKIPPED_HOST_TUNING[@]}" -gt 0 ]; then
+        local kept=() entry seen_governor=0
+        for entry in "${SKIPPED_HOST_TUNING[@]}"; do
+            if [ "$entry" = "CPU governor" ]; then
+                [ "$seen_governor" = "1" ] && continue
+                seen_governor=1
+            fi
+            kept+=("$entry")
+        done
+        SKIPPED_HOST_TUNING=("${kept[@]}")
+    fi
+    report_skipped_host_tuning
 }
 
 json_escape() {
@@ -346,6 +374,15 @@ target_home() {
 chown_target_user() {
     [ "$EUID" -eq 0 ] || return 0
     chown "$TARGET_USER:$TARGET_USER" "$@" 2>/dev/null || true
+}
+
+# O runtime dir vive em /run/user/<uid> do usuário. Criado por um comando
+# elevado (a ponte admin), ele nascia root:root, e toda execução seguinte sem
+# privilégio morria com "Operação não permitida" ao tentar reaplicar o modo —
+# um `boot install` deixava o `windows-vm start` do usuário quebrado.
+ensure_runtime_dir() {
+    install -d -m 0700 "$@" || return 1
+    chown_target_user "$@"
 }
 
 target_user_can_rw() {
@@ -878,7 +915,7 @@ ensure_vm_storage() {
         pz_info "dry-run: would create VM directories under $VM_DIR"
     else
         install -d -m 0700 "$VM_DIR" "$STATE_DIR"
-        install -d -m 0700 "$RUNTIME_DIR"
+        ensure_runtime_dir "$RUNTIME_DIR"
     fi
     if [ ! -f "$DISK_PATH" ]; then
         if [ "$DRY_RUN" = "1" ]; then
@@ -1738,7 +1775,8 @@ start_virtiofs_share() {
 
 start_tpm() {
     command -v swtpm >/dev/null 2>&1 || return 0
-    install -d "$TPM_DIR" "$RUNTIME_DIR"
+    install -d "$TPM_DIR"
+    ensure_runtime_dir "$RUNTIME_DIR"
     local sock="$RUNTIME_DIR/swtpm.sock"
     TPM_PID_FILE="$RUNTIME_DIR/swtpm.pid"
     rm -f "$sock" "$TPM_PID_FILE"
@@ -1877,7 +1915,8 @@ build_qemu_args() {
     else
         # QGA and QMP allow guest execution/power control. Their Unix sockets
         # must never be reachable by another local account.
-        install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"
+        ensure_runtime_dir "$RUNTIME_DIR"
+        install -d -m 0700 "$STATE_DIR"
     fi
     ensure_share_links || return 1
     start_virtiofs_share exchange "$EXCHANGE_DIR"
