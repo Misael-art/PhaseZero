@@ -612,7 +612,9 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
 
 def test_homelab_pair_goes_through_hosts_pair(app):
     # PZ-AUD-014: pairing honors registry port/keys via `hosts pair`;
-    # no raw ssh-copy-id argv, no password anywhere near the UI.
+    # no raw ssh-copy-id argv. UX-008 added the first contact, and the
+    # secret still never becomes an argument: only the `--password-stdin`
+    # flag is appended, and the value goes to the child's stdin.
     import inspect
 
     import linux.ui_native.pages.homelab as mod
@@ -621,8 +623,10 @@ def test_homelab_pair_goes_through_hosts_pair(app):
     assert "hosts" in src and "pair" in src
     assert "ssh-copy-id" not in src
     assert "BatchMode=yes" not in src
-    assert "--password" not in src
     assert "sshpass" not in src
+    assert "args.append(password)" not in src
+    assert 'args.append("--password-stdin")' in src
+    assert "proc.write" in src
 
 
 def test_homelab_pair_done_ingests_states(app):
@@ -660,13 +664,24 @@ def test_homelab_pair_done_ingests_states(app):
         page._on_pair_done(0, paired, b"")
         assert page._onboard_state.get("pair") is True
         assert seen and seen[-1][:2] == ["hosts", "ping"]
-        first = json.dumps({
-            "paired": False, "state": "needs-first-contact",
-            "guidance": "ssh-copy-id -i k -p 2222 u@h",
-        }).encode()
-        page._on_pair_done(1, first, b"")
+        # UX-008: first contact is completed in the interface. Declining to
+        # type a password leaves the host unpaired instead of printing a
+        # terminal command to copy.
+        asked = []
+        real_ask = mod.HomelabPage._ask_first_contact_password
+        mod.HomelabPage._ask_first_contact_password = \
+            lambda self, alias: asked.append(alias) or ""
+        try:
+            first = json.dumps({
+                "paired": False, "state": "needs-first-contact",
+                "guidance": "first contact needs one terminal login",
+            }).encode()
+            page._on_pair_done(1, first, b"")
+        finally:
+            mod.HomelabPage._ask_first_contact_password = real_ask
         assert page._onboard_state.get("pair") is False
-        assert warned and "2222" in str(warned[-1])
+        assert asked, "senha do primeiro acesso não foi pedida"
+        assert not warned, "primeiro acesso não deve terminar em aviso de terminal"
     finally:
         mod.QMessageBox = real_box
         mod.QProcess = real_qprocess

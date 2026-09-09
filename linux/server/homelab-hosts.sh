@@ -28,6 +28,12 @@ ALIAS=""
 TARGET=""
 PAIR_GENERATE=0
 PAIR_KEY=""
+# UX-008: first contact may be completed from the interface. The password is
+# read from stdin only — never an argument, never an environment variable,
+# never written to the registry or to a log.
+PAIR_PASSWORD_STDIN=0
+PAIR_TIMEOUT="${PZ_HOMELAB_PAIR_TIMEOUT:-60}"
+SSH_COPY_ID_BIN="${PZ_HOMELAB_SSH_COPY_ID_BIN:-ssh-copy-id}"
 POSITIONAL=()
 
 usage() {
@@ -37,7 +43,8 @@ Usage:
   homelab-hosts.sh list [--json]
   homelab-hosts.sh remove <alias> [--json]
   homelab-hosts.sh ping <alias> [--json]
-  homelab-hosts.sh pair <alias> [--generate] [--key PATH] [--json]
+  homelab-hosts.sh pair <alias> [--generate] [--key PATH] [--password-stdin]
+                                [--timeout SECONDS] [--json]
   homelab-hosts.sh exec <alias> -- <homelab-args...>
 EOF
 }
@@ -46,6 +53,13 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) JSON_OUTPUT=1 ;;
         --generate) PAIR_GENERATE=1 ;;
+        --password-stdin) PAIR_PASSWORD_STDIN=1 ;;
+        --timeout)
+            [ "${2:-}" ] || { pz_error "--timeout requires seconds"; exit 2; }
+            PAIR_TIMEOUT="$2"
+            shift
+            ;;
+        --timeout=*) PAIR_TIMEOUT="${1#--timeout=}" ;;
         --key)
             [ "${2:-}" ] || { pz_error "--key requires a path"; exit 2; }
             PAIR_KEY="$2"
@@ -471,6 +485,69 @@ pair_generate_key() {
     return 1
 }
 
+pair_first_contact() {
+    # UX-008: complete the very first pairing without an external terminal.
+    #
+    # The password arrives on stdin and never leaves this function: it is
+    # handed to ssh through an askpass helper reading a 0600 file inside a
+    # 0700 private directory, both destroyed on every exit path. It is never
+    # an argument (visible in /proc and in `ps`), never an environment
+    # variable, and never echoed to stdout/stderr. `timeout` bounds the wait
+    # so a host that never answers cannot hang the interface, and killing
+    # this process is a safe cancel.
+    local user="$1" host="$2" port="$3" pub="$4"
+    local password="" dir="" rc=0 err=""
+
+    IFS= read -r password || true
+    if [ -z "$password" ]; then
+        printf 'empty-password\n'
+        return 2
+    fi
+
+    dir="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/pz-pair.XXXXXX")"
+    chmod 700 "$dir"
+    # shellcheck disable=SC2064 # expand $dir now: it is what must be removed
+    trap "rm -rf -- '$dir'" RETURN
+    (umask 077; printf '%s' "$password" > "$dir/secret")
+    password=""
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'cat -- %q\n' "$dir/secret"
+    } > "$dir/askpass"
+    chmod 700 "$dir/askpass"
+
+    local errf
+    errf="$dir/stderr"
+    set +e
+    SSH_ASKPASS="$dir/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" \
+        setsid -w timeout "$PAIR_TIMEOUT" "$SSH_COPY_ID_BIN" \
+            -o StrictHostKeyChecking=accept-new \
+            -o PreferredAuthentications=password,keyboard-interactive \
+            -o NumberOfPasswordPrompts=1 \
+            -o ConnectTimeout="$SSH_TIMEOUT" \
+            -i "$pub" -p "$port" "$user@$host" </dev/null 2>"$errf"
+    rc=$?
+    set -e
+    err="$(tr -d '\0' < "$errf" 2>/dev/null | tail -1 || true)"
+
+    if [ "$rc" -eq 0 ]; then
+        printf 'paired\n'
+        return 0
+    fi
+    if [ "$rc" -eq 124 ]; then
+        printf 'timeout\n'
+        return 1
+    fi
+    case "${err,,}" in
+        *"permission denied"*|*"authentication fail"*)
+            printf 'auth-failed\n' ;;
+        *"could not resolve"*|*"connection refused"*|*"no route to host"*|*"connection timed out"*)
+            printf 'unreachable\n' ;;
+        *) printf 'first-contact-failed\n' ;;
+    esac
+    return 1
+}
+
 cmd_pair() {
     local alias="${POSITIONAL[0]:-}" rec
     [ -n "$alias" ] || { pz_error "usage: hosts pair <alias> [--generate] [--key PATH]"; return 2; }
@@ -522,6 +599,38 @@ cmd_pair() {
             '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
               ok:true, paired:true, state:"paired", keyPath:$keyPath, generated:$generated, guidance:null}'
         return 0
+    fi
+    # UX-008: with a password on stdin, first contact is completed here
+    # instead of being handed back as a terminal command to copy.
+    if [ "$PAIR_PASSWORD_STDIN" = "1" ]; then
+        local contact_state
+        contact_state="$(pair_first_contact "$user" "$host" "$port" "$pub")" || true
+        if [ "$contact_state" = "paired" ]; then
+            jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \
+                --arg action "pair" --arg hostAlias "$alias" --arg keyPath "$pub" \
+                --argjson generated "$generated" \
+                '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
+                  ok:true, paired:true, state:"paired", keyPath:$keyPath,
+                  generated:$generated, firstContact:true, guidance:null}'
+            return 0
+        fi
+        guidance="$(
+            case "$contact_state" in
+                auth-failed) printf 'senha recusada pelo servidor; confira usuário e senha e tente de novo' ;;
+                empty-password) printf 'nenhuma senha informada' ;;
+                timeout) printf 'o servidor não respondeu a tempo (%ss); confira se ele está ligado e acessível' "$PAIR_TIMEOUT" ;;
+                unreachable) printf 'não foi possível alcançar o servidor; confira endereço, porta e rede' ;;
+                *) printf 'primeiro acesso não pôde ser concluído' ;;
+            esac
+        )"
+        jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \
+            --arg action "pair" --arg hostAlias "$alias" --arg keyPath "$pub" \
+            --argjson generated "$generated" --arg state "$contact_state" \
+            --arg guidance "$guidance" \
+            '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
+              ok:false, paired:false, state:$state, keyPath:$keyPath,
+              generated:$generated, firstContact:true, guidance:$guidance}'
+        return 1
     fi
     guidance="first contact needs one terminal login (port $port honored): ssh-copy-id -i $pub -p $port $user@$host — then re-run pair"
     jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \

@@ -7,9 +7,9 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+    QProgressBar, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
 
@@ -864,10 +864,12 @@ class HomelabPage(BasePage):
             self._host_combo.blockSignals(False)
         self.refresh_status()
 
-    def start_pair(self, generate: bool = False) -> None:
+    def start_pair(self, generate: bool = False, password: str = "") -> None:
         # PZ-AUD-014: pairing runs through `hosts pair`, which honors the
-        # registry port, reuses or generates keys explicitly, and reports
-        # first-contact with the exact port-bearing command.
+        # registry port and reuses or generates keys explicitly.
+        # UX-008: when a password is supplied, the same command completes the
+        # very first contact — no terminal, and the secret only ever travels
+        # on stdin.
         alias = self._selected_host()
         if not alias:
             QMessageBox.information(self, "Parear", "Selecione um host remoto.")
@@ -879,6 +881,9 @@ class HomelabPage(BasePage):
         args = ["server", "homelab", "hosts", "pair", alias, "--json"]
         if generate:
             args.append("--generate")
+        if password:
+            # UX-008: the password goes in over stdin, never as an argument.
+            args.append("--password-stdin")
         self._pair_host = alias
         proc = QProcess(self)
         self._setup_proc(proc)
@@ -890,7 +895,27 @@ class HomelabPage(BasePage):
             )
         )
         proc.start(str(self.root / "linux" / "pz"), args)
+        if password:
+            proc.write((password + "\n").encode("utf-8"))
+            proc.closeWriteChannel()
         self._proc = proc
+
+    def _ask_first_contact_password(self, alias: str) -> str:
+        """Collect the remote password for the first pairing, in memory.
+
+        Nothing here is persisted: the value is handed to ``start_pair``,
+        written to the child's stdin and dropped. Cancelling returns an
+        empty string, which leaves the host unpaired.
+        """
+        host = self._hosts.get(alias) or {}
+        target = f"{host.get('user')}@{host.get('host')}" if host else alias
+        password, ok = QInputDialog.getText(
+            self, "Primeiro acesso",
+            f"Senha de {target} neste servidor.\n"
+            "Usada uma vez para instalar a chave; o PhaseZero não guarda a senha.",
+            QLineEdit.EchoMode.Password,
+        )
+        return password if ok else ""
 
     def _on_pair_done(self, code: int, out: bytes, err: bytes, alias: str | None = None) -> None:
         if self._proc is not None:
@@ -918,6 +943,9 @@ class HomelabPage(BasePage):
             self._state_label.setText("Chave copiada — testando…")
             self.run_cmd(["hosts", "ping", self._selected_host(), "--json"])
             return
+        # Retrying first contact must keep the onboarding intent that started
+        # this pairing; every other failure path drops it.
+        advance = self._pair_advance
         self._pair_advance = False
         self.onboard_ingest_pair(False)
         if state == "missing-key":
@@ -932,13 +960,39 @@ class HomelabPage(BasePage):
             else:
                 self._state_label.setText("Pareamento cancelado — sem chave")
             return
+        # UX-008: the first pairing is completed here, not in a terminal.
+        # The backend only ever gets the password on stdin, and answering
+        # nothing simply leaves the host unpaired.
+        if state == "needs-first-contact":
+            password = self._ask_first_contact_password(result_host)
+            if password:
+                self._pair_advance = advance
+                self.start_pair(password=password)
+                password = ""
+                return
+            self._state_label.setText("Primeiro acesso cancelado — host segue sem pareamento")
+            return
         guidance = str(payload.get("guidance") or "")
         reason = str(payload.get("reason") or "")
         detail = "\n".join(part for part in (guidance, reason) if part)
+        if state in ("auth-failed", "timeout", "unreachable", "empty-password"):
+            retry = QMessageBox.question(
+                self, "Primeiro acesso",
+                f"{detail}\n\nTentar de novo?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if retry == QMessageBox.Yes:
+                password = self._ask_first_contact_password(result_host)
+                if password:
+                    self._pair_advance = advance
+                    self.start_pair(password=password)
+                    password = ""
+                    return
+            self._state_label.setText(f"Primeiro acesso não concluído: {detail[:120]}")
+            return
         QMessageBox.warning(
             self, "Parear",
-            "Não foi possível concluir o pareamento.\n"
-            f"{detail}\n\nPrimeiro acesso sempre pede a senha no terminal.",
+            f"Não foi possível concluir o pareamento.\n{detail}",
         )
         self._state_label.setText("Pareamento precisa de primeiro acesso")
 
