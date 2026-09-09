@@ -147,36 +147,70 @@ o que cobre o contrato (senha por askpass, fora de argv, limites e estados) mas 
 prova a negociação real com um sshd — inclusive host key desconhecida, teclado
 interativo e senha expirada. R2 só fecha de verdade com uma máquina remota nova.
 
+## Rodada UX-010 — a interface para de prometer 3D que não pode provar (e821d6b)
+
+Diagnóstico antes de mexer, comparando os dois lados do contrato: a UI declarava
+`virtio-gl` com `"mode": "stable"` e rótulo *"aceleração OpenGL"*, enquanto o
+backend classifica o mesmo perfil como **experimental** e escreve, na própria nota
+de recomendação, *"VirtIO GL valida caminho host, sem garantir 3D no Windows"*. O
+diálogo de instalação listava a opção sem consultar o host: numa máquina sem render
+node ou sem `virtio-vga-gl`, o operador escolheria "aceleração" e receberia um guest
+sem 3D. É o primeiro item do aceite, violado por construção — e a incoerência ficava
+visível até no texto de uso do `graphics.sh`, que já chamava o perfil de experimental.
+
+| Mudança | Prova |
+|---|---|
+| Contrato alinhado ao backend: `virtio-gl` é experimental, e rótulo/texto dizem que não garante 3D dentro do Windows | teste de coerência roda `graphics status --json` de verdade e exige que todo perfil marcado `stable` no contrato seja `stable` para o host; o que é oferecido sem ser estável precisa dizer "experimental" ou "não garante" |
+| Modo simples oferece só o que é estável **nesta** máquina e mostra o display recomendado com o motivo | host que reporta `virtio-gl` experimental ou bloqueado deixa a opção fora da lista simples; o rótulo de recomendação traz perfil e motivo medidos |
+| Sem medição do host, fica no perfil compatível | `simple_graphics_options({})` devolve só `compat`, e a recomendação explica que não houve medição — nunca o caminho otimista |
+| Avançado mantém experimentais, ditos como tal, com o bloqueio do host junto da opção | opção aparece como "indisponível neste host" e o helper carrega o bloqueio medido (ex.: render node ausente) |
+
+O teste legado do diálogo fixava a promessa antiga (`virtio-gl — aceleração OpenGL`
+oferecido no modo simples); foi reescrito para a nova regra — simples sem medição
+só oferece `compat`, avançado oferece o experimental com o rótulo honesto.
+
+Resultado desta rodada: **pytest 900 passaram, 0 falhas**;
+`tests/linux-windows-vm-graphics.sh` exit 0.
+
+Limites desta rodada, sem suavizar: **nada foi verificado com um Windows convidado
+rodando**. O que está provado é a coerência entre contrato, medição do host e
+interface — que um guest sem 3D não *apareça* acelerado. Confirmar se o 3D funciona
+de fato dentro do convidado exige instalação real. O terceiro item do aceite de
+UX-010, "física separada", não foi tocado nesta rodada.
+
 ## Próxima etapa
 
-UX-005/006/007/008/009 têm aceite local pelas rodadas acima: jornada por app real,
-instalação distinta de simulação de orçamento, plano em linguagem de produto,
+UX-005/006/007/008/009/010 têm aceite local pelas rodadas acima: jornada por app
+real, instalação distinta de simulação de orçamento, plano em linguagem de produto,
 recuperação por controle visível, objetivos do Início que chegam à jornada que
-prometem e primeiro pareamento concluído sem terminal. O que a direção original
-pedia e ainda **não** foi feito: medir a jornada com quem não conhece o produto, e
-prová-la contra máquinas de verdade — instalar um app, criar a primeira conta,
-abrir a solução, parear um host remoto novo. Nenhum destino de objetivo foi
-percorrido até o fim contra hardware real; UX-008 está provado contra stub, não
-contra um sshd.
+prometem, primeiro pareamento concluído sem terminal e gráficos que não prometem
+3D sem medição.
 
-Em aberto no roadmap: R3/UX-010 (contrato gráfico do Windows) e UX-011
-(acessibilidade e usabilidade). Permanecem pendentes tema light, escala150/200%,
-leitor de tela, usabilidade com participantes, CI/PR/release, banco↔anexos e
-snapshots por serviço. A falha dualscreen deixou de ser alegação: foi reproduzida
-em HEAD limpo e corrigida nesta rodada.
+O que a direção original pedia e ainda **não** foi feito, em uma frase: nada disso
+foi exercido contra máquinas de verdade nem por quem não conhece o produto. Não se
+instalou um app num servidor real, não se criou a primeira conta, não se pareou um
+host remoto novo (UX-008 está provado contra stub, não contra um sshd), não se
+iniciou um Windows convidado para conferir 3D (UX-010 prova coerência, não
+comportamento do guest), e nenhum objetivo do Início foi percorrido até o fim.
+
+Em aberto no roadmap: UX-011 (acessibilidade e usabilidade) e o item "física
+separada" de UX-010. Permanecem pendentes tema light, escala150/200%, leitor de
+tela, usabilidade com participantes, CI/PR/release, banco↔anexos e snapshots por
+serviço. A falha dualscreen deixou de ser alegação: foi reproduzida em HEAD limpo
+e corrigida na rodada UX-008.
 
 ## Handoff
 
 ```text
 Objetivo: verificar retorno de70d959f e fechar contrarrevisão UX-001..004.
 Branch/worktree: codex/verify-ux-70d959f; /mnt/sdcard/Projects/pz-verify-ux-70d959f-tree.
-HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5; UX-005/007 7099ef4; UX-006 a4ad262; UX-008 + dualscreen a549f82.
+HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5; UX-005/007 7099ef4; UX-006 a4ad262; UX-008 + dualscreen a549f82; UX-010 e821d6b.
 Arquivos: reports/verify-ux-70d959f; notas Estado vivo/Ledger Homelab e roadmap REV.
 Testes: validation.json/pytest-final.txt; QA dark e medidas de viewport.
-Depois: pytest completo891 verde; tests/linux-homelab.sh e tests/linux-dualscreen.sh exit0 na rodada UX-008.
+Depois: pytest completo900 verde; linux-homelab.sh, linux-dualscreen.sh e linux-windows-vm-graphics.sh exit0.
 CI/PR: nenhum; host sem alteração de workloads/serviços/VM/boot/pacotes.
 Segredos: ambiente allowlist, fixtures sintéticas, diff revisto; gitleaks não executado.
 Limitações: aceite local; demais UX e certificação física continuam pendentes.
-Próximo passo: UX-005/006/007/008/009 com aceite local; UX-008 falta prova contra
-sshd real. Falta R3/UX-010 (contrato gráfico); UX-011 segue aberto.
+Próximo passo: UX-005..010 com aceite local; faltam provas contra máquinas reais
+(sshd para UX-008, guest Windows para UX-010) e UX-011 segue aberto.
 ```
