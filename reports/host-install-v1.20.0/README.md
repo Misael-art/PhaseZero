@@ -144,5 +144,7 @@ executa merece decisão explícita.
   é de instalação e diagnóstico, não de jornada completa.
 - A GUI foi validada offscreen (constrói e navega). Não houve interação humana
   com a janela real nem sessão com participante.
-- `pz doctor` não terminou, então os checks após `WINVM10` continuam sem
-  medição neste host.
+- Depois da correção o `pz doctor` completa e avalia 136 checks neste host,
+  mas o binário instalado em `/usr/lib/phasezero` **continua com o defeito**:
+  a correção está no repositório e só chega ao host numa próxima release.
+- `tests/audit-doctor.sh` segue vermelho e fora do runner.
