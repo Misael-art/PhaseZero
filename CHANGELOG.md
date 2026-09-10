@@ -45,6 +45,37 @@ Correções encontradas ao instalar a 1.20.0 num host real e rodar o diagnóstic
 - Abrir uma solução deixou de marcar o primeiro acesso sozinho: quem confirma que a conta foi criada é o operador, com os passos daquela solução à vista.
 - Plano de instalação resumido em linguagem de produto — servidor, aplicativos, acesso, memória e etapas —, com o JSON preservado na visão avançada.
 - Falha de comando explica a causa e oferece retomar por um controle visível, sem exigir leitura de log.
+## [1.19.1] - 2026-09-10
+
+Correções encontradas por bateria de testes reais no host (Plasma 6/Wayland) — defeitos que as suítes herméticas não enxergam porque dependem de daemon vivo, multi-containment ou semântica de ferramenta oficial.
+
+### Corrigido (motor de temas)
+- Preview de wallpaper vencido reverte em **qualquer** comando `pz themes`, não só ao reentrar no mesmo plano; apply confirmado nunca é revertido pela expiração do preview que o precedeu.
+- `--param` conta na detecção de no-op: trocar o modo do tema (sistema→escuro) pelo CLI aplica de verdade em vez de virar no-op silencioso.
+- Escrita de configuração KDE passa pelo `kwriteconfig` quando disponível; a escrita byte a byte disputava o cache do daemon KConfig e duplicava chaves no `kdeglobals` vivo.
+- `reduce-motion off` restaura o `AnimationDurationFactor` anterior do usuário em vez do padrão fixo `1`.
+- Rollback de wallpaper endereça cada desktop pelo índice real; telas `-1` colapsavam na primeira e sobrescreviam o wallpaper errado.
+- `pz themes verify` respeita a direção da operação (off bem-sucedido não é mais "falha") e resultado de wallpaper falho não é mais reportado como aplicado; `verify`/`rescue-wallpaper` com `ok:false` saem com exit 1.
+- Preview de tela de bloqueio em host sem `kscreenlockerrc` reverte de novo (o estado original vazio era pulado no restore).
+- `theme.phasezero`, `theme.accent` e `power.*` snapshotteiam todos os arquivos que o apply mexe — o rollback devolve o estado inteiro, inclusive `AnimationDurationFactor` e a cor persistida.
+- Plano bloqueado não consome snapshot do pool de retenção; snapshot órfão não derruba mais a CLI (`status` etc. continuam respondendo).
+- Modo "alto contraste" aplica só o esquema de cores — o look-and-feel breezedark desfazia o esquema logo depois e o modo nunca verificava.
+- Restore reescreve arquivos de forma atômica preservando permissões, restaura `SlidePaths` de slideshow e reconfigura o KWin; `rescue-wallpaper` ignora containment sem tela real; Orca já em execução não falha mais o plano; contenção de lock em disputa responde JSON em vez de traceback.
+
+### Corrigido (interface nativa)
+- Os interruptores da página Temas voltam a disparar operações (o ActionSpec era passado onde se esperava um id — nenhum toggle funcionava e o controle ficava preso em "Aplicando…").
+- "Tentar novamente" de operação em timeout funciona (atributo inexistente derrubava o botão com AttributeError).
+- Resultado com `ok:false` e exit 0 (verify, rescue) mostra falha em vez de sucesso; contagem de wallpapers disponíveis respeita o checksum do manifest; o herói mostra o wallpaper real; "Plasma None" não aparece mais.
+- Poll de provisionamento mata o processo filho em timeout em vez de deixá-lo órfão.
+
+### Corrigido (shell)
+- `pz ai omniroute install/update` faz backup e escrita staged do EnvironmentFile do systemd e preserva `OMNIROUTE_API_KEY` — antes truncava o arquivo vivo, descartava a chave e a regenerava, invalidando a cópia já colada no opencode.json.
+- `pz emulation dualscreen apply azahar` funciona (o `source` que define `pz_ini_set` faltava) e o status lê o formato `chave = valor` que o escritor produz.
+- `pz ai secrets rotate` lê o prompt do TTY — o `read` consumia a próxima linha do esquema como valor do segredo.
+- `pz ai 9router rollback` não reinstala mais a versão marcada como falha (diretórios `failed-*` saem da seleção).
+- `pz ai hermes setup` reescreve o `config.yaml` com backup e escrita atômica.
+- Cancelar/Esc no whiptail volta ao menu anterior em vez de encerrar o TUI inteiro.
+- `pz tune apply` repetido registra o backup do conteúdo original, não o intermediário do PhaseZero — o revert volta ao que era do usuário.
 
 ## [1.19.0] - 2026-08-27
 

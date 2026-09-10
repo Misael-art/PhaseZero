@@ -886,7 +886,9 @@ check_update() {
 
 rollback_package() {
     local backup current
-    backup="$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"
+    # failed-* é evidência de falha, não backup restaurável: sem o filtro, o
+    # rollback manual mais novo que o auto-rollback reinstalava a versão ruim.
+    backup="$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name 'failed-*' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"
     [ -n "$backup" ] || { pz_error "no 9Router rollback available"; return 1; }
     systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
     current="$BACKUP_ROOT/failed-$(installed_version)-$(date +%Y%m%d-%H%M%S)"

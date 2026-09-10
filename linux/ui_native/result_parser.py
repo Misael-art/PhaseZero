@@ -112,6 +112,11 @@ def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output
         "gui-required", "guirequired",
     }:
         return "warning"
+    # Payloads cujo veredito é só "ok" (verify, rescue-wallpaper) saem do
+    # motor com exit 0; ok:false aqui é falha, não sucesso. Planos bloqueados
+    # carregam "blockers" e são resultado, não erro (mesmo contrato do _emit).
+    if value.get("ok") is False and "blockers" not in value:
+        return "error" if mutable else "warning"
     return "success"
 
 
