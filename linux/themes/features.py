@@ -23,6 +23,7 @@ from pathlib import Path
 from .kde import process_running
 from .catalog import FEATURES
 from .models import FeatureSpec
+from . import state as engine_state
 
 PHASEZERO_THEME_CONF = "phasezero/theme.conf"
 PHASEZERO_GROUP = "interface"
@@ -32,7 +33,11 @@ PHASEZERO_MODES = {
     "system": {"colorscheme": "", "lookandfeel": ""},
     "dark": {"colorscheme": "BreezeDark", "lookandfeel": "org.kde.breezedark.desktop"},
     "light": {"colorscheme": "BreezeLight", "lookandfeel": "org.kde.breeze.desktop"},
-    "highcontrast": {"colorscheme": "Breeze High Contrast", "lookandfeel": "org.kde.breezedark.desktop"},
+    # Alto contraste é só colorscheme: o lookandfeel breezedark reseta o
+    # esquema para o padrão do pacote (BreezeDark) logo depois do apply e o
+    # modo nunca verificava. Dark/light são autoconsistentes porque o esquema
+    # esperado É o padrão do pacote; high contrast, não.
+    "highcontrast": {"colorscheme": "Breeze High Contrast", "lookandfeel": ""},
 }
 
 ACCENT_PALETTE = {
@@ -73,6 +78,35 @@ def _match(session, config: str, group: str, key: str, expected: str) -> bool:
     return _read(session, config, group, key) == expected
 
 
+def _overrides_path() -> Path:
+    return engine_state.root() / "overrides.json"
+
+
+def _load_overrides() -> dict:
+    try:
+        payload = json.loads(_overrides_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_overrides(payload: dict) -> None:
+    path = _overrides_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+        path.chmod(0o600)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _override_key(config: str, group: str, key: str) -> str:
+    return f"{config}:{group}:{key}"
+
+
 # Plasma's stock look-and-feel. Applying it clears the key rather than writing
 # the value, because KDE drops entries that match the built-in default.
 DEFAULT_LOOKANDFEEL = "org.kde.breeze.desktop"
@@ -93,6 +127,23 @@ def _lookandfeel_matches(session, package: str) -> bool:
     return package == DEFAULT_LOOKANDFEEL
 
 
+def _colorscheme_matches(session, expected: dict) -> bool:
+    """Scheme check that tolerates a stock look-and-feel clearing the key.
+
+    Applying a stock look-and-feel package (breezedark, breeze) resets the
+    session to the package's own colour scheme and REMOVES the ColorScheme
+    entry from kdeglobals. Requiring a literal "BreezeDark" there reported
+    every successful dark apply as failed and rolled it back; an absent key
+    with the expected package active means the package default - which is
+    exactly the scheme the mode asked for.
+    """
+    current = _read(session, "kdeglobals", "General", "ColorScheme")
+    if current:
+        return current == expected.get("colorscheme", "")
+    lookandfeel = expected.get("lookandfeel", "")
+    return bool(lookandfeel) and _lookandfeel_matches(session, lookandfeel)
+
+
 class _OnOffConfigAdapter(FeatureAdapter):
     """Adapter genérico: chaves ligado/desligado com valores explícitos."""
 
@@ -100,14 +151,16 @@ class _OnOffConfigAdapter(FeatureAdapter):
     off_values: dict[tuple[str, str, str], str] = {}
     extra_params: tuple[str, ...] = ()
 
-    def _effective_state(self, session) -> tuple[str, str]:
+    def _effective_state(self, session, overrides: dict | None = None) -> tuple[str, str]:
+        if overrides is None:
+            overrides = _load_overrides()
         matched = 0
         conflicts: list[str] = []
         for (config, group, key), value in self.on_values.items():
             current = _read(session, config, group, key)
             if current == value:
                 matched += 1
-            elif current != "":
+            elif current != "" and current != overrides.get(_override_key(config, group, key), ""):
                 off = self.off_values.get((config, group, key))
                 if off is None or current != off:
                     conflicts.append(key)
@@ -123,13 +176,43 @@ class _OnOffConfigAdapter(FeatureAdapter):
 
     def apply(self, facts, session, action) -> dict:  # noqa: ARG002
         wanted = _wanted_state(action)
-        values = self.on_values if wanted == "ligado" else self.off_values
-        for (config, group, key), value in values.items():
-            session.write_key(config, group, key, value)
+        if wanted == "ligado":
+            # Turning on overwrites user-tuned keys (animation speed, custom
+            # cursor size). Hardcoding the off value back would clobber that
+            # tuning, so the pre-existing value is recorded and restored on
+            # off; without a record the stock off value applies.
+            overrides = _load_overrides()
+            changed = False
+            for (config, group, key), on_value in self.on_values.items():
+                current = _read(session, config, group, key)
+                if current and current != on_value and current != self.off_values.get((config, group, key)):
+                    overrides[_override_key(config, group, key)] = current
+                    changed = True
+            if changed:
+                _save_overrides(overrides)
+            for (config, group, key), value in self.on_values.items():
+                session.write_key(config, group, key, value)
+            session.notify()
+            state, reason = self._effective_state(session)
+            if state != wanted:
+                return {"status": "failed", "error": reason or f"verificação falhou ({state})"}
+            return {"status": wanted}
+        overrides = _load_overrides()
+        pending = dict(overrides)
+        for (config, group, key), off_value in self.off_values.items():
+            ident = _override_key(config, group, key)
+            previous = overrides.get(ident, "")
+            pending.pop(ident, None)
+            session.write_key(config, group, key, previous or off_value)
         session.notify()
-        state, reason = self._effective_state(session)
+        # The consumed record is dropped only after the restored value reads
+        # back as a healthy off state; on failure the record stays so a retry
+        # still knows the user's original value.
+        state, reason = self._effective_state(session, overrides=overrides)
         if state != wanted:
             return {"status": "failed", "error": reason or f"verificação falhou ({state})"}
+        if len(pending) != len(overrides):
+            _save_overrides(pending)
         return {"status": wanted}
 
     def verify(self, facts, session) -> bool:  # noqa: ARG002
@@ -144,7 +227,7 @@ class _PhaseZeroThemeAdapter(FeatureAdapter):
         if current not in PHASEZERO_MODES:
             return {"state": "degradado", "reason": f"modo desconhecido: {current}", "params": {"mode": current}}
         expected = PHASEZERO_MODES[current]
-        if expected["colorscheme"] and not _match(session, "kdeglobals", "General", "ColorScheme", expected["colorscheme"]):
+        if expected["colorscheme"] and not _colorscheme_matches(session, expected):
             return {
                 "state": "degradado",
                 "reason": f"esquema esperado {expected['colorscheme']} não corresponde",
@@ -560,9 +643,11 @@ class _ScreenReaderAdapter(FeatureAdapter):
             result = session.start_process("orca", [binary, "--replace"])
             if result.get("started"):
                 return {"status": "ligado", "reason": result.get("reason", "")}
-            if not result.get("started"):
-                return {"status": "failed", "error": result.get("reason", "falha ao iniciar Orca")}
-            return {"status": "ligado", "pid": result.get("pid")}
+            if "já em execução" in str(result.get("reason", "")):
+                # Orca já rodando é exatamente o estado pedido; reportar
+                # falha derrubava o plano inteiro e disparava rollback.
+                return {"status": "ligado", "reason": "orca já em execução"}
+            return {"status": "failed", "error": result.get("reason", "falha ao iniciar Orca")}
         result = session.stop_process("orca")
         return {"status": "desligado", **result}
 

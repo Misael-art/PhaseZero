@@ -95,6 +95,14 @@ pz_tune_file() {
     fi
 
     [ -f "$path" ] && existed=1
+    # Backup ANTES da escrita: pz_backup_latest depois da escrita devolvia o
+    # backup que a própria escrita acabou de criar (conteúdo já PhaseZero de
+    # um apply anterior), e o revert restaurava o intermediário, não o
+    # original do usuário.
+    pre_backup=""
+    if [ "$existed" = "1" ]; then
+        pre_backup="$(pz_backup_latest "$path" 2>/dev/null || true)"
+    fi
     printf '%s' "$content" | pz_write_managed_file "$path" "$scope" || rc=$?
     if [ "$rc" -eq 77 ]; then
         # Sem admin bridge: nada foi escrito, então nada pode ser registrado
@@ -113,7 +121,12 @@ pz_tune_file() {
         return 0
     fi
 
-    [ "$existed" = "1" ] && backup="$(pz_backup_latest "$path" 2>/dev/null || true)"
+    backup="$pre_backup"
+    if [ "$existed" = "1" ] && [ -z "$backup" ]; then
+        # Primeira escrita gerenciada: o backup criado pela própria escrita
+        # guarda o conteúdo original do usuário.
+        backup="$(pz_backup_latest "$path" 2>/dev/null || true)"
+    fi
     pz_tune_append_entry "$(jq -n \
         --arg path "$path" --arg scope "$scope" --arg backup "$backup" --arg sha "$sum" \
         --argjson created "$([ "$existed" = "1" ] && echo false || echo true)" \

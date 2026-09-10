@@ -1672,7 +1672,9 @@ class ResultDialog(StatefulDialog):
         if sev in {"warning", "error"}:
             if getattr(result, "timed_out", False):
                 retry = self.add_action("Tentar novamente", QDialogButtonBox.AcceptRole, variant="primaryButton")
-                retry.clicked.connect(lambda: self.retry_requested.emit(result.action))
+                # OperationResult expõe action_id; result.action levantava
+                # AttributeError dentro do slot e o botão morria.
+                retry.clicked.connect(lambda: self.retry_requested.emit(result.action_id))
                 retry.clicked.connect(self.accept)
             if result.action_id.startswith("windows."):
                 label = "Revisar Windows VM"

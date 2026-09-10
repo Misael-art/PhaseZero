@@ -276,6 +276,11 @@ class ProvisionWorker(QThread):
             ])
             stat_proc.start()
             ok = stat_proc.waitForFinished(15_000)
+            if not ok:
+                # QProcess coletado com filho vivo vira órfão; mata antes de
+                # descartar e reprograma o poll.
+                stat_proc.kill()
+                stat_proc.waitForFinished(2_000)
             if self._aborted:
                 return
             if not ok or stat_proc.exitCode() != 0:
