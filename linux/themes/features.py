@@ -198,21 +198,18 @@ class _OnOffConfigAdapter(FeatureAdapter):
                 return {"status": "failed", "error": reason or f"verificação falhou ({state})"}
             return {"status": wanted}
         overrides = _load_overrides()
-        pending = dict(overrides)
         for (config, group, key), off_value in self.off_values.items():
-            ident = _override_key(config, group, key)
-            previous = overrides.get(ident, "")
-            pending.pop(ident, None)
+            previous = overrides.get(_override_key(config, group, key), "")
             session.write_key(config, group, key, previous or off_value)
         session.notify()
-        # The consumed record is dropped only after the restored value reads
-        # back as a healthy off state; on failure the record stays so a retry
-        # still knows the user's original value.
-        state, reason = self._effective_state(session, overrides=overrides)
+        # O registro NÃO é consumido: o valor restaurado (ex.: fator de
+        # animação 0.5 do usuário) deixaria de bater com off_value e o
+        # estado viraria degradado no próximo status/verify. Ele continua
+        # marcando aquele valor como "preferência do usuário", o que o
+        # mantém lendo desligado.
+        state, reason = self._effective_state(session)
         if state != wanted:
             return {"status": "failed", "error": reason or f"verificação falhou ({state})"}
-        if len(pending) != len(overrides):
-            _save_overrides(pending)
         return {"status": wanted}
 
     def verify(self, facts, session) -> bool:  # noqa: ARG002
@@ -514,7 +511,13 @@ class _ZoomAdapter(_OnOffConfigAdapter):
 
 
 class _ColorblindAdapter(FeatureAdapter):
-    def effective(self, facts, session) -> dict:  # noqa: ARG002
+    def effective(self, facts, session) -> dict:
+        # O efeito é um plugin do KWin, não builtin: sem o .so instalado
+        # nenhuma chave o carrega, e escrever Enabled=true produzia um
+        # "ligado" auto-consistente que nunca fez nada no desktop.
+        supported = session.effect_supported("colorblind")
+        if supported is False:
+            return {"state": "indisponivel", "reason": "efeito colorblind não instalado neste KWin", "params": {}}
         if not _match(session, "kwinrc", "Effect-colorblind", "Enabled", "true"):
             return {"state": "desligado", "reason": "", "params": {}}
         stored = _read(session, "kwinrc", "Effect-colorblind", "Type").strip()

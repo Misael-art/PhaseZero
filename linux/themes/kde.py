@@ -297,6 +297,42 @@ class KdeSession:
             return
         _run([qdbus, "org.kde.KWin", "/KWin", "reconfigure"], timeout=5)
 
+    _KWIN_EFFECT_DIRS = (
+        "/usr/lib/qt6/plugins/kwin/effects/plugins",
+        "/usr/lib64/qt6/plugins/kwin/effects/plugins",
+        "/usr/lib/qt5/plugins/kwin/effects/plugins",
+        "/usr/lib64/qt5/plugins/kwin/effects/plugins",
+        "/usr/lib/kwin/effects/plugins",
+        "/usr/lib64/kwin/effects/plugins",
+        "/usr/local/lib/qt6/plugins/kwin/effects/plugins",
+        "/usr/local/lib64/qt6/plugins/kwin/effects/plugins",
+    )
+
+    def effect_supported(self, name: str) -> bool | None:
+        """Efeito existente neste KWin? None = indisponível para consultar.
+
+        Efeitos não builtin só existem se o plugin estiver instalado; sem a
+        checagem, escrever a chave de um efeito ausente produzia um
+        "ligado" auto-consistente que nunca fez nada. Este KWin não expõe
+        supportedEffects por D-Bus, então combina loadedEffects com a
+        presença do .so do plugin nos diretórios padrão.
+        """
+        qdbus = self.facts.binaries.get("qdbus") or self.facts.binaries.get("qdbus6")
+        if qdbus:
+            code, stdout, _err = _run(
+                [qdbus, "org.kde.KWin", "/Effects", "loadedEffects"], timeout=5
+            )
+            if code == 0 and name in stdout.split():
+                return True
+        import glob as _glob
+
+        for pattern in self._KWIN_EFFECT_DIRS:
+            if _glob.glob(f"{pattern}/*{name}*.so"):
+                return True
+        # Sem qdbus não dá para afirmar que não está carregado; com qdbus a
+        # resposta negativa (não carregado + sem .so) é conclusiva.
+        return False if qdbus else None
+
     # --- Aplicadores oficiais (fallback para escrita direta) -------------
 
     def apply_lookandfeel(self, package: str) -> None:
