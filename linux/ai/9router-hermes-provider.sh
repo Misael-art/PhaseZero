@@ -367,6 +367,10 @@ probe_live_models() {
     local tmp
     tmp="$(mktemp -d)"
     # Fan out one probe job per model, bounded by LIVE_JOBS.
+    # As aspas simples são deliberadas: o corpo roda no bash interno e recebe
+    # os valores por posição ($1..$4), justamente para a chave não aparecer na
+    # linha de comando de cada job. Expandir aqui quebraria as duas coisas.
+    # shellcheck disable=SC2016
     router_all_model_ids | xargs -P "$LIVE_JOBS" -I{} bash -c '
         m="$1"; key="$2"; timeout="$3"; ep="$4"
         out="$(curl -s -m "$timeout" -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
