@@ -887,6 +887,12 @@ class SwitchControl(QCheckBox):
     def sizeHint(self) -> QSize:
         return QSize(126, 30)
 
+    def hitButton(self, pos) -> bool:
+        # paintEvent desenha trilho e rótulo por toda a largura; o hit rect
+        # padrão do QCheckBox cobre só o indicador nativo (à esquerda, vazio),
+        # então clicar no switch visível não alternava nada.
+        return self.rect().contains(pos)
+
     def _state_changed(self, checked: bool) -> None:
         self.setAccessibleDescription("Ligado" if checked else "Desligado")
         self.update()
