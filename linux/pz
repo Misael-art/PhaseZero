@@ -230,6 +230,7 @@ Usage:
   pz ai odysseus update        Protected update with allowlist and rollback
   pz ai hermes status          Redacted Hermes readiness and authentication state
   pz ai hermes doctor          Read-only Hermes integrity and policy diagnostic
+  pz ai hermes route           Force+self-heal Hermes through 9Router (apply|status|doctor|models|bai|model <id>|heal)
   pz ai workspaces doctor      Unified Hermes/Odysseus/9Router readiness audit
   pz ai workspaces plan        Safe read-only deployment plan and blockers
   pz ai auth status            Redacted registry for AI accounts and sessions
@@ -656,7 +657,16 @@ cmd_ai() {
             ;;
         hermes|hermes-agent)
             shift
-            bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}"
+            local hermes_action="${1:-status}"
+            case "$hermes_action" in
+                route|router|enforce) shift; bash "$PZ_ROOT/linux/ai/hermes-router.sh" "${@:-apply}" ;;
+                provider|providers|default)
+                    shift
+                    bash "$PZ_ROOT/linux/ai/9router-hermes-provider.sh" "${@:-status}" ;;
+                models|model|pin|bai|b-ai|b.ai|list-models)
+                    bash "$PZ_ROOT/linux/ai/hermes-router.sh" "$@" ;;
+                *) bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}" ;;
+            esac
             ;;
         workspaces|agent-workspaces|agents-diagnostic)
             shift

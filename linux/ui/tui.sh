@@ -79,7 +79,7 @@ main_menu() {
             "ai"           "IA - Codex, Claude, Ollama, MCP" \
             "profiles"     "Perfis de instalação" \
             "doctor"       "Diagnóstico e reparos" \
-            "exit"         "Sair" 3>&2 2>&1 1>&3)
+            "exit"         "Sair" 3>&2 2>&1 1>&3) || true
         [ -z "$choice" ] && break
         case "$choice" in
             overview)     overview_menu ;;
@@ -117,7 +117,7 @@ steamdeck_menu() {
             "decky-prepare" "Preparar Steam UI para Decky" \
             "boot-status"  "Status boot GRUB SteamOS" \
             "boot-reboot"  "Reiniciar direto no SteamOS Plus" \
-            "back"         "Voltar" 3>&2 2>&1 1>&3)
+            "back"         "Voltar" 3>&2 2>&1 1>&3) || true
         [ -z "$choice" ] && break
         case "$choice" in
             status)  pz_tui_show_output "Status Steam Deck" bash "$PZ_ROOT/linux/steamdeck/status.sh" ;;
@@ -166,7 +166,7 @@ emulation_menu() {
             "srm"           "Status Steam ROM Manager" \
             "fixes"         "Reparos amigáveis" \
             "layout"        "Ver layout de diretórios" \
-            "back"          "Voltar" 3>&2 2>&1 1>&3)
+            "back"          "Voltar" 3>&2 2>&1 1>&3) || true
         [ -z "$choice" ] && break
         case "$choice" in
             retrodeck-status) pz_tui_show_output "RetroDECK" bash "$PZ_ROOT/linux/emulation/retrodeck.sh" status ;;
@@ -216,7 +216,7 @@ ai_menu() {
         choice=$(pz_tui_menu "Inteligência Artificial" "Ferramentas de IA:" \
             "status"       "Status IA" \
             "mcp-status"   "Status MCP" \
-            "back"         "Voltar" 3>&2 2>&1 1>&3)
+            "back"         "Voltar" 3>&2 2>&1 1>&3) || true
         [ -z "$choice" ] && break
         case "$choice" in
             status)    pz_tui_show_output "Status IA" bash "$PZ_ROOT/linux/ai/status.sh" ;;
@@ -249,7 +249,7 @@ doctor_menu() {
             "doctor"        "Diagnóstico completo" \
             "repair-plan"   "Plano de reparo" \
             "support"       "Gerar bundle de suporte" \
-            "back"          "Voltar" 3>&2 2>&1 1>&3)
+            "back"          "Voltar" 3>&2 2>&1 1>&3) || true
         [ -z "$choice" ] && break
         case "$choice" in
             doctor)      pz_tui_show_output "Diagnóstico" bash "$PZ_ROOT/linux/audit/doctor.sh" ;;

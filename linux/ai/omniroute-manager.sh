@@ -102,7 +102,18 @@ write_runtime_config() {
     [ -n "$api_secret" ] || api_secret="$(random_hex 32)"
     [ -n "$machine_salt" ] || machine_salt="$(random_hex 24)"
 
-    cat > "$ENV_FILE" <<EOF
+    # A chave de cliente vem de env_upsert e precisa sobreviver ao rewrite:
+    # descartá-la fazia ensure_api_key recriá-la, invalidando a chave já
+    # colada no opencode.json.
+    local client_key
+    client_key="$(env_get OMNIROUTE_API_KEY)"
+    # EnvironmentFile do systemd vivo: nunca truncar no lugar (mesma lição
+    # do incidente 9router.env). Backup + escrita staged no mesmo diretório.
+    if [ -f "$ENV_FILE" ]; then
+        cp -a "$ENV_FILE" "$ENV_FILE.pz-bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    fi
+    local tmp="$ENV_FILE.tmp.$$"
+    cat > "$tmp" <<EOF
 PORT=$port
 HOSTNAME=127.0.0.1
 NODE_ENV=production
@@ -115,11 +126,14 @@ ENABLE_REQUEST_LOGS=false
 AUTH_COOKIE_SECURE=false
 OMNIROUTE_DATA_DIR=$DATA_DIR
 EOF
-    chmod 0600 "$ENV_FILE"
+    [ -n "$client_key" ] && printf 'OMNIROUTE_API_KEY=%s\n' "$client_key" >> "$tmp"
+    chmod 0600 "$tmp"
+    mv -f "$tmp" "$ENV_FILE"
 
     local active_combo
     active_combo="$(jq -r '.activeCombo // "phasezero-smart"' "$SETTINGS_FILE" 2>/dev/null || echo phasezero-smart)"
-    jq -n --arg baseUrl "http://127.0.0.1:$port" \
+    jq -n --arg port "$port" \
+        --arg baseUrl "http://127.0.0.1:$port" \
         --arg endpoint "http://127.0.0.1:$port/v1" \
         --arg dashboard "http://127.0.0.1:$port/dashboard" \
         --arg combo "$active_combo" \
