@@ -132,7 +132,8 @@ EOF
 
     local active_combo
     active_combo="$(jq -r '.activeCombo // "phasezero-smart"' "$SETTINGS_FILE" 2>/dev/null || echo phasezero-smart)"
-    jq -n --arg baseUrl "http://127.0.0.1:$port" \
+    jq -n --arg port "$port" \
+        --arg baseUrl "http://127.0.0.1:$port" \
         --arg endpoint "http://127.0.0.1:$port/v1" \
         --arg dashboard "http://127.0.0.1:$port/dashboard" \
         --arg combo "$active_combo" \

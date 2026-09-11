@@ -181,18 +181,26 @@ FEATURES: dict[str, FeatureSpec] = {
     "access.zoom": FeatureSpec(
         id="access.zoom",
         title="Zoom",
-        description="Efeito de zoom do KWin (kwinrc [Effect-zoom]).",
+        description=(
+            "Efeito de zoom do KWin (kwinrc [Effect-zoom]). O efeito builtin "
+            "já vem carregado; a ativação no dia a dia é pelo atalho de teclado."
+        ),
         section="acessibilidade",
         kind="kde-config",
+        key_verified=False,
         config_keys=("kwinrc:[Effect-zoom]/Enabled",),
     ),
     "access.colorblind": FeatureSpec(
         id="access.colorblind",
         title="Correção de daltonismo",
-        description="Filtro de daltonismo do KWin (kwinrc [Effect-colorblind]).",
+        description=(
+            "Filtro de daltonismo do KWin (kwinrc [Effect-colorblind]). "
+            "Exige o plugin do efeito instalado; sem ele o recurso é indisponível."
+        ),
         section="acessibilidade",
         kind="kde-config",
         params=("type",),
+        key_verified=False,
         config_keys=("kwinrc:[Effect-colorblind]/Enabled", "kwinrc:[Effect-colorblind]/Type"),
         default_params={"type": "deuteranopia"},
     ),
