@@ -3,6 +3,37 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.3] - 2026-09-10
+
+Trabalho desenvolvido e host-verificado na branch `release/v1.19.0` (não publicada no main como release) e mesclado aqui: bateria de testes reais no host (Plasma 6/Wayland) que expôs defeitos invisíveis às suítes herméticas — daemon vivo, multi-containment, semântica de ferramenta oficial.
+
+### Adicionado
+- **Roteamento Hermes pelo 9Router**: `pz ai hermes route|provider|models` (apply/status/doctor/models/heal) com timer de auto-curativo de 5 minutos. O `config.yaml` vivo agora é reescrito com backup e escrita staged atômica — o heal nunca mais trunca a configuração do agente.
+
+### Corrigido (motor de temas)
+- Preview de wallpaper vencido reverte em qualquer comando `pz themes`; apply confirmado nunca é revertido pela expiração do preview anterior.
+- `--param` conta na detecção de no-op: trocar o modo do tema (sistema→escuro) aplica de verdade em vez de no-op silencioso.
+- Escrita de configuração KDE via `kwriteconfig` quando disponível — a escrita byte a byte disputava o cache do daemon KConfig e duplicava chaves no `kdeglobals` vivo.
+- `reduce-motion off` restaura o `AnimationDurationFactor` anterior do usuário (registro de override permanente) em vez do padrão fixo `1`.
+- Rollback de wallpaper endereça cada desktop pelo índice real; telas `-1` colapsavam na primeira e sobrescreviam o wallpaper errado.
+- `pz themes verify` respeita a direção da operação e falha de wallpaper não é mais reportada como aplicada; `verify`/`rescue-wallpaper` com `ok:false` saem com exit 1.
+- Preview de tela de bloqueio reverte em host stock; restore atômico preservando permissões, `SlidePaths` de slideshow e reconfigure do KWin.
+- Snapshot cobre todo o raio do apply (`theme.phasezero`, `theme.accent`, `power.*`); plano bloqueado não consome snapshot; snapshot órfão não derruba a CLI.
+- Efeito colorblind ausente reporta `indisponivel` e bloqueia o plano com motivo (antes gravava `Enabled=true` e jurava "ligado"); zoom/colorblind marcados `key_verified=False`; alto contraste aplica só o esquema de cores.
+- `rescue-wallpaper` sem colisão de telas `-1`; Orca já em execução não falha o plano; disputa de lock responde JSON em vez de traceback.
+
+### Corrigido (interface nativa)
+- Interruptores da página Temas voltam a disparar operações (nenhum toggle funcionava; controle preso em "Aplicando…").
+- "Tentar novamente" de timeout funciona; `ok:false` com exit 0 mostra falha; contagem de wallpapers respeita checksum; hero mostra o wallpaper real; poll de provisionamento mata o filho em timeout.
+
+### Corrigido (shell)
+- `pz ai omniroute install/update`: backup + escrita staged do EnvironmentFile do systemd, preservação de `OMNIROUTE_API_KEY` e correção do jq (`$port` sem `--arg port` matava toda escrita de runtime).
+- `pz emulation dualscreen apply azahar` funciona (faltava o `source` de `pz_ini_set`); status lê o formato `chave = valor`.
+- `pz ai secrets rotate` lê o prompt do TTY; `pz ai 9router rollback` filtra diretórios `failed-*`; `pz ai hermes setup` reescreve `config.yaml` com backup atômico; Cancelar/Esc no whiptail volta ao menu; `pz tune apply` repetido registra o backup do conteúdo original.
+
+### Testes
+- +14 testes de regressão herméticos; suíte completa: 809 passed + shell suite.
+
 ## [1.20.2] - 2026-09-09
 
 Correção encontrada ao iniciar o Windows num host real, depois de rodar `boot install` com privilégio.
