@@ -301,8 +301,8 @@ list_providers() {
 status_json() {
     local active=false routed=false combo="" hermes_default=""
     [ -f "$HERMES_CONFIG" ] && {
-        is_provider_active && active=true || true
-        is_routed_through_9router && routed=true || true
+        if is_provider_active; then active=true; fi
+        if is_routed_through_9router; then routed=true; fi
         hermes_default="$(grep -E "^  default:" "$HERMES_CONFIG" 2>/dev/null | head -1 | awk '{print $2}')"
     }
     combo="$(jq -r '.activeCombo // .model // "Default"' "$SETTINGS_FILE" 2>/dev/null || echo Default)"
