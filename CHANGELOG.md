@@ -3,6 +3,16 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.4] - 2026-09-11
+
+Defeito encontrado clicando na página Temas de um host real, mais dois follow-ups de release que a própria varredura expôs.
+
+### Corrigido
+- **Os interruptores não respondiam ao clique**: o controle é desenhado por inteiro — rótulo à esquerda, trilho colado na borda direita —, mas o Qt só aceita clique dentro da área do indicador nativo, que fica à esquerda e nunca é pintada. Num interruptor de 126px a região sensível ia até 40px, então todo clique no trilho ou no botão visível era descartado sem nada acontecer. Atingia Temas, Serviços, Windows VM e o "Modo avançado" do cabeçalho.
+- **Upgrade não deixava mais o runtime de boot do Windows VM para trás**: `windows-vm` ressincroniza sozinho em vez de exigir um `boot install` manual depois de cada atualização de pacote.
+- **`.SRCINFO` parou de se corromper a cada release**: o campo `source` vinha acumulando a URL de todas as versões desde a 1.8.0 numa única linha inutilizável, porque a expressão de bump só reescrevia o dígito maior e deixava o resto da linha antiga. Agora a linha é reescrita inteira e bate com o que o PKGBUILD declara.
+- `shell-lint` voltou ao verde: estava vermelho em main desde a 1.20.3 por um SC2016 que é falso positivo — as aspas simples ali existem para a chave de API não aparecer na linha de comando de cada job paralelo.
+
 ## [1.20.3] - 2026-09-10
 
 Trabalho desenvolvido e host-verificado na branch `release/v1.19.0` (não publicada no main como release) e mesclado aqui: bateria de testes reais no host (Plasma 6/Wayland) que expôs defeitos invisíveis às suítes herméticas — daemon vivo, multi-containment, semântica de ferramenta oficial.

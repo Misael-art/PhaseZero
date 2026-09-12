@@ -301,8 +301,8 @@ list_providers() {
 status_json() {
     local active=false routed=false combo="" hermes_default=""
     [ -f "$HERMES_CONFIG" ] && {
-        is_provider_active && active=true || true
-        is_routed_through_9router && routed=true || true
+        if is_provider_active; then active=true; fi
+        if is_routed_through_9router; then routed=true; fi
         hermes_default="$(grep -E "^  default:" "$HERMES_CONFIG" 2>/dev/null | head -1 | awk '{print $2}')"
     }
     combo="$(jq -r '.activeCombo // .model // "Default"' "$SETTINGS_FILE" 2>/dev/null || echo Default)"
@@ -367,6 +367,10 @@ probe_live_models() {
     local tmp
     tmp="$(mktemp -d)"
     # Fan out one probe job per model, bounded by LIVE_JOBS.
+    # As aspas simples são deliberadas: o corpo roda no bash interno e recebe
+    # os valores por posição ($1..$4), justamente para a chave não aparecer na
+    # linha de comando de cada job. Expandir aqui quebraria as duas coisas.
+    # shellcheck disable=SC2016
     router_all_model_ids | xargs -P "$LIVE_JOBS" -I{} bash -c '
         m="$1"; key="$2"; timeout="$3"; ep="$4"
         out="$(curl -s -m "$timeout" -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
