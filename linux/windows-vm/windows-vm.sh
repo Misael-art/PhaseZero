@@ -14,6 +14,10 @@ if [ $# -gt 0 ]; then
     shift || true
 fi
 
+# Where udisks mounts removable media. Overridable so the suite can exercise
+# the hot-plug paths inside a sandbox instead of writing under /run/media.
+REMOVABLE_ROOT="${PZ_WINDOWS_VM_REMOVABLE_ROOT:-/run/media}"
+MEDIA_ROOT="${PZ_WINDOWS_VM_MEDIA_ROOT:-/media}"
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
 if [ "$EUID" -eq 0 ]; then
@@ -790,11 +794,17 @@ effective_config() {
     fi
     SHARE_ROOT="${PZ_WINDOWS_VM_SHARE_ROOT:-$VM_DIR/shares}"
     TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
-    # Share policy: minimal (default) exposes ONLY the exchange dir. home,
-    # sdcard, removable, media and /mnt are exposed only with an explicit
-    # opt-in (PZ_WINDOWS_VM_SHARE_POLICY=full); expanded shares are read-only
-    # unless PZ_WINDOWS_VM_SHARE_WRITABLE=1.
-    SHARE_POLICY="${SHARE_POLICY:-${PZ_WINDOWS_VM_SHARE_POLICY:-minimal}}"
+    # Share policy: full (default) exposes home, sdcard, removable media and
+    # /mnt READ-ONLY, plus the exchange dir as the single writable door. The
+    # guest can therefore read everything on the Linux side while writes stay
+    # funnelled through one controlled path.
+    # PZ_WINDOWS_VM_SHARE_WRITABLE=1 makes the expanded shares writable too:
+    # that hands anything running in Windows - malware included - write access
+    # to the whole home directory under the operator's own identity, since the
+    # generated smb.conf uses `guest ok=yes` and `force user`. Keep it at 0
+    # unless that exposure is a deliberate decision.
+    # PZ_WINDOWS_VM_SHARE_POLICY=minimal narrows the share set back to exchange.
+    SHARE_POLICY="${SHARE_POLICY:-${PZ_WINDOWS_VM_SHARE_POLICY:-full}}"
     case "$SHARE_POLICY" in
         minimal|full) ;;
         *) pz_warn "unknown share policy '$SHARE_POLICY'; falling back to minimal"; SHARE_POLICY=minimal ;;
@@ -804,8 +814,11 @@ effective_config() {
         1|0) ;;
         *) pz_warn "invalid PZ_WINDOWS_VM_SHARE_WRITABLE '$SHARE_WRITABLE'; using 0 (read-only expanded shares)"; SHARE_WRITABLE=0 ;;
     esac
-    if [ -f "$CONFIG_FILE" ] && [ -z "${PZ_WINDOWS_VM_SHARE_POLICY:-}" ]; then
-        pz_warn "legacy Windows VM config without share policy — defaulting to minimal shares (only exchange exposed; home/sdcard/mnt need explicit PZ_WINDOWS_VM_SHARE_POLICY=full)"
+    # A config written before the default changed pins minimal explicitly, so it
+    # keeps the narrow share set and the operator sees only exchange in the
+    # guest. Say so out loud instead of letting it look like a broken share.
+    if [ -f "$CONFIG_FILE" ] && [ "$SHARE_POLICY" = "minimal" ]; then
+        pz_info "share policy=minimal from $CONFIG_FILE (only exchange exposed). Set PZ_WINDOWS_VM_SHARE_POLICY=full there for read-only home/sdcard/removable."
     fi
     # SPICE binding: loopback by default. Any non-loopback address requires an
     # explicit opt-in and emits a strong warning (unauthenticated SPICE server).
@@ -1054,16 +1067,27 @@ vm_admin_run() {
 # QEMU's built-in SMB (\\10.0.2.4\qemu) serves ONE directory and does NOT follow
 # symlinks that point outside it, so the old symlink share root left the guest with
 # empty home/ and sdcard/ folders. Bind mounts are real directories smbd traverses
-# fine. We populate a share root under RUNTIME_DIR (outside $HOME, so bind-mounting
-# $HOME cannot recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
-SHARE_BIND_ROOT="$RUNTIME_DIR/shares"
+# fine. We populate a share root outside $HOME (so bind-mounting $HOME cannot
+# recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
+#
+# The root must also be disk-backed. Windows reports free space for the volume
+# of the share ROOT, not for the bind the user is writing into, so a root on the
+# RUNTIME_DIR tmpfs made the guest see ~1.4 GB and refuse larger copies even
+# though the exchange bind had hundreds of GB free. Prefer a persistent path and
+# fall back to RUNTIME_DIR only when there is no way to create it.
+SHARE_STATE_DIR="${PZ_WINDOWS_VM_SHARE_STATE_DIR:-/var/lib/phasezero/windows-vm}"
+SHARE_BIND_ROOT="${PZ_WINDOWS_VM_SHARE_BIND_ROOT:-$SHARE_STATE_DIR/shares}"
+# Fallback when the persistent root cannot be created (no admin bridge, e.g. a
+# GRUB boot session). The guest keeps working; only the free-space figure it
+# reports goes back to being the tmpfs size.
+SHARE_BIND_ROOT_FALLBACK="$RUNTIME_DIR/shares"
 share_pairs() {
     local ro_marker="${1:-0}"
     if [ "$SHARE_POLICY" = "full" ]; then
         if [ "$ro_marker" = "1" ]; then
-            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:/run/media/$TARGET_USER:ro" "media:/media/$TARGET_USER:ro" "mnt:/mnt:ro"
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:$REMOVABLE_ROOT/$TARGET_USER:ro" "media:$MEDIA_ROOT/$TARGET_USER:ro" "mnt:/mnt:ro"
         else
-            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$TARGET_USER" "media:/media/$TARGET_USER" "mnt:/mnt"
+            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:$REMOVABLE_ROOT/$TARGET_USER" "media:$MEDIA_ROOT/$TARGET_USER" "mnt:/mnt"
         fi
     else
         if [ "$ro_marker" = "1" ]; then
@@ -1085,7 +1109,10 @@ prune_share_links() {
             *" $name "*) continue ;;
         esac
         if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
-            if ! vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+            # -R: the binds are recursive, so a plain umount would detach the
+            # top and leave the submounts (a pen drive under removable/) still
+            # exposed to the guest under a policy that no longer allows it.
+            if ! vm_admin_run umount -R "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
                 pz_warn "failed to unmount stale share bind: $SHARE_BIND_ROOT/$name"
                 rc=1
             elif mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
@@ -1115,6 +1142,42 @@ mount_is_rw() {
     return 0
 }
 
+# Create a directory inside the share root. The root can be root-owned
+# (/var/lib/phasezero/...), so fall back to the admin bridge.
+share_install_dir() {
+    install -d "$1" 2>/dev/null || vm_admin_run install -d "$1" 2>/dev/null
+}
+
+# udisks creates /run/media/$USER only when the first removable device is
+# mounted. Binding a path that does not exist yet was skipped outright, so a
+# pen drive inserted after boot could never reach the guest. Create the target
+# up front; the recursive bind below then carries every later mount into it.
+ensure_share_target() {
+    local target="$1"
+    [ -d "$target" ] && return 0
+    case "$target" in
+        "$REMOVABLE_ROOT"/*|"$MEDIA_ROOT"/*) share_install_dir "$target" ;;
+        *) return 1 ;;
+    esac
+}
+
+# A plain --bind exposes only the directory itself: every filesystem mounted
+# underneath stays invisible. Removable media are exactly that - each pen drive
+# is its own mount under /run/media/$USER - so the guest saw an empty folder.
+# --rbind carries the mounts that already exist, and --make-rslave makes the
+# ones mounted later propagate in, which is what hotplug needs.
+share_bind_mount() {
+    local target="$1" mountpoint_path="$2" readonly_bind="$3"
+    vm_admin_run mount --rbind "$target" "$mountpoint_path" 2>/dev/null || return 1
+    # Slave propagation: host -> guest share only. Without it a umount inside
+    # the share root could propagate back and unmount the user's real media.
+    vm_admin_run mount --make-rslave "$mountpoint_path" 2>/dev/null || true
+    if [ "$readonly_bind" = "1" ]; then
+        vm_admin_run mount -o remount,ro,bind "$mountpoint_path" 2>/dev/null || return 1
+    fi
+    return 0
+}
+
 ensure_share_links() {
     local hard_fail="${1:-0}"
     if [ "$DRY_RUN" = "1" ]; then
@@ -1125,7 +1188,15 @@ ensure_share_links() {
     local ok=1 pair name target mode attempt=0
     while [ "$attempt" -le 1 ]; do
         ok=1
-        install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
+        if ! share_install_dir "$SHARE_BIND_ROOT"; then
+            if [ "$SHARE_BIND_ROOT" != "$SHARE_BIND_ROOT_FALLBACK" ] && \
+               share_install_dir "$SHARE_BIND_ROOT_FALLBACK"; then
+                pz_warn "persistent share root unavailable ($SHARE_BIND_ROOT); using $SHARE_BIND_ROOT_FALLBACK. The guest will report that filesystem's free space, which may refuse large copies."
+                SHARE_BIND_ROOT="$SHARE_BIND_ROOT_FALLBACK"
+            else
+                ok=0
+            fi
+        fi
         if [ "$ok" = "1" ]; then
             mkdir -p "$EXCHANGE_DIR"
             while IFS= read -r pair; do
@@ -1135,6 +1206,7 @@ ensure_share_links() {
                 case "$target" in
                     *:rw|*:ro) mode="${target##*:}"; target="${target%:*}" ;;
                 esac
+                ensure_share_target "$target" || true
                 [ -d "$target" ] || continue
                 if [ "$mode" = "ro" ] && [ "$SHARE_WRITABLE" != "1" ]; then
                     if mountpoint -q "$SHARE_BIND_ROOT/$name"; then
@@ -1142,8 +1214,8 @@ ensure_share_links() {
                             vm_admin_run mount -o remount,ro,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
                         fi
                     else
-                        install -d "$SHARE_BIND_ROOT/$name"
-                        vm_admin_run mount --bind -o ro "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                        share_install_dir "$SHARE_BIND_ROOT/$name"
+                        share_bind_mount "$target" "$SHARE_BIND_ROOT/$name" 1 || { ok=0; break; }
                     fi
                 elif mountpoint -q "$SHARE_BIND_ROOT/$name"; then
                     if mount_is_rw "$SHARE_BIND_ROOT/$name"; then
@@ -1151,8 +1223,8 @@ ensure_share_links() {
                     fi
                     vm_admin_run mount -o remount,rw,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
                 else
-                    install -d "$SHARE_BIND_ROOT/$name"
-                    vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                    share_install_dir "$SHARE_BIND_ROOT/$name"
+                    share_bind_mount "$target" "$SHARE_BIND_ROOT/$name" 0 || { ok=0; break; }
                 fi
             done < <(share_pairs 1)
         fi
@@ -1193,8 +1265,8 @@ ensure_share_links() {
     if [ "$SHARE_POLICY" = "full" ]; then
         ln -sfn "$HOME" "$SHARE_ROOT/home"
         [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
-        [ -d "/run/media/$TARGET_USER" ] && ln -sfn "/run/media/$TARGET_USER" "$SHARE_ROOT/removable"
-        [ -d "/media/$TARGET_USER" ] && ln -sfn "/media/$TARGET_USER" "$SHARE_ROOT/media"
+        [ -d "$REMOVABLE_ROOT/$TARGET_USER" ] && ln -sfn "$REMOVABLE_ROOT/$TARGET_USER" "$SHARE_ROOT/removable"
+        [ -d "$MEDIA_ROOT/$TARGET_USER" ] && ln -sfn "$MEDIA_ROOT/$TARGET_USER" "$SHARE_ROOT/media"
         [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
     fi
     EFFECTIVE_SMB_DIR="$SHARE_ROOT"
@@ -1323,8 +1395,8 @@ EOF
 samba_block_content() {
     local home removable media
     home="$(target_home)"
-    removable="/run/media/$TARGET_USER"
-    media="/media/$TARGET_USER"
+    removable="$REMOVABLE_ROOT/$TARGET_USER"
+    media="$MEDIA_ROOT/$TARGET_USER"
     if [ "$SHARE_POLICY" = "full" ]; then
         cat <<EOF
 $SAMBA_BEGIN
@@ -1529,7 +1601,7 @@ configure_windows_samba_shares() {
     }
     chown "$TARGET_USER:$TARGET_USER" "$EXCHANGE_DIR"
     chmod 0770 "$EXCHANGE_DIR"
-    install -d -o "$TARGET_USER" -g "$TARGET_USER" "/run/media/$TARGET_USER" "/media/$TARGET_USER"
+    install -d -o "$TARGET_USER" -g "$TARGET_USER" "$REMOVABLE_ROOT/$TARGET_USER" "$MEDIA_ROOT/$TARGET_USER"
     systemctl enable --now smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
     systemctl restart smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
     if command -v ufw >/dev/null 2>&1; then
@@ -1928,8 +2000,8 @@ build_qemu_args() {
     if [ "$SHARE_POLICY" = "full" ]; then
         start_virtiofs_share hosthome "$HOME"
         [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
-        [ -d "/run/media/$TARGET_USER" ] && start_virtiofs_share removable "/run/media/$TARGET_USER"
-        [ -d "/media/$TARGET_USER" ] && start_virtiofs_share media "/media/$TARGET_USER"
+        [ -d "$REMOVABLE_ROOT/$TARGET_USER" ] && start_virtiofs_share removable "$REMOVABLE_ROOT/$TARGET_USER"
+        [ -d "$MEDIA_ROOT/$TARGET_USER" ] && start_virtiofs_share media "$MEDIA_ROOT/$TARGET_USER"
         [ -d /mnt ] && start_virtiofs_share mnt /mnt
     fi
     start_tpm
@@ -2880,7 +2952,7 @@ print_plan() {
     echo "  share_writable: $SHARE_WRITABLE"
     echo "  home_share: $([ "$SHARE_POLICY" = "full" ] && echo "$HOME" || echo 'hidden (policy=minimal)')"
     echo "  sdcard_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing; } || echo 'hidden (policy=minimal)')"
-    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "/run/media/$TARGET_USER" ] && echo "/run/media/$TARGET_USER" || echo missing; } || echo 'hidden (policy=minimal)')"
+    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "$REMOVABLE_ROOT/$TARGET_USER" ] && echo "$REMOVABLE_ROOT/$TARGET_USER" || echo missing; } || echo 'hidden (policy=minimal)')"
     # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "  smb_unc: \\\\10.0.2.4\\qemu"
     echo "  spice_usb: spice://$SPICE_ADDR:5930"
