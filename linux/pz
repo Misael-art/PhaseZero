@@ -230,6 +230,7 @@ Usage:
   pz ai odysseus update        Protected update with allowlist and rollback
   pz ai hermes status          Redacted Hermes readiness and authentication state
   pz ai hermes doctor          Read-only Hermes integrity and policy diagnostic
+  pz ai hermes route           Force+self-heal Hermes through 9Router (apply|status|doctor|models|bai|model <id>|heal)
   pz ai workspaces doctor      Unified Hermes/Odysseus/9Router readiness audit
   pz ai workspaces plan        Safe read-only deployment plan and blockers
   pz ai auth status            Redacted registry for AI accounts and sessions
@@ -656,7 +657,16 @@ cmd_ai() {
             ;;
         hermes|hermes-agent)
             shift
-            bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}"
+            local hermes_action="${1:-status}"
+            case "$hermes_action" in
+                route|router|enforce) shift; bash "$PZ_ROOT/linux/ai/hermes-router.sh" "${@:-apply}" ;;
+                provider|providers|default)
+                    shift
+                    bash "$PZ_ROOT/linux/ai/9router-hermes-provider.sh" "${@:-status}" ;;
+                models|model|pin|bai|b-ai|b.ai|list-models)
+                    bash "$PZ_ROOT/linux/ai/hermes-router.sh" "$@" ;;
+                *) bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}" ;;
+            esac
             ;;
         workspaces|agent-workspaces|agents-diagnostic)
             shift
@@ -758,14 +768,30 @@ cmd_ai() {
 cmd_doctor() {
     # Global watchdog: per-check timeouts bound every subcommand (doctor.sh),
     # this caps the whole run. Override with PZ_DOCTOR_TIMEOUT (seconds).
-    local scope="full"
-    if [ "${1:-}" = "--scope" ]; then
-        case "${2:-}" in
-            system|full) scope="$2"; shift 2 ;;
-            *) pz_error "usage: pz doctor [--scope system|full]"; return 1 ;;
+    local scope="full" json=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --scope)
+                case "${2:-}" in
+                    system|full) scope="$2"; shift 2 ;;
+                    *) pz_error "usage: pz doctor [--scope system|full] [--json]"; return 1 ;;
+                esac
+                ;;
+            --json) json=1; shift ;;
+            # Flag desconhecida era ignorada em silêncio: quem pedia --json
+            # recebia o relatório humano e nenhum aviso.
+            *) pz_error "usage: pz doctor [--scope system|full] [--json]"; return 1 ;;
         esac
+    done
+    if [ "$json" = 1 ]; then
+        # fd 3 = stdout de verdade (só o envelope); stdout do script = lixeira.
+        PZ_DOCTOR_SCOPE="$scope" PZ_DOCTOR_JSON=1 \
+            timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh" \
+            3>&1 1>/dev/null
+        return $?
     fi
-    PZ_DOCTOR_SCOPE="$scope" timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
+    PZ_DOCTOR_SCOPE="$scope" PZ_DOCTOR_JSON=0 \
+        timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 
 cmd_support_bundle() {

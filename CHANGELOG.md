@@ -3,6 +3,69 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.4] - 2026-09-11
+
+Defeito encontrado clicando na página Temas de um host real, mais dois follow-ups de release que a própria varredura expôs.
+
+### Corrigido
+- **Os interruptores não respondiam ao clique**: o controle é desenhado por inteiro — rótulo à esquerda, trilho colado na borda direita —, mas o Qt só aceita clique dentro da área do indicador nativo, que fica à esquerda e nunca é pintada. Num interruptor de 126px a região sensível ia até 40px, então todo clique no trilho ou no botão visível era descartado sem nada acontecer. Atingia Temas, Serviços, Windows VM e o "Modo avançado" do cabeçalho.
+- **Upgrade não deixava mais o runtime de boot do Windows VM para trás**: `windows-vm` ressincroniza sozinho em vez de exigir um `boot install` manual depois de cada atualização de pacote.
+- **`.SRCINFO` parou de se corromper a cada release**: o campo `source` vinha acumulando a URL de todas as versões desde a 1.8.0 numa única linha inutilizável, porque a expressão de bump só reescrevia o dígito maior e deixava o resto da linha antiga. Agora a linha é reescrita inteira e bate com o que o PKGBUILD declara.
+- `shell-lint` voltou ao verde: estava vermelho em main desde a 1.20.3 por um SC2016 que é falso positivo — as aspas simples ali existem para a chave de API não aparecer na linha de comando de cada job paralelo.
+
+## [1.20.3] - 2026-09-10
+
+Trabalho desenvolvido e host-verificado na branch `release/v1.19.0` (não publicada no main como release) e mesclado aqui: bateria de testes reais no host (Plasma 6/Wayland) que expôs defeitos invisíveis às suítes herméticas — daemon vivo, multi-containment, semântica de ferramenta oficial.
+
+### Adicionado
+- **Roteamento Hermes pelo 9Router**: `pz ai hermes route|provider|models` (apply/status/doctor/models/heal) com timer de auto-curativo de 5 minutos. O `config.yaml` vivo agora é reescrito com backup e escrita staged atômica — o heal nunca mais trunca a configuração do agente.
+
+### Corrigido (motor de temas)
+- Preview de wallpaper vencido reverte em qualquer comando `pz themes`; apply confirmado nunca é revertido pela expiração do preview anterior.
+- `--param` conta na detecção de no-op: trocar o modo do tema (sistema→escuro) aplica de verdade em vez de no-op silencioso.
+- Escrita de configuração KDE via `kwriteconfig` quando disponível — a escrita byte a byte disputava o cache do daemon KConfig e duplicava chaves no `kdeglobals` vivo.
+- `reduce-motion off` restaura o `AnimationDurationFactor` anterior do usuário (registro de override permanente) em vez do padrão fixo `1`.
+- Rollback de wallpaper endereça cada desktop pelo índice real; telas `-1` colapsavam na primeira e sobrescreviam o wallpaper errado.
+- `pz themes verify` respeita a direção da operação e falha de wallpaper não é mais reportada como aplicada; `verify`/`rescue-wallpaper` com `ok:false` saem com exit 1.
+- Preview de tela de bloqueio reverte em host stock; restore atômico preservando permissões, `SlidePaths` de slideshow e reconfigure do KWin.
+- Snapshot cobre todo o raio do apply (`theme.phasezero`, `theme.accent`, `power.*`); plano bloqueado não consome snapshot; snapshot órfão não derruba a CLI.
+- Efeito colorblind ausente reporta `indisponivel` e bloqueia o plano com motivo (antes gravava `Enabled=true` e jurava "ligado"); zoom/colorblind marcados `key_verified=False`; alto contraste aplica só o esquema de cores.
+- `rescue-wallpaper` sem colisão de telas `-1`; Orca já em execução não falha o plano; disputa de lock responde JSON em vez de traceback.
+
+### Corrigido (interface nativa)
+- Interruptores da página Temas voltam a disparar operações (nenhum toggle funcionava; controle preso em "Aplicando…").
+- "Tentar novamente" de timeout funciona; `ok:false` com exit 0 mostra falha; contagem de wallpapers respeita checksum; hero mostra o wallpaper real; poll de provisionamento mata o filho em timeout.
+
+### Corrigido (shell)
+- `pz ai omniroute install/update`: backup + escrita staged do EnvironmentFile do systemd, preservação de `OMNIROUTE_API_KEY` e correção do jq (`$port` sem `--arg port` matava toda escrita de runtime).
+- `pz emulation dualscreen apply azahar` funciona (faltava o `source` de `pz_ini_set`); status lê o formato `chave = valor`.
+- `pz ai secrets rotate` lê o prompt do TTY; `pz ai 9router rollback` filtra diretórios `failed-*`; `pz ai hermes setup` reescreve `config.yaml` com backup atômico; Cancelar/Esc no whiptail volta ao menu; `pz tune apply` repetido registra o backup do conteúdo original.
+
+### Testes
+- +14 testes de regressão herméticos; suíte completa: 809 passed + shell suite.
+
+## [1.20.2] - 2026-09-09
+
+Correção encontrada ao iniciar o Windows num host real, depois de rodar `boot install` com privilégio.
+
+### Corrigido
+- **VM não iniciava depois de um comando elevado**: o `windows-vm` já resolvia a base do runtime para `/run/user/<uid do usuário>` quando rodava como root, mas criava o diretório sem devolver o dono. Ele nascia `root:root` dentro do runtime dir do próprio usuário, e a partir daí todo `windows-vm start` sem privilégio parava em `install: não foi possível mudar permissões de "/run/user/1000/phasezero-windows-vm"`. Bastava um `pz windows-vm boot install` pela ponte admin para deixar a VM do usuário travada até alguém corrigir o dono à mão. Os três pontos que criam o diretório passam por um helper que o devolve ao usuário alvo.
+
+### Interface
+- **Ajustes de host pulados viram um resumo com ação**: iniciar a VM sem privilégio imprimia treze avisos `requires root; skipped` seguidos — a maioria um por núcleo de CPU —, sem dizer o que fazer com aquilo. Agora sai uma linha com o que ficou de fora e outra com o comando que aplica (`phasezero-admin pz windows-vm optimize`). A VM inicia com ou sem esses ajustes; eles são otimização, não requisito.
+
+## [1.20.1] - 2026-09-09
+
+Correções encontradas ao instalar a 1.20.0 num host real e rodar o diagnóstico.
+
+### Corrigido
+- **`pz doctor` terminava sem terminar**: o comando morria com SIGPIPE no meio do relatório, quando o diretório de operações era grande o bastante para o `ls` ainda estar escrevendo enquanto o `head` já tinha saído. No host de teste o relatório parava no check 44 de 136 — toda a parte de gráficos do Windows VM, TPM e swtpm era pulada em silêncio, e a saída ainda parecia completa.
+- **`pz doctor --json` ignorava a flag** e imprimia o relatório humano; qualquer flag desconhecida era aceita sem aviso. Agora emite o mesmo envelope objeto dos demais comandos de status (`schemaVersion`, `summary`, `ok`, `checks[]`), sai 0 como relatório deve sair, e recusa o que não conhece.
+- O caso 9 de `tests/audit-doctor.sh` exigia `WARN` para subsistema opcional sem configuração, regra que o produto abandonou de propósito em favor de `INFO: not opted in`. O arquivo nunca era executado pelo runner — o nome não casava com os padrões varridos —, então a contradição sobreviveu sem ser vista. Renomeado para `tests/linux-audit-doctor.sh` e alinhado à regra atual.
+
+### Adicionado
+- Check `STATE01`: conta os registros locais de operação e aponta `pz installation prune` quando passam de 500. A poda já existia; faltava alguém dizer que era hora. O host de teste tinha 5126 registros acumulados.
+
 ## [1.20.0] - 2026-09-08
 
 ### Adicionado

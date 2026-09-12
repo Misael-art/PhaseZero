@@ -1282,3 +1282,94 @@ printf '%s' "$inspect_json" | jq -e 'has("sha256") and has("arch") and has("uefi
 echo "  media inspect --json: schema stable (valid=false on non-Windows blob, all keys present)"
 
 echo "  media-inspect tests ok"
+
+echo "=== runtime dir do usuário nunca fica de root (regressão de host real) ==="
+# Um `boot install` pela ponte admin criava /run/user/<uid>/phasezero-windows-vm
+# como root:root. Depois disso, todo `windows-vm start` sem privilégio morria em
+# "install: não foi possível mudar permissões ... Operação não permitida".
+WVM="$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+# 1. Nenhum ponto cria o runtime dir sem passar pelo helper que ajusta o dono.
+if grep -nE 'install -d[^\n]*"\$RUNTIME_DIR"' "$WVM"; then
+    echo "FAIL: RUNTIME_DIR criado sem ensure_runtime_dir (dono ficaria root)"; exit 1
+fi
+grep -q 'ensure_runtime_dir()' "$WVM" \
+    || { echo "FAIL: helper ensure_runtime_dir ausente"; exit 1; }
+# 2. O helper devolve o diretório ao usuário alvo quando roda elevado.
+awk '/^ensure_runtime_dir\(\)/,/^}/' "$WVM" | grep -q 'chown_target_user' \
+    || { echo "FAIL: ensure_runtime_dir não devolve o dono ao usuário alvo"; exit 1; }
+# 3. Sem privilégio o helper cria com 0700 e não falha.
+rt_probe="$(mktemp -d)/rt"
+( set -euo pipefail
+  chown_target_user() { :; }
+  ensure_runtime_dir() { install -d -m 0700 "$@" || return 1; chown_target_user "$@"; }
+  ensure_runtime_dir "$rt_probe"
+  ensure_runtime_dir "$rt_probe" ) || { echo "FAIL: ensure_runtime_dir não é idempotente"; exit 1; }
+test "$(stat -c '%a' "$rt_probe")" = "700" \
+    || { echo "FAIL: runtime dir deveria ser 0700, é $(stat -c '%a' "$rt_probe")"; exit 1; }
+rm -rf "$rt_probe"
+echo "  runtime dir ownership ok"
+
+echo "=== ajustes de host pulados viram um resumo com o que fazer ==="
+# Treze WARN "skipped" não davam ao usuário nenhuma ação; agora sai um resumo.
+awk '/^report_skipped_host_tuning\(\)/,/^}/' "$WVM" | grep -q 'windows-vm optimize' \
+    || { echo "FAIL: resumo não aponta o comando que aplica os ajustes"; exit 1; }
+grep -q 'pz_warn "\$label requires root; skipped non-interactive write"' "$WVM" \
+    && { echo "FAIL: ainda avisa item a item"; exit 1; }
+awk '/^apply_host_optimizations\(\)/,/^}/' "$WVM" | grep -q 'report_skipped_host_tuning' \
+    || { echo "FAIL: apply_host_optimizations não emite o resumo"; exit 1; }
+echo "  resumo de tuning ok"
+
+echo "=== upgrade ressincroniza o runtime de boot sozinho (atrito WINVM16) ==="
+# Depois de todo upgrade, /usr/local ficava com o runtime da versão anterior e
+# o usuário precisava rodar `boot install` elevado à mão. Agora o hook do
+# pacote ressincroniza só os arquivos — sem regenerar grub.cfg.
+SR_TMP="$(mktemp -d)"
+export PZ_BOOT_LOCAL_PREFIX="$SR_TMP/local"
+export PZ_BOOT_RUNTIME_PENDING="$SR_TMP/pending"
+sr_vm="$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+
+# Sem integração instalada não há o que ressincronizar, e um upgrade não pode
+# instalar boot por conta própria.
+sr_out="$(bash "$sr_vm" boot sync-runtime 2>&1)" || { echo "FAIL: sync-runtime deveria sair 0 sem integração"; exit 1; }
+grep -qi "not installed" <<< "$sr_out" || { echo "FAIL: sync-runtime não explicou que não há integração: $sr_out"; exit 1; }
+test ! -d "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-runtime" \
+    || { echo "FAIL: sync-runtime criou runtime sem integração instalada"; exit 1; }
+
+# Com integração presente porém velha: um arquivo com conteúdo divergente.
+install -d "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-runtime/linux/windows-vm"
+printf 'versao-antiga\n' > "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-boot-prepare"
+chmod 0755 "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-boot-prepare"
+printf '%s\n' "$(date -Iseconds) stale" > "$PZ_BOOT_RUNTIME_PENDING"
+# runtime-check sai 1 quando a staleness é PROVADA — é contrato, não erro.
+# Sem o `|| true`, `set -e` mata a suíte antes de qualquer asserção.
+state_before="$(bash "$sr_vm" boot runtime-check --json 2>/dev/null | jq -r '.bootRuntimeState' || true)"
+test "$state_before" = "stale" || { echo "FAIL: cenário não começou stale, e sim $state_before"; exit 1; }
+
+bash "$sr_vm" boot sync-runtime >/dev/null 2>&1 \
+    || { echo "FAIL: sync-runtime falhou com integração instalada"; exit 1; }
+state_after="$(bash "$sr_vm" boot runtime-check --json 2>/dev/null | jq -r '.bootRuntimeState' || true)"
+test "$state_after" = "current" || { echo "FAIL: runtime continua $state_after depois do resync"; exit 1; }
+cmp -s "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh" \
+    "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-boot-prepare" \
+    || { echo "FAIL: helper de boot não foi atualizado"; exit 1; }
+test ! -e "$PZ_BOOT_RUNTIME_PENDING" || { echo "FAIL: marcador pendente sobreviveu ao resync"; exit 1; }
+test -r "$PZ_BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-runtime/provenance.json" \
+    || { echo "FAIL: proveniência não registrada"; exit 1; }
+echo "  sync-runtime ok"
+
+# O caminho do hook não pode regenerar bootloader nem mexer em serviços.
+sr_body="$(awk '/^sync_boot_runtime_files\(\)/,/^}/' "$sr_vm")"
+for forbidden in grub-mkconfig update-grub os-prober configure_windows_samba_shares optimize_libvirt_domain; do
+    # `grep -q X && falha` devolve 1 quando X está ausente — que é o caso bom —
+    # e sob `set -e` isso derruba a suíte. Condicional explícito, não encadeado.
+    if grep -q "$forbidden" <<< "$sr_body"; then
+        echo "FAIL: sync_boot_runtime_files toca em $forbidden"; exit 1
+    fi
+done
+grep -Fq 'boot sync-runtime' "$REPO_ROOT/linux/windows-vm/boot-runtime-notice.sh" \
+    || { echo "FAIL: hook de pacote não chama sync-runtime"; exit 1; }
+grep -Fq 'boot install' "$REPO_ROOT/linux/windows-vm/boot-runtime-notice.sh" \
+    || { echo "FAIL: hook perdeu o aviso para o que a cópia não resolve"; exit 1; }
+echo "  hook não regenera bootloader ok"
+unset PZ_BOOT_LOCAL_PREFIX PZ_BOOT_RUNTIME_PENDING
+rm -rf "$SR_TMP"

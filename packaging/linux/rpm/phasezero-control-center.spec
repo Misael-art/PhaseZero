@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.20.0
+Version:        1.20.4
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -47,6 +47,9 @@ fi
 
 %files
 %{_bindir}/phasezero-control-center
+# PZ-AUD-001: instalado em %install desde que `pz` passou a ir para o PATH;
+# sem esta linha o rpmbuild aborta com "installed (but unpackaged) file".
+%{_bindir}/pz
 %{_libdir}/phasezero
 %{_datadir}/applications/io.phasezero.ControlCenter.desktop
 %{_datadir}/metainfo/io.phasezero.ControlCenter.metainfo.xml

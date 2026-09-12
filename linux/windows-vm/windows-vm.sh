@@ -38,10 +38,15 @@ SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 BOOT_HELPER_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-session.sh"
 DISPLAY_SESSION_SOURCE="$PZ_ROOT/linux/steamdeck/display-session.sh"
-BOOT_HELPER_TARGET="/usr/local/lib/phasezero/windows-vm-boot-prepare"
-SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
-DISPLAY_SESSION_TARGET="/usr/local/lib/phasezero/display-session"
-RUNTIME_ROOT="/usr/local/lib/phasezero/windows-vm-runtime"
+# Prefixo do runtime de boot. Em produção é sempre /usr/local — nenhum
+# gerenciador de pacotes é dono dele, que é justamente o motivo de a cópia
+# existir. A variável é costura de teste: permite exercer a ressincronização
+# sem root e sem tocar no host.
+BOOT_LOCAL_PREFIX="${PZ_BOOT_LOCAL_PREFIX:-/usr/local}"
+BOOT_HELPER_TARGET="$BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-boot-prepare"
+SESSION_TARGET="$BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-session"
+DISPLAY_SESSION_TARGET="$BOOT_LOCAL_PREFIX/lib/phasezero/display-session"
+RUNTIME_ROOT="$BOOT_LOCAL_PREFIX/lib/phasezero/windows-vm-runtime"
 # Written by the package post-transaction hook when an upgrade leaves the
 # installed runtime behind; cleared by `boot install` and read by status so
 # the UI can offer the one-click resync even before runtime-check runs.
@@ -251,6 +256,11 @@ run_privileged_noninteractive() {
     return 1
 }
 
+# Ajustes de host pulados por falta de privilégio. Treze WARN seguidos dizendo
+# "skipped" não dão ao usuário nada para fazer; o resumo sai uma vez, no fim,
+# com o comando que aplica tudo de uma vez.
+SKIPPED_HOST_TUNING=()
+
 write_root_value() {
     local path="$1" value="$2"
     local label="${3:-$path}"
@@ -266,7 +276,7 @@ write_root_value() {
     if run_privileged_noninteractive tee "$path" >/dev/null <<< "$value"; then
         return 0
     fi
-    pz_warn "$label requires root; skipped non-interactive write"
+    SKIPPED_HOST_TUNING+=("$label")
     return 0
 }
 
@@ -281,6 +291,15 @@ sysctl_set_noninteractive() {
     elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
         sudo -n sysctl -w "$key=$value" >/dev/null 2>&1 || true
     fi
+}
+
+report_skipped_host_tuning() {
+    [ "${#SKIPPED_HOST_TUNING[@]}" -gt 0 ] || return 0
+    local how="sudo"
+    command -v phasezero-admin >/dev/null 2>&1 && how="phasezero-admin"
+    pz_warn "${#SKIPPED_HOST_TUNING[@]} ajuste(s) de host exigem privilégio e ficaram de fora: ${SKIPPED_HOST_TUNING[*]}"
+    pz_warn "a VM inicia assim mesmo; para aplicá-los: $how pz windows-vm optimize"
+    SKIPPED_HOST_TUNING=()
 }
 
 apply_host_optimizations() {
@@ -299,11 +318,25 @@ apply_host_optimizations() {
     write_root_value /sys/kernel/mm/ksm/run 1 "KSM"
     write_root_value /sys/kernel/mm/ksm/pages_to_scan 1000 "KSM pages_to_scan"
     write_root_value /sys/kernel/mm/ksm/sleep_millisecs 20 "KSM sleep_millisecs"
-    local governor
+    local governor governors=0
     for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
         [ -e "$governor" ] || continue
+        governors=$((governors + 1))
         write_root_value "$governor" performance "CPU governor"
     done
+    # Um governor por núcleo vira uma linha por núcleo; conta como um item.
+    if [ "$governors" -gt 1 ] && [ "${#SKIPPED_HOST_TUNING[@]}" -gt 0 ]; then
+        local kept=() entry seen_governor=0
+        for entry in "${SKIPPED_HOST_TUNING[@]}"; do
+            if [ "$entry" = "CPU governor" ]; then
+                [ "$seen_governor" = "1" ] && continue
+                seen_governor=1
+            fi
+            kept+=("$entry")
+        done
+        SKIPPED_HOST_TUNING=("${kept[@]}")
+    fi
+    report_skipped_host_tuning
 }
 
 json_escape() {
@@ -346,6 +379,15 @@ target_home() {
 chown_target_user() {
     [ "$EUID" -eq 0 ] || return 0
     chown "$TARGET_USER:$TARGET_USER" "$@" 2>/dev/null || true
+}
+
+# O runtime dir vive em /run/user/<uid> do usuário. Criado por um comando
+# elevado (a ponte admin), ele nascia root:root, e toda execução seguinte sem
+# privilégio morria com "Operação não permitida" ao tentar reaplicar o modo —
+# um `boot install` deixava o `windows-vm start` do usuário quebrado.
+ensure_runtime_dir() {
+    install -d -m 0700 "$@" || return 1
+    chown_target_user "$@"
 }
 
 target_user_can_rw() {
@@ -878,7 +920,7 @@ ensure_vm_storage() {
         pz_info "dry-run: would create VM directories under $VM_DIR"
     else
         install -d -m 0700 "$VM_DIR" "$STATE_DIR"
-        install -d -m 0700 "$RUNTIME_DIR"
+        ensure_runtime_dir "$RUNTIME_DIR"
     fi
     if [ ! -f "$DISK_PATH" ]; then
         if [ "$DRY_RUN" = "1" ]; then
@@ -1738,7 +1780,8 @@ start_virtiofs_share() {
 
 start_tpm() {
     command -v swtpm >/dev/null 2>&1 || return 0
-    install -d "$TPM_DIR" "$RUNTIME_DIR"
+    install -d "$TPM_DIR"
+    ensure_runtime_dir "$RUNTIME_DIR"
     local sock="$RUNTIME_DIR/swtpm.sock"
     TPM_PID_FILE="$RUNTIME_DIR/swtpm.pid"
     rm -f "$sock" "$TPM_PID_FILE"
@@ -1877,7 +1920,8 @@ build_qemu_args() {
     else
         # QGA and QMP allow guest execution/power control. Their Unix sockets
         # must never be reachable by another local account.
-        install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"
+        ensure_runtime_dir "$RUNTIME_DIR"
+        install -d -m 0700 "$STATE_DIR"
     fi
     ensure_share_links || return 1
     start_virtiofs_share exchange "$EXCHANGE_DIR"
@@ -3070,6 +3114,59 @@ install_runtime_tree() {
     done < <(runtime_file_specs)
 }
 
+# Copia só os arquivos de runtime para /usr/local/lib/phasezero. É o que um
+# upgrade de pacote invalida: os caminhos que a entrada GRUB já aponta passam a
+# ter código da versão anterior. Deliberadamente NÃO regenera grub.cfg, não roda
+# os-prober, não mexe em Samba nem no domínio libvirt — nada que possa deixar um
+# bootloader meio escrito. Por ser só cópia dos arquivos que o próprio pacote
+# acabou de instalar, roda seguro dentro da transação do gerenciador.
+sync_boot_runtime_files() {
+    install -d "$BOOT_LOCAL_PREFIX/lib/phasezero" "$RUNTIME_ROOT/linux/windows-vm" "$RUNTIME_ROOT/linux/lib" || return 1
+    install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
+    install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
+    install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
+    install_runtime_tree || return 1
+    write_runtime_provenance
+    rm -f -- "$BOOT_RUNTIME_PENDING_FILE" 2>/dev/null || true
+}
+
+write_runtime_provenance() {
+    command -v jq >/dev/null 2>&1 || return 0
+    local provenance_version="unknown"
+    [ -r "$PZ_ROOT/version.json" ] && \
+        provenance_version="$(jq -r '.version // "unknown"' "$PZ_ROOT/version.json" 2>/dev/null || echo unknown)"
+    jq -n \
+        --arg source "$PZ_ROOT" \
+        --arg version "$provenance_version" \
+        --arg installedAt "$(date -Iseconds)" \
+        '{schemaVersion:1, source:$source, version:$version, installedAt:$installedAt}' \
+        > "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
+    chmod 0644 "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
+}
+
+# `boot sync-runtime`: o passo manual que sobrava depois de todo upgrade.
+# Só faz sentido quando a integração de boot já existe — sem ela não há o que
+# ressincronizar, e instalar boot é decisão do usuário, não de um upgrade.
+cmd_boot_sync_runtime() {
+    parse_options "$@"
+    effective_config
+    if [ ! -e "$BOOT_HELPER_TARGET" ] && [ ! -e "$RUNTIME_LAUNCHER" ]; then
+        pz_info "boot integration not installed; nothing to resync"
+        return 0
+    fi
+    # O requisito real é poder escrever no prefixo, não ser root: em produção
+    # /usr/local é do root e dá no mesmo, mas assim o resync continua exercível
+    # com um prefixo de teste e não mente sobre o que precisa.
+    if [ ! -w "$BOOT_LOCAL_PREFIX/lib/phasezero" ]; then
+        pz_error "sem permissão de escrita em $BOOT_LOCAL_PREFIX/lib/phasezero"
+        pz_error "rode com privilégio: phasezero-admin $PZ_ROOT/linux/pz windows-vm boot sync-runtime"
+        return 1
+    fi
+    pz_boot_require_current_root_target
+    sync_boot_runtime_files || { pz_error "boot runtime resync failed"; return 1; }
+    pz_info "Windows VM boot runtime resynced from $PZ_ROOT"
+}
+
 runtime_tree_current() {
     local src dst mode
     while IFS='|' read -r src dst mode; do
@@ -3274,30 +3371,12 @@ install_boot() {
     ensure_share_links 1
     configure_windows_samba_shares
     optimize_libvirt_domain
-    install -d /usr/local/lib/phasezero "$RUNTIME_ROOT/linux/windows-vm" "$RUNTIME_ROOT/linux/lib" /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
-    install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
-    install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
-    install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
-    install_runtime_tree
-    # A successful install resolves the pending-sync marker the package hook
-    # may have left and records where this runtime came from, so a stale
-    # worktree-sourced runtime can never hide as "current" without a trace.
-    rm -f -- "$BOOT_RUNTIME_PENDING_FILE" 2>/dev/null || true
-    if command -v jq >/dev/null 2>&1; then
-        local provenance_version="unknown"
-        # PZ_ROOT is the package root (/usr/lib/phasezero in production, the
-        # repo root in a checkout) and version.json sits directly inside it.
-        [ -r "$PZ_ROOT/version.json" ] && \
-            provenance_version="$(jq -r '.version // "unknown"' "$PZ_ROOT/version.json" 2>/dev/null || echo unknown)"
-        jq -n \
-            --arg source "$PZ_ROOT" \
-            --arg version "$provenance_version" \
-            --arg installedAt "$(date -Iseconds)" \
-            '{schemaVersion:1, source:$source, version:$version, installedAt:$installedAt}' \
-            > "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
-        # Auditability was the point: root's umask must not hide the record.
-        chmod 0644 "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
-    fi
+    install -d /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
+    # Mesma cópia que `boot sync-runtime` faz sozinha: um caminho só, para o
+    # que o hook de pacote executa e o que o install completo executa nunca
+    # divergirem. Também resolve o marcador pendente e grava a proveniência,
+    # para um runtime vindo de worktree nunca passar por "current" sem rastro.
+    sync_boot_runtime_files
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
@@ -3725,7 +3804,8 @@ cmd_boot() {
         clear-next) clear_next_boot "$@" ;;
         dry-run|plan) dry_run_boot "$@" ;;
         runtime-check|check-runtime) runtime_check "$@" ;;
-        *) pz_error "usage: windows-vm boot (install|remove|status|runtime-check|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
+        sync-runtime|resync-runtime) cmd_boot_sync_runtime "$@" ;;
+        *) pz_error "usage: windows-vm boot (install|remove|status|runtime-check|sync-runtime|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
     esac
 }
 

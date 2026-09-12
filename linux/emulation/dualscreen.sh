@@ -17,6 +17,10 @@ set -euo pipefail
 
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
+# pz_ini_set/pz_ini_get vivem aqui; sem este source o apply do Azahar morria
+# com "command not found" no meio da mutação (depois do backup, antes das
+# regras KWin).
+source "$PZ_ROOT/linux/emulation/common.sh"
 source "$PZ_ROOT/linux/steamdeck/display-session.sh"
 
 ACTION="${1:-status}"
@@ -377,7 +381,7 @@ dualscreen_status() {
     local cemu_pad=false azahar_sep=false rules_active=false
     [ -f "$(cemu_settings)" ] && grep -q '<open_pad>true</open_pad>' "$(cemu_settings)" 2>/dev/null && cemu_pad=true
     [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/azahar-emu/qt-config.ini" ] && \
-        grep -q '^layout_option=5' "${XDG_CONFIG_HOME:-$HOME/.config}/azahar-emu/qt-config.ini" 2>/dev/null && azahar_sep=true
+        grep -qE '^layout_option[[:space:]]*=[[:space:]]*5\b' "${XDG_CONFIG_HOME:-$HOME/.config}/azahar-emu/qt-config.ini" 2>/dev/null && azahar_sep=true
     [ -f "$KWINRULES" ] && grep -q "PhaseZero dualscreen" "$KWINRULES" 2>/dev/null && rules_active=true
     jq -n --argjson cemuPad "$cemu_pad" --argjson azaharSep "$azahar_sep" --argjson rulesActive "$rules_active" \
         '{cemu:{gamePadOpen:$cemuPad}, azahar:{separateWindows:$azaharSep}, kwinRulesActive:$rulesActive}'

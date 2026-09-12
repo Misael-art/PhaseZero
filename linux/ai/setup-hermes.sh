@@ -310,8 +310,17 @@ for slot in ("compression", "web_extract", "skills_hub", "mcp"):
     if isinstance(current, dict):
         current["provider"] = "main"
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-os.chmod(path, 0o600)
+# Escrita staged + backup: config.yaml vivo do agente não pode ser truncado
+# por uma escrita direta (crash/disco cheio no meio = config perdida).
+if path.exists():
+    backup = path.with_name(path.name + ".pz-bak")
+    backup.write_bytes(path.read_bytes())
+    backup.chmod(0o600)
+tmp = path.with_name(f".{path.name}.pz-tmp")
+tmp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+tmp.chmod(0o600)
+os.replace(tmp, path)
+path.chmod(0o600)
 PY
     config_has_router_reference || {
         pz_error "Hermes 9Router configuration did not pass reference validation"

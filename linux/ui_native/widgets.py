@@ -887,6 +887,12 @@ class SwitchControl(QCheckBox):
     def sizeHint(self) -> QSize:
         return QSize(126, 30)
 
+    def hitButton(self, pos) -> bool:
+        # paintEvent desenha trilho e rótulo por toda a largura; o hit rect
+        # padrão do QCheckBox cobre só o indicador nativo (à esquerda, vazio),
+        # então clicar no switch visível não alternava nada.
+        return self.rect().contains(pos)
+
     def _state_changed(self, checked: bool) -> None:
         self.setAccessibleDescription("Ligado" if checked else "Desligado")
         self.update()
@@ -1675,7 +1681,9 @@ class ResultDialog(StatefulDialog):
         if sev in {"warning", "error"}:
             if getattr(result, "timed_out", False):
                 retry = self.add_action("Tentar novamente", QDialogButtonBox.AcceptRole, variant="primaryButton")
-                retry.clicked.connect(lambda: self.retry_requested.emit(result.action))
+                # OperationResult expõe action_id; result.action levantava
+                # AttributeError dentro do slot e o botão morria.
+                retry.clicked.connect(lambda: self.retry_requested.emit(result.action_id))
                 retry.clicked.connect(self.accept)
             if result.action_id.startswith("windows."):
                 label = "Revisar Windows VM"
