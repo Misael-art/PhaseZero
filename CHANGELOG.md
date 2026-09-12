@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [Não publicado]
+## [1.20.5] - 2026-09-12
 
 Investigação disparada por um `P:` vazio no guest Windows: a pasta estava correta, mas três defeitos separados impediam o compartilhamento de fazer o que promete.
 
