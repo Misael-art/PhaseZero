@@ -594,13 +594,46 @@ jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") a
 echo "  boot status --json schema ok"
 
 echo "=== Boot: entrada GRUB dedicada para a dock ==="
-PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
-    grep -q 'dock entry: enabled (id: phasezero-windows-vm-dock, hotkey: d, always external output)'
-PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
-    grep -q 'dock entry: disabled'
+# Capture before matching: under `set -o pipefail` a `grep -q` that matches
+# early closes the pipe, the producer dies on SIGPIPE and the test fails for a
+# reason that has nothing to do with the assertion.
+dock_on="$(PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: enabled (id: phasezero-windows-vm-dock, hotkey: d, always external output)' <<< "$dock_on"
+dock_off="$(PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: disabled' <<< "$dock_off"
 grep -Fq -- 'phasezero.windowsvm-display=external' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq -- "menuentry '\$BOOT_DOCK_ENTRY' --id='\$BOOT_DOCK_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 echo "  dock entry dry-run ok"
+
+echo "=== Boot: entrada GRUB dedicada para o painel interno ==="
+# The session has always honoured phasezero.windowsvm-display=internal, but no
+# menuentry emitted it: booting docked left no way back to the handheld panel.
+hh_on="$(PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'handheld entry: enabled (id: phasezero-windows-vm-handheld, hotkey: h, always internal panel)' <<< "$hh_on"
+hh_off="$(PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'handheld entry: disabled' <<< "$hh_off"
+grep -Fq -- 'phasezero.windowsvm-display=internal' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq -- "menuentry '\$BOOT_HANDHELD_ENTRY' --id='\$BOOT_HANDHELD_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+# Both override entries are on unless explicitly disabled: with them off there
+# is no way to override auto-detection from the boot menu at all.
+: > "$TMP_ROOT/empty-root.env"
+unset_default="$(PZ_WINDOWS_VM_ROOT_ENV_FILE="$TMP_ROOT/empty-root.env" \
+    "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: enabled' <<< "$unset_default"
+grep -q 'handheld entry: enabled' <<< "$unset_default"
+echo "  handheld entry dry-run ok; both overrides default to enabled"
+
+echo "=== Boot: menuentry ilegível reporta permissão, não ausência ==="
+# /etc/grub.d is 0700 on most distributions. Reporting "missing" there would
+# claim the entry was never installed when the truth is we cannot look.
+perm_state="$(run_wv_unit '
+    GRUB_SCRIPT="/nonexistent/unreadable-grub-script"
+    printf "state=%s\n" "$(boot_menu_entry_state "PhaseZero Windows VM (Dock)" 1)"
+    printf "off=%s\n" "$(boot_menu_entry_state "PhaseZero Windows VM (Dock)" 0)"
+')"
+grep -q 'state=unknown-permission' <<< "$perm_state"
+grep -q 'off=disabled' <<< "$perm_state"
+echo "  unreadable grub script reports unknown-permission"
 
 launch_check_kvm="$TMP_ROOT/fixture-kvm"
 : > "$launch_check_kvm"

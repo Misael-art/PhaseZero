@@ -58,7 +58,9 @@ BOOT_RUNTIME_PENDING_FILE="${PZ_BOOT_RUNTIME_PENDING:-/var/lib/phasezero/windows
 RUNTIME_LAUNCHER="$RUNTIME_ROOT/linux/windows-vm/windows-vm.sh"
 RUNTIME_GRAPHICS="$RUNTIME_ROOT/linux/windows-vm/graphics.sh"
 RUNTIME_COMMON="$RUNTIME_ROOT/linux/lib/common.sh"
-ROOT_ENV_FILE="/etc/phasezero/windows-vm.env"
+# Overridable so the suite asserts the shipped defaults instead of whatever the
+# developer's own host happens to have persisted in /etc.
+ROOT_ENV_FILE="${PZ_WINDOWS_VM_ROOT_ENV_FILE:-/etc/phasezero/windows-vm.env}"
 SERVICE_FILE="/etc/systemd/system/phasezero-windows-vm-boot-prepare.service"
 WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-windows-vm.desktop"
 XSESSION_FILE="/usr/share/xsessions/phasezero-windows-vm.desktop"
@@ -69,6 +71,8 @@ BOOT_ENTRY="PhaseZero Windows VM"
 BOOT_ID="phasezero-windows-vm"
 BOOT_DOCK_ENTRY="PhaseZero Windows VM (Dock)"
 BOOT_DOCK_ID="phasezero-windows-vm-dock"
+BOOT_HANDHELD_ENTRY="PhaseZero Windows VM (Handheld)"
+BOOT_HANDHELD_ID="phasezero-windows-vm-handheld"
 SAMBA_CONF="${PZ_WINDOWS_VM_SAMBA_CONF:-/etc/samba/smb.conf}"
 SAMBA_BEGIN="# BEGIN PHASEZERO WINDOWS VM SHARES"
 SAMBA_END="# END PHASEZERO WINDOWS VM SHARES"
@@ -3131,6 +3135,7 @@ root_env_content() {
     printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
     printf 'PZ_WINDOWS_VM_REQUIRE_LOGIN=%q\n' "${PZ_WINDOWS_VM_REQUIRE_LOGIN:-0}"
     printf 'PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=%q\n' "$(boot_dock_entry_enabled)"
+    printf 'PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY=%q\n' "$(boot_handheld_entry_enabled)"
 }
 
 root_env_value() {
@@ -3148,12 +3153,48 @@ root_env_value() {
 # Dock GRUB entry state: the process environment wins (so `boot install
 # --dock-entry` takes effect in the same run and tests can pin it), then the
 # persisted root env, then disabled.
+# The default GRUB entry already resolves the display at session start: with an
+# external connector present it takes that output's mode and refresh rate, and
+# falls back to the Deck panel otherwise. These two entries do not carry
+# geometry - baking a resolution into a menuentry would freeze whatever monitor
+# happened to be attached at `boot install` time - they carry intent, pinning
+# the output when auto-detection is not what the operator wants.
+# Enabled by default: the cost is two extra menu lines, and the alternative is
+# having no way to override the choice from the boot menu at all.
 boot_dock_entry_enabled() {
     if [ -n "${PZ_WINDOWS_VM_BOOT_DOCK_ENTRY+x}" ]; then
-        case "$PZ_WINDOWS_VM_BOOT_DOCK_ENTRY" in 1) printf '1' ;; *) printf '0' ;; esac
+        case "$PZ_WINDOWS_VM_BOOT_DOCK_ENTRY" in 0) printf '0' ;; *) printf '1' ;; esac
         return 0
     fi
-    case "$(root_env_value PZ_WINDOWS_VM_BOOT_DOCK_ENTRY)" in 1) printf '1' ;; *) printf '0' ;; esac
+    case "$(root_env_value PZ_WINDOWS_VM_BOOT_DOCK_ENTRY)" in 0) printf '0' ;; *) printf '1' ;; esac
+}
+
+# Symmetric counterpart: the session has always understood
+# phasezero.windowsvm-display=internal, but no menuentry emitted it, so booting
+# while docked gave no way back to the handheld panel.
+# State of one optional menuentry in the managed GRUB script.
+# /etc/grub.d is root-only on most distributions (0700): an unreadable script
+# must report unknown-permission, never "missing".
+boot_menu_entry_state() {
+    local entry="$1" enabled="$2"
+    [ "$enabled" = "1" ] || { printf 'disabled'; return 0; }
+    if [ -r "$GRUB_SCRIPT" ]; then
+        if grep -Fq "menuentry '$entry'" "$GRUB_SCRIPT" 2>/dev/null; then
+            printf 'present'
+        else
+            printf 'missing'
+        fi
+    else
+        printf 'unknown-permission'
+    fi
+}
+
+boot_handheld_entry_enabled() {
+    if [ -n "${PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY+x}" ]; then
+        case "$PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY" in 0) printf '0' ;; *) printf '1' ;; esac
+        return 0
+    fi
+    case "$(root_env_value PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY)" in 0) printf '0' ;; *) printf '1' ;; esac
 }
 
 # Arvore runtime da sessao de boot. Precisa ser auto-contida: durante o boot
@@ -3405,6 +3446,18 @@ menuentry '$BOOT_DOCK_ENTRY' --id='$BOOT_DOCK_ID' --hotkey=d --class windows --c
 }
 EOF
     fi
+    if [ "$(boot_handheld_entry_enabled)" = "1" ]; then
+        cat <<EOF
+menuentry '$BOOT_HANDHELD_ENTRY' --id='$BOOT_HANDHELD_ID' --hotkey=h --class windows --class gnu-linux --class gnu --class os {
+    insmod part_gpt
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $uuid
+    echo 'Booting PhaseZero Windows VM on the handheld panel...'
+    linux $kernel_rel root=UUID=$uuid rw$rootflags quiet splash phasezero.windowsvm=1 phasezero.windowsvm-display=internal
+    initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
+}
+EOF
+    fi
 }
 
 refresh_grub_config() {
@@ -3422,11 +3475,13 @@ grub_cfg_entry_state() {
 }
 
 install_boot() {
-    local loader dock_pref=""
+    local loader dock_pref="" handheld_pref=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --dock-entry) dock_pref=1; shift ;;
             --no-dock-entry) dock_pref=0; shift ;;
+            --handheld-entry) handheld_pref=1; shift ;;
+            --no-handheld-entry) handheld_pref=0; shift ;;
             *) shift ;;
         esac
     done
@@ -3436,6 +3491,9 @@ install_boot() {
     # and package hooks keep regenerating the entry until it is disabled.
     if [ -n "$dock_pref" ]; then
         export PZ_WINDOWS_VM_BOOT_DOCK_ENTRY="$dock_pref"
+    fi
+    if [ -n "$handheld_pref" ]; then
+        export PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY="$handheld_pref"
     fi
     loader="$(detected_loader)"
     pz_boot_backup_bundle "windows-vm-boot-install-${loader}"
@@ -3701,20 +3759,9 @@ status_boot() {
     local loader_entry; loader_entry="$(loader_entry_state "$loader")"
     local grub_cfg_entry="n/a"
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
-    local dock_entry="disabled"
-    if [ "$(boot_dock_entry_enabled)" = "1" ]; then
-        # /etc/grub.d is root-only on most distributions (0700): an
-        # unreadable script must not be reported as "missing".
-        if [ -r "$GRUB_SCRIPT" ]; then
-            if grep -Fq "menuentry '$BOOT_DOCK_ENTRY'" "$GRUB_SCRIPT" 2>/dev/null; then
-                dock_entry="present"
-            else
-                dock_entry="missing"
-            fi
-        else
-            dock_entry="unknown-permission"
-        fi
-    fi
+    local dock_entry handheld_entry
+    dock_entry="$(boot_menu_entry_state "$BOOT_DOCK_ENTRY" "$(boot_dock_entry_enabled)")"
+    handheld_entry="$(boot_menu_entry_state "$BOOT_HANDHELD_ENTRY" "$(boot_handheld_entry_enabled)")"
     local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
     local target_root; target_root="$(pz_boot_target_root)"
     local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
@@ -3761,6 +3808,7 @@ status_boot() {
             --arg configuredBootUser "$configured_user" \
             --arg grubCfgEntry "$grub_cfg_entry" \
             --arg dockEntry "$dock_entry" \
+            --arg handheldEntry "$handheld_entry" \
             --arg grubNextEntry "${grub_next_entry:-none}" \
             --arg grubSavedEntry "${grub_saved_entry:-none}" \
             --arg sddmConf "$SDDM_CONF" \
@@ -3790,6 +3838,7 @@ status_boot() {
                 configuredRepo: $configuredRepo, configuredBootUser: $configuredBootUser,
                 grubCfgEntry: $grubCfgEntry,
                 dockEntryState: $dockEntry, dockEntryInstalled: ($dockEntry == "present"),
+                handheldEntryState: $handheldEntry, handheldEntryInstalled: ($handheldEntry == "present"),
                 grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
                 sddmConf: $sddmConf, activeSddm: $activeSddm,
                 currentBootWindowsVm: $currentBootWindowsVm,
@@ -3816,6 +3865,7 @@ status_boot() {
         echo "configured_boot_user: $configured_user"
         echo "grub_cfg_entry: $grub_cfg_entry"
         echo "dock_entry: $dock_entry"
+        echo "handheld_entry: $handheld_entry"
         echo "grub_next_entry: ${grub_next_entry:-none}"
         echo "grub_saved_entry: ${grub_saved_entry:-none}"
         echo "active_sddm_windows_vm_conf: $active_sddm"
@@ -3852,6 +3902,11 @@ dry_run_boot() {
         echo "  dock entry: enabled (id: $BOOT_DOCK_ID, hotkey: d, always external output)"
     else
         echo "  dock entry: disabled"
+    fi
+    if [ "$(boot_handheld_entry_enabled)" = "1" ]; then
+        echo "  handheld entry: enabled (id: $BOOT_HANDHELD_ID, hotkey: h, always internal panel)"
+    else
+        echo "  handheld entry: disabled"
     fi
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "  grub hotkey: w"
     echo "  one-shot boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next"
