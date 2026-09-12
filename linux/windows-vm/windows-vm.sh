@@ -822,7 +822,10 @@ effective_config() {
     # keeps the narrow share set and the operator sees only exchange in the
     # guest. Say so out loud instead of letting it look like a broken share.
     if [ -f "$CONFIG_FILE" ] && [ "$SHARE_POLICY" = "minimal" ]; then
-        pz_info "share policy=minimal from $CONFIG_FILE (only exchange exposed). Set PZ_WINDOWS_VM_SHARE_POLICY=full there for read-only home/sdcard/removable."
+        # stderr: effective_config runs for every subcommand, including the
+        # --json ones, and pz_log sends INFO to stdout. On stdout this line
+        # lands inside the JSON envelope and breaks every consumer.
+        pz_info "share policy=minimal from $CONFIG_FILE (only exchange exposed). Set PZ_WINDOWS_VM_SHARE_POLICY=full there for read-only home/sdcard/removable." >&2
     fi
     # SPICE binding: loopback by default. Any non-loopback address requires an
     # explicit opt-in and emits a strong warning (unauthenticated SPICE server).

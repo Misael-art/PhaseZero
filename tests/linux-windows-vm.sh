@@ -605,6 +605,24 @@ grep -Fq -- 'phasezero.windowsvm-display=external' "$REPO_ROOT/linux/windows-vm/
 grep -Fq -- "menuentry '\$BOOT_DOCK_ENTRY' --id='\$BOOT_DOCK_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 echo "  dock entry dry-run ok"
 
+echo "=== JSON: avisos de configuração nunca entram no envelope ==="
+# pz_log sends INFO to stdout, and effective_config runs for every subcommand,
+# including the --json ones. An advisory printed there lands inside the JSON
+# envelope and breaks every consumer - which is exactly what a note about a
+# minimal share policy did.
+json_cfg_home="$TMP_ROOT/json-clean"
+json_vm_dir="$json_cfg_home/VirtualMachines/PhaseZero-Windows"
+mkdir -p "$json_cfg_home/config/phasezero" "$json_vm_dir"
+cat > "$json_cfg_home/config/phasezero/windows-vm.conf" <<EOF
+PZ_WINDOWS_VM_DIR=$json_vm_dir
+PZ_WINDOWS_VM_SHARE_POLICY=minimal
+EOF
+: > "$json_vm_dir/phasezero-windows.qcow2"
+json_out="$(HOME="$json_cfg_home" XDG_CONFIG_HOME="$json_cfg_home/config" \
+    "$REPO_ROOT/linux/pz" windows-vm remove --dry-run --json 2>/dev/null)"
+jq -e '.schemaVersion == 1' <<< "$json_out" >/dev/null
+echo "  --json stdout stays parseable with a minimal-policy config present"
+
 echo "=== Boot: entrada GRUB dedicada para o painel interno ==="
 # The session has always honoured phasezero.windowsvm-display=internal, but no
 # menuentry emitted it: booting docked left no way back to the handheld panel.
