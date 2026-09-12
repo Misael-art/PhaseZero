@@ -13,6 +13,10 @@ export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_STATE_HOME="$TMP_ROOT/state"
 export XDG_RUNTIME_DIR="$TMP_ROOT/run"
+# The share bind root defaults to a persistent, disk-backed path so the guest
+# reports real free space. Redirect it into the sandbox: these tests must never
+# touch /var/lib on the host.
+export PZ_WINDOWS_VM_SHARE_STATE_DIR="$TMP_ROOT/run/phasezero-windows-vm"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 
 # Hermetic privilege/mount stubs: every test below must run without real
@@ -149,22 +153,23 @@ plan_output="$("$REPO_ROOT/linux/pz" windows-vm plan --iso "$iso")"
 grep -q 'PhaseZero Windows VM plan' <<< "$plan_output"
 grep -q 'smb_unc' <<< "$plan_output"
 grep -q 'disk_source' <<< "$plan_output"
-grep -q 'share_policy: minimal' <<< "$plan_output"
-grep -q 'share_policy: full' <<< "$(PZ_WINDOWS_VM_SHARE_POLICY=full "$REPO_ROOT/linux/pz" windows-vm plan --iso "$iso")"
+grep -q 'share_policy: full' <<< "$plan_output"
+grep -q 'share_policy: minimal' <<< "$(PZ_WINDOWS_VM_SHARE_POLICY=minimal "$REPO_ROOT/linux/pz" windows-vm plan --iso "$iso")"
 grep -Fq '"$NET_MODEL,netdev=net0' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq 'socket,path=$RUNTIME_DIR/qga.sock' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq 'if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 shares_plan="$("$REPO_ROOT/linux/pz" windows-vm shares dry-run)"
-grep -q 'share policy: minimal' <<< "$shares_plan"
+grep -q 'share policy: full' <<< "$shares_plan"
 grep -q 'exchange/' <<< "$shares_plan"
+grep -q 'PZHome' <<< "$shares_plan"
+shares_plan_minimal="$(PZ_WINDOWS_VM_SHARE_POLICY=minimal "$REPO_ROOT/linux/pz" windows-vm shares dry-run)"
+grep -q 'share policy: minimal' <<< "$shares_plan_minimal"
+grep -q 'exchange/' <<< "$shares_plan_minimal"
 # shellcheck disable=SC2016 # 'SPICE WebDAV' is a literal informational line
-if grep -q 'PZHome\|home/' <<< "$(grep -v 'SPICE WebDAV' <<< "$shares_plan")"; then
+if grep -q 'PZHome\|home/' <<< "$(grep -v 'SPICE WebDAV' <<< "$shares_plan_minimal")"; then
     echo "minimal share plan must not expose PZHome/home" >&2
     exit 1
 fi
-shares_plan_full="$(PZ_WINDOWS_VM_SHARE_POLICY=full "$REPO_ROOT/linux/pz" windows-vm shares dry-run)"
-grep -q 'PZHome' <<< "$shares_plan_full"
-grep -q 'share policy: full' <<< "$shares_plan_full"
 grep -q 'USB auto filter: 0x08,-1,-1,-1,1' <<< "$shares_plan"
 usb_plan="$("$REPO_ROOT/linux/pz" windows-vm usb-access dry-run)"
 grep -q 'active-seat external devices and mass storage' <<< "$usb_plan"
@@ -232,11 +237,12 @@ source "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 [ "$PZ_WINDOWS_VM_TPM_DIR" = "$adopt_dir/tpm" ]
 [ "$PZ_WINDOWS_VM_SMB_HOST" = "10.0.2.2" ]
 [ "$PZ_WINDOWS_VM_LIBVIRT_DOMAIN" = "" ]
-[ "$PZ_WINDOWS_VM_SHARE_POLICY" = "minimal" ]
+[ "$PZ_WINDOWS_VM_SHARE_POLICY" = "full" ]
 echo "  adopt keeps disk, NVRAM, shares and TPM self-contained"
 rm -f "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 grep -Fq 'TARGET_RUNTIME_BASE="/run/user/$target_uid"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
-grep -Fq '/run/media/$TARGET_USER' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq '$REMOVABLE_ROOT/$TARGET_USER' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'REMOVABLE_ROOT="${PZ_WINDOWS_VM_REMOVABLE_ROOT:-/run/media}"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 minimal_ready_root="$TMP_ROOT/minimal-ready"
 mkdir -p "$minimal_ready_root/exchange"
 printf '%s\n' "$minimal_ready_root/exchange" >> "$PZ_STUB_MOUNTS"
@@ -301,7 +307,59 @@ if grep -q '^mount .*shares/home\|^mount .*shares/mnt\|^mount .*shares/sdcard' "
     echo "minimal policy mounted an expanded share" >&2
     exit 1
 fi
-test "$(grep -c '^mount ' "$PZ_STUB_LOG")" -eq 1
+test "$(grep -c '^mount --rbind ' "$PZ_STUB_LOG")" -eq 1
+
+echo "=== shares: binds are recursive and slave (hot-plugged media reach the guest) ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+export PZ_WINDOWS_VM_REMOVABLE_ROOT="$TMP_ROOT/run-media"
+export PZ_WINDOWS_VM_MEDIA_ROOT="$TMP_ROOT/media"
+full_bind="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    TARGET_USER="pzuser"
+    SHARE_POLICY=full DRY_RUN=0 ensure_share_links 0 || exit 90
+    printf "smb_dir=%s\n" "${EFFECTIVE_SMB_DIR:-}"
+')"
+grep -q "smb_dir=$TMP_ROOT/run/phasezero-windows-vm/shares" <<< "$full_bind"
+# A plain --bind would expose the directory without the filesystems mounted
+# under it: every pen drive under /run/media/$USER is its own mount, so the
+# guest would see an empty folder. --rbind carries them; --make-rslave lets the
+# ones plugged in later propagate in, and keeps guest-side umounts from
+# propagating back out to the operator's real media.
+if grep -qE '^mount --bind ' "$PZ_STUB_LOG"; then
+    echo "share binds must be recursive (--rbind), not plain --bind" >&2
+    exit 1
+fi
+grep -q '^mount --rbind .*shares/home' "$PZ_STUB_LOG"
+grep -q '^mount --rbind .*shares/removable' "$PZ_STUB_LOG"
+grep -q '^mount --make-rslave .*shares/removable' "$PZ_STUB_LOG"
+# Expanded shares stay read-only while exchange remains the single writable door.
+grep -q '^mount -o remount,ro,bind .*shares/home' "$PZ_STUB_LOG"
+if grep -q '^mount -o remount,ro,bind .*shares/exchange' "$PZ_STUB_LOG"; then
+    echo "exchange must stay writable under the default policy" >&2
+    exit 1
+fi
+echo "  full policy: recursive slave binds, read-only except exchange"
+
+echo "=== shares: removable root is created when udisks has not made it yet ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+# udisks only creates /run/media/$USER once the first device is mounted. The
+# old code skipped a target that did not exist, so a pen drive inserted after
+# boot could never appear in the guest.
+rm -rf "$PZ_WINDOWS_VM_REMOVABLE_ROOT"
+created_out="$(run_wv_unit '
+    ensure_share_target "$REMOVABLE_ROOT/pzuser" >/dev/null 2>&1 || true
+    printf "created=%s\n" "$([ -d "$REMOVABLE_ROOT/pzuser" ] && echo yes || echo no)"
+    printf "guard=%s\n" "$(ensure_share_target "$HOME/not-media" >/dev/null 2>&1 && echo created || echo refused)"
+')"
+grep -q 'created=yes' <<< "$created_out"
+# The guard keeps this from turning into "mkdir anything the share list names".
+grep -q 'guard=refused' <<< "$created_out"
+echo "  ensure_share_target creates the removable root, and only that"
 
 echo "=== shares: prune success unmounts stale bind and revalidates ==="
 : > "$PZ_STUB_MOUNTS"
@@ -536,13 +594,64 @@ jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") a
 echo "  boot status --json schema ok"
 
 echo "=== Boot: entrada GRUB dedicada para a dock ==="
-PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
-    grep -q 'dock entry: enabled (id: phasezero-windows-vm-dock, hotkey: d, always external output)'
-PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
-    grep -q 'dock entry: disabled'
+# Capture before matching: under `set -o pipefail` a `grep -q` that matches
+# early closes the pipe, the producer dies on SIGPIPE and the test fails for a
+# reason that has nothing to do with the assertion.
+dock_on="$(PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: enabled (id: phasezero-windows-vm-dock, hotkey: d, always external output)' <<< "$dock_on"
+dock_off="$(PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: disabled' <<< "$dock_off"
 grep -Fq -- 'phasezero.windowsvm-display=external' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq -- "menuentry '\$BOOT_DOCK_ENTRY' --id='\$BOOT_DOCK_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 echo "  dock entry dry-run ok"
+
+echo "=== JSON: avisos de configuração nunca entram no envelope ==="
+# pz_log sends INFO to stdout, and effective_config runs for every subcommand,
+# including the --json ones. An advisory printed there lands inside the JSON
+# envelope and breaks every consumer - which is exactly what a note about a
+# minimal share policy did.
+json_cfg_home="$TMP_ROOT/json-clean"
+json_vm_dir="$json_cfg_home/VirtualMachines/PhaseZero-Windows"
+mkdir -p "$json_cfg_home/config/phasezero" "$json_vm_dir"
+cat > "$json_cfg_home/config/phasezero/windows-vm.conf" <<EOF
+PZ_WINDOWS_VM_DIR=$json_vm_dir
+PZ_WINDOWS_VM_SHARE_POLICY=minimal
+EOF
+: > "$json_vm_dir/phasezero-windows.qcow2"
+json_out="$(HOME="$json_cfg_home" XDG_CONFIG_HOME="$json_cfg_home/config" \
+    "$REPO_ROOT/linux/pz" windows-vm remove --dry-run --json 2>/dev/null)"
+jq -e '.schemaVersion == 1' <<< "$json_out" >/dev/null
+echo "  --json stdout stays parseable with a minimal-policy config present"
+
+echo "=== Boot: entrada GRUB dedicada para o painel interno ==="
+# The session has always honoured phasezero.windowsvm-display=internal, but no
+# menuentry emitted it: booting docked left no way back to the handheld panel.
+hh_on="$(PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'handheld entry: enabled (id: phasezero-windows-vm-handheld, hotkey: h, always internal panel)' <<< "$hh_on"
+hh_off="$(PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'handheld entry: disabled' <<< "$hh_off"
+grep -Fq -- 'phasezero.windowsvm-display=internal' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq -- "menuentry '\$BOOT_HANDHELD_ENTRY' --id='\$BOOT_HANDHELD_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+# Both override entries are on unless explicitly disabled: with them off there
+# is no way to override auto-detection from the boot menu at all.
+: > "$TMP_ROOT/empty-root.env"
+unset_default="$(PZ_WINDOWS_VM_ROOT_ENV_FILE="$TMP_ROOT/empty-root.env" \
+    "$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'dock entry: enabled' <<< "$unset_default"
+grep -q 'handheld entry: enabled' <<< "$unset_default"
+echo "  handheld entry dry-run ok; both overrides default to enabled"
+
+echo "=== Boot: menuentry ilegível reporta permissão, não ausência ==="
+# /etc/grub.d is 0700 on most distributions. Reporting "missing" there would
+# claim the entry was never installed when the truth is we cannot look.
+perm_state="$(run_wv_unit '
+    GRUB_SCRIPT="/nonexistent/unreadable-grub-script"
+    printf "state=%s\n" "$(boot_menu_entry_state "PhaseZero Windows VM (Dock)" 1)"
+    printf "off=%s\n" "$(boot_menu_entry_state "PhaseZero Windows VM (Dock)" 0)"
+')"
+grep -q 'state=unknown-permission' <<< "$perm_state"
+grep -q 'off=disabled' <<< "$perm_state"
+echo "  unreadable grub script reports unknown-permission"
 
 launch_check_kvm="$TMP_ROOT/fixture-kvm"
 : > "$launch_check_kvm"

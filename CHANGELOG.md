@@ -3,6 +3,24 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [Não publicado]
+
+Investigação disparada por um `P:` vazio no guest Windows: a pasta estava correta, mas três defeitos separados impediam o compartilhamento de fazer o que promete.
+
+### Alterado
+- **A política de compartilhamento passa a ser `full` por padrão**, com `home`, `/mnt/sdcard`, mídia removível e `/mnt` expostos **somente leitura** e o `exchange` como única porta gravável. O guest lê tudo do lado Linux e a escrita continua passando por um caminho controlado. `PZ_WINDOWS_VM_SHARE_POLICY=minimal` volta ao conjunto antigo; `PZ_WINDOWS_VM_SHARE_WRITABLE=1` continua sendo uma decisão explícita, porque o `smb.conf` gerado usa `guest ok` e `force user` — qualquer coisa rodando no Windows escreveria na home inteira com a identidade do operador.
+
+### Adicionado
+- **Entrada de GRUB `(Handheld)`**, hotkey `h`, que fixa o painel interno via `phasezero.windowsvm-display=internal`. A sessão já entendia essa cmdline, mas nenhum `menuentry` a emitia: bootando acoplado não havia como voltar para a tela do Deck pelo menu. A entrada `(Dock)` existente passa a vir habilitada por padrão — com as duas desligadas não havia como sobrepor a autodetecção pelo boot menu. Nenhuma das duas carrega geometria: gravar resolução num `menuentry` a congelaria no monitor que estivesse ligado no `boot install`. Elas carregam intenção; a resolução continua resolvida no início da sessão, que é onde o monitor realmente é lido.
+
+### Corrigido
+- `boot status` deixa de afirmar estado errado sem privilégio: a leitura de `menuentry` num `/etc/grub.d` ilegível reporta `unknown-permission` em vez de `missing`.
+- `ROOT_ENV_FILE` virou sobreponível (`PZ_WINDOWS_VM_ROOT_ENV_FILE`) para a suíte verificar os defaults distribuídos em vez do que o `/etc` da máquina de quem roda o teste tiver persistido.
+- **Pendrive nunca chegava ao guest**: os compartilhamentos usavam `mount --bind`, que expõe o diretório mas não os sistemas de arquivos montados dentro dele. Cada mídia montada pelo udisks é um mount próprio sob `/run/media/$USER`, então a pasta aparecia vazia mesmo com a política ampla. Agora o bind é `--rbind` com `--make-rslave`: carrega os mounts existentes, deixa os futuros propagarem (que é o que hotplug exige) e impede que um umount do lado do guest volte a propagar para a mídia real do operador.
+- **A raiz de mídia removível não era criada**: o `udisks` só cria `/run/media/$USER` ao montar o primeiro dispositivo, e um alvo inexistente era pulado em silêncio — de modo que nada inserido depois do boot podia aparecer. A raiz passa a ser criada antecipadamente, com um guard que só permite isso nos caminhos de mídia.
+- **O guest recusava cópias grandes alegando disco cheio**: a raiz do compartilhamento ficava no tmpfs de `RUNTIME_DIR`, e o Windows reporta o espaço livre do volume da raiz, não do bind onde o arquivo realmente cai. Com ~1,4 GB anunciados, uma cópia maior era barrada mesmo havendo centenas de GB no destino. A raiz passa a ser persistente e em disco, com degradação anunciada para o tmpfs quando não há como criá-la.
+- `umount -R` na poda de binds obsoletos: um umount simples desanexava o topo e deixava submounts (um pendrive sob `removable/`) ainda visíveis ao guest sob uma política que já não os permitia.
+
 ## [1.20.4] - 2026-09-11
 
 Defeito encontrado clicando na página Temas de um host real, mais dois follow-ups de release que a própria varredura expôs.
