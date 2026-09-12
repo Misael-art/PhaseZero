@@ -43,6 +43,10 @@ jobs:
   shell-lint:
     runs-on: ubuntu-latest
     strategy:
+      # As duas versoes existem para pegar defeitos diferentes. Com o fail-fast
+      # padrao, a primeira perna que falha cancela a outra no meio: o SC2016 na
+      # 0.11.0 abortou a 0.9.0 e escondeu um SC2015 por uma release inteira.
+      fail-fast: false
       matrix:
         shellcheck_version: ['0.9.0', '0.11.0']
     steps:
