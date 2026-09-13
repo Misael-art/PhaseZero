@@ -1962,7 +1962,9 @@ usb_sysfs_dir() {
 steamdeck_controller_sysfs_path() {
     local dev
     for dev in "$(usb_sysfs_dir)"/*; do
-        [ -f "$dev/idVendor" ] && [ -f "$dev/idProduct" ] || continue
+        if [ ! -f "$dev/idVendor" ] || [ ! -f "$dev/idProduct" ]; then
+            continue
+        fi
         [ "$(cat "$dev/idVendor" 2>/dev/null || true)" = "$STEAMDECK_CONTROLLER_VENDOR" ] || continue
         [ "$(cat "$dev/idProduct" 2>/dev/null || true)" = "$STEAMDECK_CONTROLLER_PRODUCT" ] || continue
         printf '%s\n' "$dev"
