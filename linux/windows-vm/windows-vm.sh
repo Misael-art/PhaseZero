@@ -176,6 +176,8 @@ Usage:
 Access:
   home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.
   USB redirection is enabled by default. Raw usb-host passthrough requires --usb-mode all or peripherals.
+  On a direct GRUB boot the Steam Deck controller is passed raw (28de:1205) so Steam Deck Tools sees the
+  real device; the host loses it until the VM exits. PZ_WINDOWS_VM_STEAMDECK_CONTROLLER=raw|virtio|off|auto.
   PCI/GPU passthrough is opt-in through PZ_WINDOWS_VM_PCI_DEVICES="0000:xx:yy.z ...".
 EOF
 }
@@ -1941,10 +1943,83 @@ add_host_input_device() {
     QEMU_ARGS+=("-device" "virtio-input-host-pci,id=$id,evdev=$path")
 }
 
-add_steamdeck_host_inputs() {
+# virtio-input carries every physical control (the joystick node exposes the
+# back paddles, BTN_MODE for STEAM and the trackpads as hats), but the guest
+# driver presents it as a generic HID gamepad. Steam Deck Tools and Steam Input
+# talk to the native Valve HID device instead, so they see nothing under
+# virtio-input. Raw usb-host passthrough hands the real 28de:1205 to Windows at
+# the cost of detaching it from the host for the whole session - acceptable
+# only on a direct GRUB boot, where Windows *is* the session and there is no
+# host UI left to drive.
+STEAMDECK_RAW_CONTROLLER_PATH=""
+STEAMDECK_CONTROLLER_VENDOR="28de"
+STEAMDECK_CONTROLLER_PRODUCT="1205"
+
+usb_sysfs_dir() {
+    printf '%s\n' "${PZ_WINDOWS_VM_USB_SYSFS_DIR:-/sys/bus/usb/devices}"
+}
+
+steamdeck_controller_sysfs_path() {
+    local dev
+    for dev in "$(usb_sysfs_dir)"/*; do
+        if [ ! -f "$dev/idVendor" ] || [ ! -f "$dev/idProduct" ]; then
+            continue
+        fi
+        [ "$(cat "$dev/idVendor" 2>/dev/null || true)" = "$STEAMDECK_CONTROLLER_VENDOR" ] || continue
+        [ "$(cat "$dev/idProduct" 2>/dev/null || true)" = "$STEAMDECK_CONTROLLER_PRODUCT" ] || continue
+        printf '%s\n' "$dev"
+        return 0
+    done
+    return 1
+}
+
+steamdeck_controller_mode() {
+    local requested="${PZ_WINDOWS_VM_STEAMDECK_CONTROLLER:-auto}"
+    case "$requested" in
+        raw|virtio|off) printf '%s\n' "$requested" ;;
+        auto|"")
+            if [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ]; then
+                printf 'raw\n'
+            else
+                printf 'virtio\n'
+            fi
+            ;;
+        *)
+            pz_warn "invalid PZ_WINDOWS_VM_STEAMDECK_CONTROLLER '$requested'; using virtio"
+            printf 'virtio\n'
+            ;;
+    esac
+}
+
+add_steamdeck_raw_controller() {
+    local dev bus addr
+    dev="$(steamdeck_controller_sysfs_path)" || return 1
+    bus="$(cat "$dev/busnum" 2>/dev/null || true)"
+    addr="$(cat "$dev/devnum" 2>/dev/null || true)"
+    [ -n "$bus" ] && [ -n "$addr" ] || return 1
+    QEMU_ARGS+=("-device" "usb-host,bus=xhci.0,hostbus=$((10#$bus)),hostaddr=$((10#$addr)),id=pz-steamdeck-controller")
+    STEAMDECK_RAW_CONTROLLER_PATH="$dev"
+    return 0
+}
+
+add_steamdeck_inputs() {
     [ "$GRAPHICS_PROFILE" = "virtio-gl" ] || return 0
     host_input_passthrough_enabled || return 0
 
+    case "$(steamdeck_controller_mode)" in
+        off) return 0 ;;
+        raw)
+            if add_steamdeck_raw_controller; then
+                pz_info "steamdeck controller: raw usb-host passthrough; the host loses the controller until the VM exits" >&2
+                return 0
+            fi
+            pz_warn "steamdeck controller ${STEAMDECK_CONTROLLER_VENDOR}:${STEAMDECK_CONTROLLER_PRODUCT} not found on USB; falling back to virtio-input"
+            ;;
+    esac
+    add_steamdeck_host_inputs
+}
+
+add_steamdeck_host_inputs() {
     local by_id_dir="${PZ_WINDOWS_VM_INPUT_BY_ID_DIR:-/dev/input/by-id}"
     local keyboard mouse gamepad
     keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd || true)"
@@ -1959,7 +2034,12 @@ add_steamdeck_host_inputs() {
 add_raw_usb_devices() {
     local mode="$1" dev vendor product bus addr class
     [ "$mode" = "all" ] || [ "$mode" = "peripherals" ] || return 0
-    for dev in /sys/bus/usb/devices/*; do
+    for dev in "$(usb_sysfs_dir)"/*; do
+        # The controller may already be attached by name above; a second
+        # usb-host for the same hostbus/hostaddr makes QEMU refuse to start.
+        if [ -n "${STEAMDECK_RAW_CONTROLLER_PATH:-}" ] && [ "$dev" = "$STEAMDECK_RAW_CONTROLLER_PATH" ]; then
+            continue
+        fi
         if [ ! -f "$dev/idVendor" ] || [ ! -f "$dev/idProduct" ]; then
             continue
         fi
@@ -1993,6 +2073,7 @@ add_pci_devices() {
 build_qemu_args() {
     local audio netdev accel_cpu accel_machine display_geometry=""
     QEMU_ARGS=()
+    STEAMDECK_RAW_CONTROLLER_PATH=""
     VIRTIOFS_COUNT=0
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would prepare runtime dir: $RUNTIME_DIR"
@@ -2067,7 +2148,7 @@ build_qemu_args() {
     if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
         add_spice_usb_redirection
     else
-        add_steamdeck_host_inputs
+        add_steamdeck_inputs
     fi
     add_raw_usb_devices "$USB_MODE"
     audio="$(audio_driver)"

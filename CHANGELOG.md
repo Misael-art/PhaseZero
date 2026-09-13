@@ -3,6 +3,12 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [Não lançado]
+
+### Corrigido
+- **O controle do Deck chegava ao Windows como gamepad genérico.** O boot direto já mapeava os três nós evdev do controle por `virtio-input-host-pci`, e eles carregam tudo (paddles traseiros em `BTN_TRIGGER_HAPPY`, o botão STEAM em `BTN_MODE`, os trackpads como hats) — mas o driver virtio apresenta isso ao guest como um HID comum. O Steam Deck Tools e o Steam Input falam com o HID nativo da Valve, então não enxergavam dispositivo algum: nenhum atalho `STEAM + …`, nenhum perfil Desktop, nenhum botão traseiro. No boot direto pelo GRUB o `28de:1205` passa a ser entregue cru via `usb-host`. O host perde o controle enquanto a VM roda, o que só é aceitável aí — o Windows é a sessão inteira, não há UI do host para onde voltar. Fora do boot direto nada muda: `virtio-input` como antes. `PZ_WINDOWS_VM_STEAMDECK_CONTROLLER=raw|virtio|off` sobrepõe; sem o controle presente o launch degrada para `virtio-input` em vez de falhar.
+- `--usb-mode peripherals` combinado com o boot direto anexava o mesmo controle duas vezes, e o QEMU recusa iniciar com dois `usb-host` para o mesmo `hostbus/hostaddr`.
+
 ## [1.20.7] - 2026-09-13
 
 ### Corrigido
