@@ -412,7 +412,14 @@ direct_boot_graphics_flag() {
     local plan
     plan="$(launcher_graphics_probe virtio-gl 2>/dev/null || true)"
     [ "$(jq -r '.eligible // false' <<<"$plan" 2>/dev/null)" = "true" ] || return 0
-    printf '%s\n' "--graphics virtio-gl"
+    # --experimental is required for an explicitly requested virtio-gl. Without
+    # it the launcher refuses the very profile this probe just proved eligible
+    # ("graphics virtio-gl e experimental; adicione --experimental"), the quick
+    # retry drops to compat, and the guest lands at 1024x768 letterboxed on a
+    # 1280x800 panel - which is what direct boot did on every single run.
+    # The gate exists to stop a human enabling an unproven profile by accident;
+    # here eligibility was just verified against this host by graphics plan.
+    printf '%s\n' "--graphics virtio-gl --experimental"
 }
 
 write_session_state() {
