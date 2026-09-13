@@ -1507,3 +1507,77 @@ grep -Fq 'boot install' "$REPO_ROOT/linux/windows-vm/boot-runtime-notice.sh" \
 echo "  hook não regenera bootloader ok"
 unset PZ_BOOT_LOCAL_PREFIX PZ_BOOT_RUNTIME_PENDING
 rm -rf "$SR_TMP"
+
+echo '=== passthrough do controle do Deck no boot direto ==='
+# --- Steam Deck controller passthrough -------------------------------------
+# Regression: virtio-input hands Windows a generic HID gamepad, which Steam
+# Deck Tools cannot drive. A direct GRUB boot must pass the real 28de:1205.
+CTRL_SYSFS="$TMP_ROOT/sys/bus/usb/devices"
+mkdir -p "$CTRL_SYSFS/3-3" "$CTRL_SYSFS/1-1"
+printf '28de' > "$CTRL_SYSFS/3-3/idVendor"
+printf '1205' > "$CTRL_SYSFS/3-3/idProduct"
+printf '3'    > "$CTRL_SYSFS/3-3/busnum"
+printf '7'    > "$CTRL_SYSFS/3-3/devnum"
+printf '00'   > "$CTRL_SYSFS/3-3/bDeviceClass"
+printf '046d' > "$CTRL_SYSFS/1-1/idVendor"
+printf 'c52b' > "$CTRL_SYSFS/1-1/idProduct"
+printf '1'    > "$CTRL_SYSFS/1-1/busnum"
+printf '4'    > "$CTRL_SYSFS/1-1/devnum"
+printf '00'   > "$CTRL_SYSFS/1-1/bDeviceClass"
+export PZ_WINDOWS_VM_USB_SYSFS_DIR="$CTRL_SYSFS"
+
+ctrl_raw="$(run_wv_unit '
+    GRAPHICS_PROFILE=virtio-gl
+    PZ_WINDOWS_VM_BOOT_SESSION=1
+    QEMU_ARGS=()
+    add_steamdeck_inputs
+    printf "%s\n" "${QEMU_ARGS[@]}"
+' 2>/dev/null)"
+grep -q 'usb-host,bus=xhci.0,hostbus=3,hostaddr=7,id=pz-steamdeck-controller' <<< "$ctrl_raw" || {
+    echo "FAIL: boot session must pass the Deck controller raw" >&2; exit 40; }
+if grep -q 'virtio-input-host-pci' <<< "$ctrl_raw"; then
+    echo "FAIL: raw passthrough must not also attach virtio-input for the same device" >&2; exit 41
+fi
+
+# Outside a boot session the host keeps its controller: virtio-input only.
+ctrl_virtio="$(run_wv_unit '
+    GRAPHICS_PROFILE=virtio-gl
+    PZ_WINDOWS_VM_BOOT_SESSION=0
+    PZ_WINDOWS_VM_HOST_INPUT=1
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="'"$TMP_ROOT"'/by-id"
+    QEMU_ARGS=()
+    add_steamdeck_inputs
+    printf "%s\n" "${QEMU_ARGS[@]}"
+' 2>/dev/null)"
+if grep -q 'pz-steamdeck-controller' <<< "$ctrl_virtio"; then
+    echo "FAIL: non-boot sessions must not steal the controller from the host" >&2; exit 42
+fi
+
+# A missing controller degrades to virtio-input instead of failing the launch.
+ctrl_missing="$(run_wv_unit '
+    GRAPHICS_PROFILE=virtio-gl
+    PZ_WINDOWS_VM_BOOT_SESSION=1
+    PZ_WINDOWS_VM_USB_SYSFS_DIR="'"$TMP_ROOT"'/sys/empty"
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="'"$TMP_ROOT"'/by-id"
+    QEMU_ARGS=()
+    add_steamdeck_inputs
+    printf "rc=%s\n" "$?"
+' 2>/dev/null)"
+grep -q '^rc=0$' <<< "$ctrl_missing" || {
+    echo "FAIL: a missing controller must not abort the launch" >&2; exit 43; }
+
+# usb-mode peripherals must not attach the same device twice: QEMU refuses.
+ctrl_dedupe="$(run_wv_unit '
+    GRAPHICS_PROFILE=virtio-gl
+    PZ_WINDOWS_VM_BOOT_SESSION=1
+    QEMU_ARGS=()
+    add_steamdeck_inputs
+    add_raw_usb_devices peripherals
+    printf "%s\n" "${QEMU_ARGS[@]}"
+' 2>/dev/null)"
+test "$(grep -c 'hostbus=3,hostaddr=7' <<< "$ctrl_dedupe")" -eq 1 || {
+    echo "FAIL: the Deck controller must be attached exactly once" >&2; exit 44; }
+grep -q 'hostbus=1,hostaddr=4' <<< "$ctrl_dedupe" || {
+    echo "FAIL: dedupe must not drop other USB devices" >&2; exit 45; }
+unset PZ_WINDOWS_VM_USB_SYSFS_DIR
+echo '  steamdeck controller passthrough ok'
