@@ -2129,15 +2129,23 @@ start_guest_touch_input_setup() {
         pz_warn "touch-input helper unavailable: $helper"
         return 0
     }
-    timeout="${PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-180}"
-    [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 10 ] && [ "$timeout" -le 600 ] || timeout=180
+    # 180s was shorter than a cold Windows 11 boot on handheld hardware: the
+    # guest reached the desktop long after the waiter had already given up, so
+    # the touch keyboard - the only way to type when QEMU attaches a USB
+    # keyboard - was never enabled. The guest side checks out (vioser.inf
+    # installed, qemu-ga Start=2, DelayedAutoStart=0, --retry-path), so the
+    # window, not the guest, was wrong.
+    timeout="${PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-420}"
+    [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 10 ] && [ "$timeout" -le 900 ] || timeout=420
     log="$STATE_DIR/touch-input.log"
     (
-        local deadline attempt_log
+        local deadline attempt_log started attempts=0
+        started="$SECONDS"
         deadline=$((SECONDS + timeout))
         attempt_log="${log}.tmp.$$"
         trap 'rm -f "$attempt_log"' EXIT
         while [ "$SECONDS" -lt "$deadline" ]; do
+            attempts=$((attempts + 1))
             if [ -S "$RUNTIME_DIR/qga.sock" ] && \
                 "$helper" touch-input --socket "$RUNTIME_DIR/qga.sock" --user "$GUEST_USER" --json \
                     >"$attempt_log" 2>&1; then
@@ -2147,7 +2155,11 @@ start_guest_touch_input_setup() {
             fi
             sleep 2
         done
-        printf '{"success":false,"state":"timeout","action":"touch-input"}\n' >"$attempt_log"
+        # Record how long we actually waited. The previous payload said only
+        # "timeout", which left no way to tell a window that is too short from
+        # a guest that never answers.
+        printf '{"success":false,"state":"timeout","action":"touch-input","waitedSeconds":%s,"attempts":%s}\n' \
+            "$((SECONDS - started))" "$attempts" >"$attempt_log"
         mv -f "$attempt_log" "$log"
         trap - EXIT
     ) &
