@@ -3,6 +3,14 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.6] - 2026-09-12
+
+Reportado de hardware real: no boot handheld o Windows ficava preso numa janela pequena do QEMU, sem preencher os 1280x800 do painel, e sem teclado touch.
+
+### Corrigido
+- **O boot direto nunca conseguiu usar o perfil de vídeo acelerado.** A sessão sonda o host, o `graphics plan` responde elegível sem blockers, a sessão pede `--graphics virtio-gl` — e o launcher recusa, porque a forma explícita exige `--experimental`, flag que a sessão nunca passava. O mesmo perfil lido do arquivo de config era aceito sem a flag: o único chamador que verificava elegibilidade antes de pedir era o único que jamais usava o resultado. Sem `virtio-gl` o guest ignora `xres/yres` e cai em 1024x768 encaixotado, exatamente como o comentário no código já descrevia.
+- **A política de teclado touch falhava em silêncio.** O Windows esconde o teclado touch enquanto houver teclado USB conectado, e o QEMU sempre conecta um — sem essa política não há como digitar num guest handheld. O helper gravava o resultado num log que nada lia; num host real registrou `{"success":false,"state":"timeout"}` e a falha só apareceu quando alguém tentou usar o Windows. `boot status` passa a reportar `touch_input` (`applied`/`timeout`/`unknown`), em texto e JSON.
+
 ## [1.20.5] - 2026-09-12
 
 Investigação disparada por um `P:` vazio no guest Windows: a pasta estava correta, mas três defeitos separados impediam o compartilhamento de fazer o que promete.
