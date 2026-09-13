@@ -656,6 +656,12 @@ touch_states="$(run_wv_unit '
     printf "absent=%s\n" "$(boot_touch_input_state)"
 ')"
 grep -q 'applied=applied' <<< "$touch_states"
+# The wait must outlast a cold Windows 11 boot on handheld hardware. At 180s
+# the waiter gave up before the guest reached the desktop and the touch
+# keyboard was never enabled, with nothing in the payload to tell a short
+# window apart from a guest that never answers.
+grep -Fq 'PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-420' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'waitedSeconds' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'timeout=timeout' <<< "$touch_states"
 grep -q 'absent=unknown' <<< "$touch_states"
 echo "  touch-input state surfaces applied/timeout/unknown"
