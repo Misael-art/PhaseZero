@@ -641,6 +641,25 @@ grep -q 'dock entry: enabled' <<< "$unset_default"
 grep -q 'handheld entry: enabled' <<< "$unset_default"
 echo "  handheld entry dry-run ok; both overrides default to enabled"
 
+echo "=== Boot: resultado da política de teclado touch fica visível ==="
+# Windows hides the touch keyboard while a USB keyboard is attached and QEMU
+# always attaches one, so this policy is the only way to type in a handheld
+# guest. Its result used to go to a log nothing read: it timed out and stayed
+# invisible until someone tried to use Windows with no keyboard.
+touch_states="$(run_wv_unit '
+    STATE_DIR="$HOME/touch-state"; mkdir -p "$STATE_DIR"
+    printf "%s\n" "{\"success\":true,\"action\":\"touch-input\"}" > "$STATE_DIR/touch-input.log"
+    printf "applied=%s\n" "$(boot_touch_input_state)"
+    printf "%s\n" "{\"success\":false,\"state\":\"timeout\",\"action\":\"touch-input\"}" > "$STATE_DIR/touch-input.log"
+    printf "timeout=%s\n" "$(boot_touch_input_state)"
+    rm -f "$STATE_DIR/touch-input.log"
+    printf "absent=%s\n" "$(boot_touch_input_state)"
+')"
+grep -q 'applied=applied' <<< "$touch_states"
+grep -q 'timeout=timeout' <<< "$touch_states"
+grep -q 'absent=unknown' <<< "$touch_states"
+echo "  touch-input state surfaces applied/timeout/unknown"
+
 echo "=== Boot: menuentry ilegível reporta permissão, não ausência ==="
 # /etc/grub.d is 0700 on most distributions. Reporting "missing" there would
 # claim the entry was never installed when the truth is we cannot look.

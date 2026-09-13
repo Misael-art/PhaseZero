@@ -3192,6 +3192,26 @@ boot_menu_entry_state() {
     fi
 }
 
+# Outcome of the background touch-keyboard policy started by the boot session.
+# Windows hides the touch keyboard while a USB keyboard is attached, and QEMU
+# always attaches one, so without this policy a handheld guest has no way to
+# type at all. The helper wrote its result to a log nothing ever read: it timed
+# out waiting for QGA and the failure stayed invisible until someone tried to
+# use Windows with no keyboard.
+boot_touch_input_state() {
+    local log="$STATE_DIR/touch-input.log"
+    [ -r "$log" ] || { printf 'unknown'; return 0; }
+    command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+    local ok state
+    ok="$(jq -r '.success // false' "$log" 2>/dev/null || printf 'false')"
+    [ "$ok" = "true" ] && { printf 'applied'; return 0; }
+    state="$(jq -r '.state // "failed"' "$log" 2>/dev/null || printf 'failed')"
+    case "$state" in
+        ""|null) printf 'failed' ;;
+        *) printf '%s' "$state" ;;
+    esac
+}
+
 boot_handheld_entry_enabled() {
     if [ -n "${PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY+x}" ]; then
         case "$PZ_WINDOWS_VM_BOOT_HANDHELD_ENTRY" in 0) printf '0' ;; *) printf '1' ;; esac
@@ -3762,7 +3782,8 @@ status_boot() {
     local loader_entry; loader_entry="$(loader_entry_state "$loader")"
     local grub_cfg_entry="n/a"
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
-    local dock_entry handheld_entry
+    local dock_entry handheld_entry touch_input
+    touch_input="$(boot_touch_input_state)"
     dock_entry="$(boot_menu_entry_state "$BOOT_DOCK_ENTRY" "$(boot_dock_entry_enabled)")"
     handheld_entry="$(boot_menu_entry_state "$BOOT_HANDHELD_ENTRY" "$(boot_handheld_entry_enabled)")"
     local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
@@ -3812,6 +3833,7 @@ status_boot() {
             --arg grubCfgEntry "$grub_cfg_entry" \
             --arg dockEntry "$dock_entry" \
             --arg handheldEntry "$handheld_entry" \
+            --arg touchInput "$touch_input" \
             --arg grubNextEntry "${grub_next_entry:-none}" \
             --arg grubSavedEntry "${grub_saved_entry:-none}" \
             --arg sddmConf "$SDDM_CONF" \
@@ -3842,6 +3864,7 @@ status_boot() {
                 grubCfgEntry: $grubCfgEntry,
                 dockEntryState: $dockEntry, dockEntryInstalled: ($dockEntry == "present"),
                 handheldEntryState: $handheldEntry, handheldEntryInstalled: ($handheldEntry == "present"),
+                touchInputState: $touchInput, touchInputApplied: ($touchInput == "applied"),
                 grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
                 sddmConf: $sddmConf, activeSddm: $activeSddm,
                 currentBootWindowsVm: $currentBootWindowsVm,
@@ -3869,6 +3892,7 @@ status_boot() {
         echo "grub_cfg_entry: $grub_cfg_entry"
         echo "dock_entry: $dock_entry"
         echo "handheld_entry: $handheld_entry"
+        echo "touch_input: $touch_input"
         echo "grub_next_entry: ${grub_next_entry:-none}"
         echo "grub_saved_entry: ${grub_saved_entry:-none}"
         echo "active_sddm_windows_vm_conf: $active_sddm"
