@@ -3,6 +3,14 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.20.7] - 2026-09-13
+
+### Corrigido
+- **A janela de espera da política de teclado touch era menor que o boot do guest.** O helper aguardava até 180s pelo agente do convidado, mas um Windows arrancando do zero em hardware handheld costuma responder depois disso — e a política era descartada como `timeout` antes de o guest sequer ter chance. Inspeção offline da imagem descartou todas as causas do lado do convidado (`qemu-ga.exe` presente, os sete drivers virtio incluindo `vioser.inf`, serviço com `Start=2`, `DelayedAutoStart=0` e `--retry-path`), o que deixa a janela como a explicação restante. O padrão passa a 420s, configurável até 900s por `PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS`.
+
+### Adicionado
+- O registro de `timeout` da política de teclado touch passa a gravar `waitedSeconds` e `attempts`. Sem isso, uma falha futura não distingue "a janela foi curta demais" de "o agente nunca responde" — e a hipótese acima só se confirma ou cai com esse dado.
+
 ## [1.20.6] - 2026-09-12
 
 Reportado de hardware real: no boot handheld o Windows ficava preso numa janela pequena do QEMU, sem preencher os 1280x800 do painel, e sem teclado touch.
