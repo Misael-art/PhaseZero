@@ -123,6 +123,36 @@ kill -0 "$timer_pid" 2>/dev/null &&
 test ! -f "$revert_pidfile" || { echo "FAIL: confirm não limpou o arquivo" >&2; exit 44; }
 echo "  confirm ok"
 
+echo "=== a unit systemd é a que faz o mapa sobreviver ao login ==="
+# Sem unit o mapa vale uma sessão e some no reboot seguinte. Por fora isso não
+# parece defeito nenhum: não há erro em lugar algum, o controle apenas volta ao
+# lizard mode. Foi assim que "instalado mas não funciona" aconteceu.
+export PZ_SYSTEMD_USER_DIR="$TMP_ROOT/systemd"
+
+# O scc-daemon exige o subcomando posicional no fim. Sem ele a unit entra em
+# laço de reinício e o start ainda dizia "perfil desktop ativo".
+grep -q 'ExecStart=.*PROFILE_DEST start' "$SCRIPT" ||
+    { echo "FAIL: a unit precisa terminar em 'start' ou o daemon recusa os argumentos" >&2; exit 45; }
+grep -q 'WantedBy=default.target' "$SCRIPT" ||
+    { echo "FAIL: a unit precisa de WantedBy para habilitar no login" >&2; exit 46; }
+# start não pode declarar sucesso sem olhar: systemd reporta "active" durante
+# um laço de reinício.
+grep -q 'NRestarts' "$SCRIPT" ||
+    { echo "FAIL: start deve checar NRestarts antes de dizer que ativou" >&2; exit 47; }
+# confirm é o que persiste; sem enable o mapa morre no fim da sessão.
+grep -q 'systemctl --user enable' "$SCRIPT" ||
+    { echo "FAIL: confirm deve habilitar o serviço no login" >&2; exit 48; }
+# --foreground não escreve pidfile; olhar só o pidfile reporta parado um
+# serviço saudável.
+grep -q 'service_active || daemon_pid' "$SCRIPT" ||
+    { echo "FAIL: daemon_running deve aceitar o serviço systemd, não só o pidfile" >&2; exit 49; }
+# a reversão precisa avisar; foi a falta disso que fez o mapa parecer quebrado.
+grep -q 'controller-reverted' "$SCRIPT" ||
+    { echo "FAIL: a reversão deve anunciar-se" >&2; exit 50; }
+grep -q 'controller-reverted)' "$REPO_ROOT/linux/steamdeck/hotkey-actions.sh" ||
+    { echo "FAIL: hotkey-actions.sh sem a ação de aviso da reversão" >&2; exit 51; }
+echo "  persistência ok"
+
 echo "=== o placeholder PZ_ROOT some do perfil instalado ==="
 # shell() precisa de caminho absoluto; um PZ_ROOT literal sobrevivente vira
 # um binding que falha em silêncio no meio da sessão.

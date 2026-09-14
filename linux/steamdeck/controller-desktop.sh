@@ -25,9 +25,14 @@ PROFILE_SRC="$DIR/profiles/$PROFILE_NAME.sccprofile"
 SCC_CONFIG_DIR="${PZ_SCC_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/scc}"
 PROFILE_DIR="$SCC_CONFIG_DIR/profiles"
 PROFILE_DEST="$PROFILE_DIR/$PROFILE_NAME.sccprofile"
-REVERT_SECONDS="${PZ_CONTROLLER_REVERT_SECONDS:-90}"
+# 90s was not enough to pick the Deck up, try a dozen bindings and get back
+# to a terminal; the map reverted mid-test and looked broken.
+REVERT_SECONDS="${PZ_CONTROLLER_REVERT_SECONDS:-300}"
 REVERT_PIDFILE="$SCC_CONFIG_DIR/phasezero-revert.pid"
 DAEMON_PIDFILE="$SCC_CONFIG_DIR/daemon.pid"
+SYSTEMD_USER_DIR="${PZ_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
+SERVICE_NAME="phasezero-controller-desktop.service"
+SERVICE_PATH="$SYSTEMD_USER_DIR/$SERVICE_NAME"
 
 # Overridable so the suite can exercise the missing-mapper path without
 # uninstalling the package on the machine running the tests.
@@ -73,7 +78,47 @@ daemon_pid() {
     printf '%s\n' "$pid"
 }
 
-daemon_running() { daemon_pid >/dev/null 2>&1; }
+# Under systemd the daemon runs with --foreground and never writes the pidfile,
+# so the pidfile alone reports "stopped" for a perfectly healthy service.
+service_active() {
+    systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null
+}
+
+daemon_running() { service_active || daemon_pid >/dev/null 2>&1; }
+
+# Nothing in sc-controller starts the daemon at login, and the package ships
+# no autostart either. Without a unit the map survives exactly one session and
+# disappears on the next boot, which reads from the outside as "installed but
+# not working" - there is no error anywhere, the controller simply goes back to
+# lizard mode.
+service_unit() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero Deck controller desktop map
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$(scc_daemon_bin) --foreground $PROFILE_DEST start
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+install_service() {
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: escreveria $SERVICE_PATH"
+        return 0
+    fi
+    install -d "$SYSTEMD_USER_DIR"
+    printf '%s\n' "$(service_unit)" >"$SERVICE_PATH"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    pz_info "unit instalada: $SERVICE_PATH"
+}
 
 install_profile() {
     local content
@@ -112,10 +157,14 @@ arm_revert() {
         # confirm removes the pidfile; its absence means the operator came
         # back and kept the profile.
         [ -f '$REVERT_PIDFILE' ] || exit 0
+        systemctl --user stop '$SERVICE_NAME' >/dev/null 2>&1 || true
         if [ -f '$DAEMON_PIDFILE' ]; then
             kill \"\$(cat '$DAEMON_PIDFILE' 2>/dev/null)\" >/dev/null 2>&1 || true
         fi
         rm -f '$REVERT_PIDFILE'
+        # A silent revert is how this looked like a broken map: the daemon went
+        # away mid-test and nothing said so.
+        bash '$DIR/hotkey-actions.sh' controller-reverted >/dev/null 2>&1 || true
     " >/dev/null 2>&1 &
     # Give the child a moment to claim the pidfile so `status` and `confirm`
     # never read the wrapper pid.
@@ -145,19 +194,28 @@ cmd_start() {
     fi
 
     install_profile || return 1
+    install_service || return 1
 
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
-        pz_info "dry-run: iniciaria scc-daemon com $PROFILE_NAME"
+        pz_info "dry-run: iniciaria $SERVICE_NAME com $PROFILE_NAME"
         return 0
     fi
 
-    # The daemon takes the profile as a positional argument, so a fresh start
-    # comes up already mapped; set-profile only covers the case where a daemon
-    # was left running from an earlier session.
-    if daemon_running; then
-        scc set-profile "$PROFILE_NAME" >/dev/null 2>&1 ||
-            pz_warn "não consegui trocar o perfil no daemon já ativo; verifique com 'status'"
+    # Run through systemd rather than launching the daemon directly: the unit
+    # is what makes the map come back after a reboot, and starting it by hand
+    # would leave the two paths able to disagree.
+    if systemctl --user start "$SERVICE_NAME" >/dev/null 2>&1; then
+        sleep 3
+        # systemd reports "active" during a restart loop, so a started unit is
+        # not the same as a working one. Claiming success here without looking
+        # is how a crash-looping service passed for a live map.
+        if ! service_active || [ "$(systemctl --user show -p NRestarts --value "$SERVICE_NAME" 2>/dev/null || echo 0)" -gt 0 ]; then
+            pz_error "$SERVICE_NAME não estabilizou; veja: journalctl --user -u $SERVICE_NAME"
+            systemctl --user stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+            return 1
+        fi
     else
+        pz_warn "systemd --user indisponível; iniciando o daemon direto (não sobrevive ao reboot)"
         "$bin" "$PROFILE_DEST" start >/dev/null 2>&1 || true
         sleep 1
     fi
@@ -171,9 +229,18 @@ cmd_confirm() {
         pid="$(cat "$REVERT_PIDFILE" 2>/dev/null || true)"
         [ -n "$pid" ] && kill "$pid" >/dev/null 2>&1 || true
         rm -f "$REVERT_PIDFILE"
-        pz_info "reversão automática cancelada; perfil mantido"
+        pz_info "reversão automática cancelada"
     else
         pz_info "nenhuma reversão pendente"
+    fi
+    # Persisting is the whole point of confirm. Without the enable the map
+    # works until the session ends and then quietly stops existing.
+    if [ "${PZ_DRY_RUN:-0}" != "1" ] && [ -f "$SERVICE_PATH" ]; then
+        if systemctl --user enable "$SERVICE_NAME" >/dev/null 2>&1; then
+            pz_info "perfil mantido e habilitado no login"
+        else
+            pz_warn "não consegui habilitar $SERVICE_NAME; o perfil não voltará após reboot"
+        fi
     fi
 }
 
@@ -184,6 +251,7 @@ cmd_stop() {
         return 0
     fi
     local pid
+    systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
     scc-daemon stop >/dev/null 2>&1 || true
     # `scc-daemon stop` reports success even when it finds no pidfile, so it
     # cannot be the only step. Fall back to the recorded pid, not a pattern.
@@ -196,9 +264,13 @@ cmd_stop() {
 cmd_status() {
     local conflict=""
     conflict="$(conflicting_session || true)"
-    printf '{"profile":"%s","profileInstalled":%s,"controllerPresent":%s,"daemonRunning":%s,"conflictingSession":"%s","revertPending":%s}\n' \
+    local enabled="false"
+    systemctl --user is-enabled "$SERVICE_NAME" >/dev/null 2>&1 && enabled="true"
+    printf '{"profile":"%s","profileInstalled":%s,"serviceInstalled":%s,"enabledAtLogin":%s,"controllerPresent":%s,"daemonRunning":%s,"conflictingSession":"%s","revertPending":%s}\n' \
         "$PROFILE_NAME" \
         "$([ -f "$PROFILE_DEST" ] && echo true || echo false)" \
+        "$([ -f "$SERVICE_PATH" ] && echo true || echo false)" \
+        "$enabled" \
         "$(controller_present && echo true || echo false)" \
         "$(daemon_running && echo true || echo false)" \
         "$conflict" \

@@ -74,8 +74,13 @@ case "$ACTION" in
         pz_error "qdbus6 ausente; não consegui alternar a visão geral"
         exit 1
         ;;
+    controller-reverted)
+        # The revert timer calls this. Without it the daemon just vanishes and
+        # the map looks broken rather than withdrawn.
+        pz_osd_show "input-gamepad" "Mapa do controle revertido (não confirmado). Rode: pz steamdeck controller start"
+        ;;
     *)
-        pz_error "usage: hotkey-actions.sh (handheld|docked-monitor|docked-tv|keyboard|console|dev|cheatsheet|voice|overview)"
+        pz_error "usage: hotkey-actions.sh (handheld|docked-monitor|docked-tv|keyboard|console|dev|cheatsheet|voice|overview|controller-reverted)"
         exit 1
         ;;
 esac
