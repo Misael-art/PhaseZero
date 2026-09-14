@@ -227,7 +227,9 @@ cmd_confirm() {
     if [ -f "$REVERT_PIDFILE" ]; then
         local pid
         pid="$(cat "$REVERT_PIDFILE" 2>/dev/null || true)"
-        [ -n "$pid" ] && kill "$pid" >/dev/null 2>&1 || true
+        if [ -n "$pid" ]; then
+            kill "$pid" >/dev/null 2>&1 || true
+        fi
         rm -f "$REVERT_PIDFILE"
         pz_info "reversão automática cancelada"
     else
