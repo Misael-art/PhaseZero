@@ -31,6 +31,7 @@ Usage:
   pz steamdeck status         Print SteamOS UX status JSON
   pz steamdeck removable install Auto-mount USB removable devices (gated on Windows VM)
   pz steamdeck display status Detect TV/monitor resolution for Game Mode
+  pz steamdeck controller status Map the Deck controller onto the KDE desktop
   pz windows-vm status        Print QEMU/KVM Windows VM status JSON
   pz windows-vm discover      Discover existing Windows VM disks on host
   pz windows-vm plan --iso PATH Preview Windows VM plan
@@ -346,7 +347,7 @@ cmd_flatpak() {
 
 cmd_steamdeck() {
     local action="${1:-}" target="${2:-}"
-    [ -z "$action" ] && { pz_error "usage: pz steamdeck (handheld|docked-tv|docked-monitor|watch|keyboard|console|dev|hotkeys|watcher|privileged|boot|plugins)"; return 1; }
+    [ -z "$action" ] && { pz_error "usage: pz steamdeck (handheld|docked-tv|docked-monitor|watch|keyboard|console|dev|hotkeys|watcher|privileged|boot|plugins|controller)"; return 1; }
     source "$PZ_ROOT/linux/steamdeck/common.sh"
     source "$PZ_ROOT/linux/steamdeck/input-actions.sh"
     case "$action" in
@@ -376,6 +377,7 @@ cmd_steamdeck() {
         conveniences|convenience|launchers) bash "$PZ_ROOT/linux/steamdeck/convenience-launchers.sh" "${target:-status}" ;;
         removable|removable-mount|usb-mount) bash "$PZ_ROOT/linux/steamdeck/install-removable-mount.sh" "${target:-status}" ;;
         display)       bash "$PZ_ROOT/linux/steamdeck/display-session.sh" "${target:-status}" ;;
+        controller|controller-desktop) bash "$PZ_ROOT/linux/steamdeck/controller-desktop.sh" "${target:-status}" ;;
         ux)           bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
         *)            pz_error "unknown steamdeck mode: $action"; return 1 ;;
     esac

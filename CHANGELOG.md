@@ -3,6 +3,15 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [Não lançado]
+
+### Adicionado
+- **Mapa de controle para o desktop KDE** (`pz steamdeck controller`). O driver `hid-steam` já entrega o lizard mode, que move o cursor pelo trackpad e pouco mais: ABXY, os paddles traseiros e os acordes de ombro não emitem nada, então um mapa de desktop precisa de um mapeador em espaço de usuário. O perfil versionado em `linux/steamdeck/profiles/` cobre trackpad como cursor e rolagem, R2/L2 como cliques, ABXY como Enter/Esc/Backspace/Espaço, L1/R1 para navegar abas, L4/R4 para campos, L5 no menu iniciar e R5 na visão geral das atividades. O `start` se recusa a rodar com Steam ou gamescope ativos — dois mapeadores no mesmo controle produzem entrada dobrada, não um mapa combinado.
+- **Atalho para a visão geral das atividades**, no controle (R5) e no teclado (`Meta+Shift+F9`), alternando o efeito `overview` do KWin por D-Bus em vez de sintetizar a tecla, para que o botão e o atalho façam a mesma coisa mesmo se o usuário remapear `Meta+W`.
+
+### Corrigido
+- **A reversão automática do perfil de controle não revertia.** Assumir o controle desliga o lizard mode, e num Deck sem teclado externo um daemon que morre no meio deixa o operador sem ponteiro; por isso todo `start` arma um temporizador. Ele tinha três defeitos, nenhum visível fora de hardware real: `$!` depois de `setsid` registra o wrapper, não o temporizador, e só diverge sob job control (isto é, num terminal), de modo que o arquivo apontava para um processo morto e `confirm` não cancelava nada; o temporizador matava o daemon por padrão de nome, e a própria linha de comando dele contém esse nome, então se matava antes de reverter; e `stop` confiava em `scc-daemon stop`, que devolve sucesso mesmo sem encontrar o daemon. O estado passa a ser lido e escrito por pid registrado, nunca por padrão de processo.
+
 ## [1.20.8] - 2026-09-14
 
 ### Corrigido
