@@ -1197,6 +1197,29 @@ PSEOF
     return 0
 }
 
+# windows-vm.sh marks the VM directory nodatacow before it creates an image,
+# because QEMU opens the disk with cache=none and a copy-on-write, checksummed
+# btrfs file fails its own checksum on readback under O_DIRECT and returns EIO
+# to the guest mid-write. This path creates images too and never did it, so a
+# VM provisioned here got none of that protection - the guard existed and
+# simply was not on this road. The log line matters: the previous version
+# warned into a void, so a failed chattr looked identical to a successful one.
+provision_mark_nodatacow() {
+    local op="$1" vm_dir="$2" fstype
+    [ -d "$vm_dir" ] || return 0
+    command -v chattr >/dev/null 2>&1 || {
+        log_operation "$op" "nodatacow skipped: chattr unavailable"
+        return 0
+    }
+    fstype="$(stat -f -c %T "$vm_dir" 2>/dev/null || true)"
+    [ "$fstype" = "btrfs" ] || return 0
+    if chattr +C "$vm_dir" 2>/dev/null; then
+        log_operation "$op" "btrfs: $vm_dir marked nodatacow before disk creation"
+    else
+        log_operation "$op" "WARNING: could not set nodatacow on $vm_dir; image stays copy-on-write and may hit EIO under O_DIRECT"
+    fi
+}
+
 run_disk() {
     local op="$1"
     local plan_file="$OPERATIONS_DIR/$op/plan.json"
@@ -1210,6 +1233,7 @@ run_disk() {
     local disk_size
     disk_size="$(jq -r '.resources.diskSize // "256G"' "$plan_file")"
     log_operation "$op" "creating disk: $disk_path ($disk_size)"
+    provision_mark_nodatacow "$op" "$vm_dir"
     qemu-img create -f qcow2 "$disk_path" "$disk_size"
     log_operation "$op" "disk created"
     return 0
