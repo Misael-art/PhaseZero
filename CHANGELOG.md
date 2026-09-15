@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [Não lançado]
+## [1.20.9] - 2026-09-15
 
 ### Adicionado
 - **Mapa de controle para o desktop KDE** (`pz steamdeck controller`). O driver `hid-steam` já entrega o lizard mode, que move o cursor pelo trackpad e pouco mais: ABXY, os paddles traseiros e os acordes de ombro não emitem nada, então um mapa de desktop precisa de um mapeador em espaço de usuário. O perfil versionado em `linux/steamdeck/profiles/` cobre trackpad como cursor e rolagem, R2/L2 como cliques, ABXY como Enter/Esc/Backspace/Espaço, L1/R1 para navegar abas, L4/R4 para campos, L5 no menu iniciar e R5 na visão geral das atividades. O `start` se recusa a rodar com Steam ou gamescope ativos — dois mapeadores no mesmo controle produzem entrada dobrada, não um mapa combinado.
