@@ -19,6 +19,16 @@ export XDG_RUNTIME_DIR="$TMP_ROOT/run"
 export PZ_WINDOWS_VM_SHARE_STATE_DIR="$TMP_ROOT/run/phasezero-windows-vm"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 
+# resolve_display_target reads /proc/cmdline and lets a boot token beat the
+# environment, which is correct in production and poison in a test: the whole
+# session suite then passes or fails according to which GRUB entry the machine
+# happened to boot from. A host booted through the "(Dock)" entry carries
+# phasezero.windowsvm-display=external and silently overrode the internal
+# override these cases set. Default every case to an empty cmdline; a case that
+# wants to exercise boot tokens sets this file itself.
+export PZ_WINDOWS_VM_CMDLINE_FILE="$TMP_ROOT/proc-cmdline"
+: >"$PZ_WINDOWS_VM_CMDLINE_FILE"
+
 # Hermetic privilege/mount stubs: every test below must run without real
 # mount/umount/mountpoint/findmnt calls and without real sudo/bigsudo/
 # pkexec/phasezero-admin. Stubs log argv to $PZ_STUB_LOG and keep a fake
@@ -1581,3 +1591,20 @@ grep -q 'hostbus=1,hostaddr=4' <<< "$ctrl_dedupe" || {
     echo "FAIL: dedupe must not drop other USB devices" >&2; exit 45; }
 unset PZ_WINDOWS_VM_USB_SYSFS_DIR
 echo '  steamdeck controller passthrough ok'
+
+echo "=== todo caminho que cria disco marca nodatacow antes ==="
+# A VM do host nasceu pelo provision, que criava o qcow2 sem marcar nodatacow.
+# O guard existia em windows-vm.sh e simplesmente não estava nesta estrada:
+# imagem CoW + checksum + compress-force, aberta com cache=none, falha o
+# próprio checksum na releitura e devolve EIO ao guest no meio da escrita.
+# Isso derrubou um Windows de verdade; o disco estava íntegro o tempo todo.
+for creator in linux/windows-vm/windows-vm.sh linux/windows-vm/provision.sh; do
+    grep -q 'qemu-img create -f qcow2' "$creator" || continue
+    grep -qE 'nodatacow' "$creator" ||
+        { echo "FAIL: $creator cria imagem sem marcar nodatacow" >&2; exit 71; }
+done
+# Marcar depois do create não adianta: o inherit só vale para arquivos novos.
+awk '/^run_disk\(\)/,/^}/' linux/windows-vm/provision.sh |
+    grep -B20 'qemu-img create' | grep -q 'provision_mark_nodatacow' ||
+    { echo "FAIL: provision marca nodatacow depois de criar o disco (tarde demais)" >&2; exit 72; }
+echo "  nodatacow em todo criador ok"
