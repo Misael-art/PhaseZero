@@ -119,6 +119,17 @@ Adicionar IDs, nunca reutilizar. Estados: `pending`, `in_progress`, `verified`,
 
 ## Estado vivo
 
+### Incidente físico 1.20.8 — 2026-09-15
+
+Validação do usuário **falhou**: janela QEMU pequena em Handheld e Dock,
+atalhos e teclado touch indisponíveis. Diagnóstico e recuperação detalhados em
+[winvm-1208-handheld-incident.md](winvm-1208-handheld-incident.md).
+Runtime instalado é 1.20.8. Logs mostram cliente GTK Wayland nativo sob
+Gamescope, resultado touch antigo e erros Btrfs no inode do disco qcow2 ativo
+(root 257, inode 12372912), acompanhados de `qemu: aio failed`.
+WBR-005/006 continuam sem verificação física. Corrigir apresentação não fecha
+o bloqueio de armazenamento registrado em agosto.
+
 | Item | Estado atual | Verificado por | Data |
 |---|---|---|---|
 | Incidente originador | diagnosticado; sem mutação; correções ainda não aplicadas | diagnóstico read-only 2026-08-19 | 2026-08-19 |

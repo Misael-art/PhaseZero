@@ -552,6 +552,42 @@ kill "$touch_socket_pid" 2>/dev/null || true
 wait "$touch_socket_pid" 2>/dev/null || true
 grep -Fq "touch-input --socket $touch_runtime/qga.sock --user phasezero --json" "$touch_capture"
 grep -Fq '"touchKeyboardAutoInvoke":"always"' "$touch_state/touch-input.log"
+# A helper that stalls must fit inside the whole boot budget, and a new boot
+# must not report the previous boot's success while it is still waiting.
+cat > "$touch_helper" <<'EOF'
+#!/usr/bin/env bash
+exec sleep 60
+EOF
+run_wv_unit '
+    RUNTIME_DIR="$WV_TOUCH_RUNTIME"
+    STATE_DIR="$WV_TOUCH_STATE"
+    GUEST_USER=phasezero
+    DRY_RUN=0
+    export PZ_WINDOWS_VM_BOOT_SESSION=1
+    export PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS=10
+    export PZ_WINDOWS_VM_GUEST_LOGIN_HELPER="$WV_TOUCH_HELPER"
+    started=$SECONDS
+    start_guest_touch_input_setup
+    [ "$(boot_touch_input_state)" = pending ]
+    wait "${CLEANUP_PIDS[-1]}"
+    [ "$((SECONDS - started))" -le 14 ]
+    jq -e '\''.state == "timeout" and .waitedSeconds >= 10 and .attempts == 1 and .lastFailure == "guest-policy-unavailable"'\'' "$STATE_DIR/touch-input.log"
+'
+# Ending the session before QGA appears must replace pending with interrupted.
+run_wv_unit '
+    RUNTIME_DIR="$WV_TOUCH_RUNTIME/missing"
+    STATE_DIR="$WV_TOUCH_STATE"
+    GUEST_USER=phasezero
+    DRY_RUN=0
+    export PZ_WINDOWS_VM_BOOT_SESSION=1
+    export PZ_WINDOWS_VM_GUEST_LOGIN_HELPER="$WV_TOUCH_HELPER"
+    start_guest_touch_input_setup
+    worker=${CLEANUP_PIDS[-1]}
+    sleep 1
+    kill -TERM "$worker"
+    wait "$worker"
+    [ "$(boot_touch_input_state)" = interrupted ]
+'
 unset WV_TOUCH_RUNTIME WV_TOUCH_STATE WV_TOUCH_HELPER WV_TOUCH_CAPTURE
 echo "  touch keyboard policy scheduled through QGA"
 
@@ -906,7 +942,12 @@ PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
 gamescope_rc=$?
 set -e
 test "$gamescope_rc" -eq 77
-grep -q -- '--backend drm --expose-wayland -O eDP-1 -r 60 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
+grep -q -- '--backend drm -O eDP-1 -r 60 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen -- env GDK_BACKEND=x11' "$gamescope_args_file"
+if grep -q -- '--expose-wayland' "$gamescope_args_file"; then
+    echo "FAIL: native Wayland must not bypass Gamescope fullscreen" >&2
+    exit 1
+fi
+grep -q -- '-- env GDK_BACKEND=x11' <<< "$gamescope_validation"
 
 mkdir -p "$display_sys/class/drm/card1-DP-1"
 printf 'connected\n' > "$display_sys/class/drm/card1-DP-1/status"
