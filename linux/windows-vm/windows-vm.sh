@@ -2219,28 +2219,43 @@ start_guest_touch_input_setup() {
     timeout="${PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-420}"
     [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 10 ] && [ "$timeout" -le 900 ] || timeout=420
     log="$STATE_DIR/touch-input.log"
+    # Replace the previous boot's result before returning to the launcher.
+    # Short sessions otherwise keep an old timeout/success indefinitely.
+    printf '{"success":false,"state":"pending","action":"touch-input","startedAt":"%s","timeoutSeconds":%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$timeout" >"${log}.tmp.$$"
+    mv -f "${log}.tmp.$$" "$log"
     (
-        local deadline attempt_log started attempts=0
+        local deadline attempt_log started attempts=0 remaining last_failure=socket-unavailable
         started="$SECONDS"
         deadline=$((SECONDS + timeout))
         attempt_log="${log}.tmp.$$"
-        trap 'rm -f "$attempt_log"' EXIT
+        trap '
+            printf "{\"success\":false,\"state\":\"interrupted\",\"action\":\"touch-input\",\"waitedSeconds\":%s,\"attempts\":%s}\n" \
+                "$((SECONDS - started))" "$attempts" >"$attempt_log"
+            mv -f "$attempt_log" "$log"
+        ' EXIT
+        trap 'exit 0' HUP INT TERM
         while [ "$SECONDS" -lt "$deadline" ]; do
             attempts=$((attempts + 1))
-            if [ -S "$RUNTIME_DIR/qga.sock" ] && \
-                "$helper" touch-input --socket "$RUNTIME_DIR/qga.sock" --user "$GUEST_USER" --json \
+            remaining=$((deadline - SECONDS))
+            [ "$remaining" -gt 0 ] || break
+            if [ -S "$RUNTIME_DIR/qga.sock" ]; then
+                last_failure=guest-policy-unavailable
+                if timeout --kill-after=2s "${remaining}s" \
+                    "$helper" touch-input --socket "$RUNTIME_DIR/qga.sock" --user "$GUEST_USER" --json \
                     >"$attempt_log" 2>&1; then
-                mv -f "$attempt_log" "$log"
-                trap - EXIT
-                exit 0
+                    mv -f "$attempt_log" "$log"
+                    trap - EXIT
+                    exit 0
+                fi
             fi
-            sleep 2
+            [ "$SECONDS" -ge "$deadline" ] || sleep 2
         done
         # Record how long we actually waited. The previous payload said only
         # "timeout", which left no way to tell a window that is too short from
         # a guest that never answers.
-        printf '{"success":false,"state":"timeout","action":"touch-input","waitedSeconds":%s,"attempts":%s}\n' \
-            "$((SECONDS - started))" "$attempts" >"$attempt_log"
+        printf '{"success":false,"state":"timeout","action":"touch-input","waitedSeconds":%s,"attempts":%s,"lastFailure":"%s"}\n' \
+            "$((SECONDS - started))" "$attempts" "$last_failure" >"$attempt_log"
         mv -f "$attempt_log" "$log"
         trap - EXIT
     ) &
