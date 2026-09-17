@@ -96,16 +96,28 @@ service_unit() {
 [Unit]
 Description=PhaseZero Deck controller desktop map
 After=graphical-session.target
+# PartOf stops this unit whenever the graphical session stops. The Install
+# section has to name the same target, or the pairing is one-way: a session
+# that bounces - Plasma restarting takes it down for a few seconds - stops the
+# map and never brings it back, and nothing reports an error. Observed on a
+# real Deck: graphical-session.target went inactive at 09:46:42 and active
+# again at 09:47:00; the map died with it and stayed dead for eleven hours.
 PartOf=graphical-session.target
+# The daemon has exited 0 on its own after losing the controller. on-failure
+# treats that as a normal end and leaves the Deck without a pointer, so every
+# exit has to be retried. StartLimit keeps a genuinely broken profile from
+# looping forever instead.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=$(scc_daemon_bin) --foreground $PROFILE_DEST start
-Restart=on-failure
+Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 EOF
 }
 
@@ -238,6 +250,11 @@ cmd_confirm() {
     # Persisting is the whole point of confirm. Without the enable the map
     # works until the session ends and then quietly stops existing.
     if [ "${PZ_DRY_RUN:-0}" != "1" ] && [ -f "$SERVICE_PATH" ]; then
+        # enable only adds the link for the target the unit names today; it
+        # never removes the one an older unit left behind. A host upgraded
+        # from the default.target version keeps both, so the unit starts
+        # outside the graphical session too. Drop the old links first.
+        systemctl --user disable "$SERVICE_NAME" >/dev/null 2>&1 || true
         if systemctl --user enable "$SERVICE_NAME" >/dev/null 2>&1; then
             pz_info "perfil mantido e habilitado no login"
         else
@@ -260,7 +277,14 @@ cmd_stop() {
     if pid="$(daemon_pid)"; then
         kill "$pid" >/dev/null 2>&1 || true
     fi
-    pz_info "perfil desktop desativado; lizard mode volta a valer"
+    # This used to claim lizard mode came back. It does not: taking the
+    # controller detaches it from hid-steam, and releasing it leaves the
+    # firmware with the mouse and keyboard emulation still switched off. A
+    # Deck that lost the daemon was measured with the gamepad node alone
+    # (event/js, no mouse handler) for eleven hours - no pointer at all, and
+    # no error anywhere. Say what actually happens and how to get out of it.
+    pz_info "perfil desktop desativado; o controle não volta ao lizard mode sozinho"
+    pz_info "para recuperar o ponteiro: pz steamdeck controller start"
 }
 
 cmd_status() {
