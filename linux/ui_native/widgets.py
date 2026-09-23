@@ -50,6 +50,7 @@ from . import __version__
 
 from .models import ActionSpec, OperationResult
 from .platform import open_path
+from .preferences import reduced_motion
 from .result_parser import guidance, is_pending_report, restart_required
 
 
@@ -1091,6 +1092,12 @@ def start_shimmer(widget: QWidget) -> None:
     """Start a shimmer opacity loop on a skeleton widget."""
     existing = getattr(widget, "_phasezero_shimmer", None)
     if existing is not None:
+        return
+    if reduced_motion():
+        # LUX-021: movimento reduzido — destaque estático, sem animação.
+        widget.setProperty("shimmer", "true")
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
         return
     effect = QGraphicsOpacityEffect(widget)
     widget.setGraphicsEffect(effect)

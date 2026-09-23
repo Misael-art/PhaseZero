@@ -998,7 +998,10 @@ class MainWindow(QMainWindow):
 
     def toggle_theme(self) -> None:
         self.dark_theme = not self.dark_theme
-        self.theme_changed.emit("dark" if self.dark_theme else "light")
+        theme = "dark" if self.dark_theme else "light"
+        # LUX-021: a escolha explícita sobrevive ao reinício.
+        self.preferences.set_theme(theme)
+        self.theme_changed.emit(theme)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.runner.running:
