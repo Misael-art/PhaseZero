@@ -494,7 +494,7 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(process.kill)
 
         def done(*_args) -> None:
-            if self._graphics_probe is not process:
+            if self._graphics_probe is not process or self._closing:
                 return
             self._graphics_probe = None
             timer.stop()
@@ -1013,6 +1013,10 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._closing = True
+        probe, self._graphics_probe = self._graphics_probe, None
+        if probe is not None:
+            probe.kill()
+            probe.waitForFinished(500)
         self.runner.shutdown()
         if self._host_process is not None:
             self._host_process.kill()
