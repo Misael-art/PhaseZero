@@ -3,6 +3,24 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.21.0] - 2026-09-23
+
+### Corrigido
+- **A prévia de 159 ações que alteram o sistema era só uma leitura de estado, mas o diálogo dizia "Preview concluído".** A prévia de estado passa a se identificar ("isto não simula a mudança") e mostra o que aplicar vai fazer antes do campo CONFIRMAR. Ações de alto risco sem simulação real exigem texto de impacto — o catálogo recusa a ausência (LUX-001).
+- **Esc cancelava a operação em andamento sem perguntar**, na janela principal e no diálogo de progresso, matando o processo no meio de uma instalação. Esc agora só limpa a busca, fechar o progresso só o esconde, e cancelar pede uma segunda decisão (LUX-002).
+- **Falha aparecia como "concluída com avisos"** quando o envelope trazia `state: failed` junto de um próximo passo; e `requiresRestart` aparecia como falha. Agora falha é erro e reinício pendente é "Reinício necessário" (LUX-003).
+- **Tema claro: o item ativo da barra lateral era branco sobre lilás claro (1,2:1).** Novos pares de cor, medidos pelo gate de acessibilidade (LUX-010).
+- **A Visão geral dizia "com avisos" num host saudável** porque contava itens informativos como aviso (LUX-011).
+- **Diálogos maiores que a tela do Steam Deck a 150%/200%** empurravam o botão de confirmar para fora da tela; agora cabem, com corpo rolável e rodapé fixo (LUX-012).
+- **A janela congelava** ao medir gráficos antes de instalar o Windows (até 20 s) e no seletor de boot (até 120 s, esperando a senha); ambos são assíncronos, e o seletor explica a falha pela sessão escolhida (LUX-015).
+- **Início no primeiro uso com 18 botões e ações repetidas**, e o card "Jogos, Android e VM" que só rodava o perfil de jogos (LUX-013). **"Retomar" mostrava leituras de status como a última tarefa**; falhas oferecem "Ver o que falhou" e "Tentar de novo" (LUX-014).
+- **Ctrl+1..9 não seguiam a barra lateral** (LUX-016); **a ajuda do `pz` citava Ctrl+Alt+F1..F6** em vez de Meta+Shift+F1..F8 (LUX-018).
+- **A interface de terminal (`pz ui tui`) rodava instalações privilegiadas sem confirmação e escondia falhas.** Passa a ser só leitura, aponta para `pz ui` e sempre mostra o código de saída (LUX-017).
+- Progresso só de marcadores explícitos (antes "disco 95% usado" movia a barra), leituras expiram em 10 min, falhas do provisionamento do Windows em português (LUX-022); prévia bloqueada explica o motivo (LUX-023); perfis com o recomendado primeiro (LUX-024); Tab do campo CONFIRMAR vai ao botão que ele libera (LUX-025); nomes acessíveis em português e título sem emoji (LUX-030..032).
+
+### Alterado
+- **Barra lateral vira trilho de ícones entre 850 e 1100 px** (Steam Deck a 150%) em vez de sumir atrás do menu; o texto acompanha a fonte do sistema; o tema escolhido é lembrado e o movimento reduzido do desktop desliga a animação de carregamento (LUX-020, LUX-021).
+
 ## [1.20.9] - 2026-09-15
 
 ### Adicionado
