@@ -1472,14 +1472,26 @@ class PreviewDialog(StatefulDialog):
         preview_ok = (result.ok or pending) and not blockers
         dialog_state = "success" if preview_ok and not pending else "warning" if preview_ok else "error"
         state_only = bool(action and action.preview_kind == "state")
+        if not preview_ok:
+            dialog_title = "Não é seguro aplicar agora"
+        elif state_only:
+            dialog_title = "Revisar antes de aplicar"
+        else:
+            dialog_title = "Confirmar operação"
         super().__init__(
-            "Revisar antes de aplicar" if state_only else "Confirmar operação",
+            dialog_title,
             dialog_state,
             parent,
         )
         self.action = action
         guide = guidance(result.parsed)
-        if state_only:
+        if not preview_ok:
+            # LUX-023: prévia que falhou ou tem bloqueios diz por quê.
+            headline = guide["summary"] or (
+                "A verificação encontrou bloqueios." if blockers
+                else "A verificação prévia falhou; nada foi alterado."
+            )
+        elif state_only:
             # LUX-001: a leitura de estado não simula a mudança; nunca
             # chamá-la de preview concluído.
             headline = guide["summary"] or "Estado atual — isto não simula a mudança."
@@ -1490,6 +1502,21 @@ class PreviewDialog(StatefulDialog):
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        if not preview_ok:
+            items = [str(item) for item in blockers] if isinstance(blockers, list) else []
+            for item in items[:8]:
+                blocker = QLabel(f"• {item}")
+                blocker.setObjectName("errorText")
+                blocker.setWordWrap(True)
+                self.body.addWidget(blocker)
+            unlock = QLabel(
+                "Resolva os bloqueios acima e tente de novo." if items
+                else "Veja os detalhes técnicos para a causa e tente de novo."
+            )
+            unlock.setObjectName("cardDescription")
+            unlock.setWordWrap(True)
+            self.body.addWidget(unlock)
+            self.blocked_reason = unlock
         if state_only and action is not None:
             impact = QLabel(f"O que vai acontecer: {action.impact or action.description}")
             impact.setObjectName("impactText")

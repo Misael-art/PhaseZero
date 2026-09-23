@@ -68,3 +68,30 @@ def test_plan_preview_keeps_plan_copy(qapp, by_id):
     dialog = PreviewDialog(_result(action), action)
     assert "Preview concluído" in _texts(dialog)
     assert not hasattr(dialog, "impact_label")
+
+
+def test_blocked_preview_explains_why(qapp, by_id):
+    from linux.ui_native.widgets import PreviewDialog
+
+    action = by_id["waydroid.shares.enable"]
+    result = _result(action)
+    result.parsed = {"blockers": ["Waydroid não está instalado"]}
+    dialog = PreviewDialog(result, action)
+    text = _texts(dialog)
+    assert dialog.windowTitle() == "Não é seguro aplicar agora"
+    assert "Preview concluído" not in text
+    assert "Waydroid não está instalado" in text
+    assert not dialog.confirm.isEnabled()
+    assert dialog.blocked_reason.text()
+
+
+def test_failed_preview_is_not_called_complete(qapp, by_id):
+    from linux.ui_native.widgets import PreviewDialog
+
+    action = by_id["waydroid.shares.enable"]
+    result = _result(action)
+    result.exit_code = 1
+    result.parsed = None
+    dialog = PreviewDialog(result, action)
+    assert "Preview concluído" not in _texts(dialog)
+    assert "falhou" in _texts(dialog)

@@ -631,6 +631,7 @@ QProgressBar::chunk {
 #dialogTitle[state="running"] { color: {{accent}}; }
 #successTitle { color: {{success}}; }
 #errorTitle { color: {{error}}; }
+#errorText { color: {{error}}; }
 QDialog {
     color: {{text}};
     background: {{bg}};
