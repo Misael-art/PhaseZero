@@ -5,6 +5,9 @@ As versões seguem a data de build em `version.json`.
 
 ## [Não lançado]
 
+### Adicionado
+- **Mapa do controle compatível com o Ashyterm.** O terminal da BigCommunity troca de aba com `Ctrl+PageUp/PageDown` e entrega `Ctrl+Tab` ao shell, então L1/R1 do mapa desktop não faziam nada visível nele. Um perfil derivado (`PhaseZero-Ashyterm`) troca só as abas, lendo os atalhos efetivos do Ashyterm — padrões mais o `~/.config/ashyterm/settings.json` do usuário, sem escrever nele —, e um serviço de usuário preso ao do mapa (`phasezero-controller-apps.service`) segue a janela em foco via `kdotool` e alterna o perfil pelo `scc set-profile`, sem reiniciar o daemon. Atalho desativado no Ashyterm mantém o botão do mapa desktop e avisa. A tabela de aplicativos (`linux/steamdeck/controller_apps.py`) aceita outros programas com atalhos próprios.
+
 ### Corrigido
 - **Instalação Windows abandonada podia permanecer `running` para sempre.** O supervisor registra identidade de processo resistente a reutilização de PID, separa o worker, libera descritor de lock nos processos filhos e reconcilia operação órfã como interrompida, preservando arquivos para retomar ou remover.
 - **Inventário ocultava staging parcial e remoção não recuperava operações presas.** Instalações interrompidas, falhas e cancelamentos passam a aparecer com espaço ocupado, retomada, lixeira e liberação permanente confirmada; QEMU vivo bloqueia mutação.

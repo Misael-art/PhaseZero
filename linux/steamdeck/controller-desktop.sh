@@ -33,6 +33,11 @@ DAEMON_PIDFILE="$SCC_CONFIG_DIR/daemon.pid"
 SYSTEMD_USER_DIR="${PZ_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
 SERVICE_NAME="phasezero-controller-desktop.service"
 SERVICE_PATH="$SYSTEMD_USER_DIR/$SERVICE_NAME"
+# Per-application compatibility layer (controller_apps.py): swaps in a derived
+# profile while an application with different shortcuts has focus.
+APPS_HELPER="$DIR/controller_apps.py"
+APPS_SERVICE_NAME="phasezero-controller-apps.service"
+APPS_SERVICE_PATH="$SYSTEMD_USER_DIR/$APPS_SERVICE_NAME"
 
 # Overridable so the suite can exercise the missing-mapper path without
 # uninstalling the package on the machine running the tests.
@@ -121,13 +126,42 @@ WantedBy=graphical-session.target
 EOF
 }
 
+# The switcher only makes sense while the map runs: BindsTo stops it with the
+# map (including the revert timer), and WantedBy on the map's unit starts it
+# whenever the map starts once it is enabled.
+apps_service_unit() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero Deck controller per-application compatibility
+After=$SERVICE_NAME
+BindsTo=$SERVICE_NAME
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 $APPS_HELPER watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=$SERVICE_NAME
+EOF
+}
+
+# kdotool is what reads the focused window on KWin Wayland; without it the
+# switcher would only ever see "no window" and the layer silently does nothing.
+apps_switcher_available() {
+    [ -n "${PZ_ACTIVE_WINDOW_CMD:-}" ] && return 0
+    command -v kdotool >/dev/null 2>&1
+}
+
 install_service() {
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
-        pz_info "dry-run: escreveria $SERVICE_PATH"
+        pz_info "dry-run: escreveria $SERVICE_PATH e $APPS_SERVICE_PATH"
         return 0
     fi
     install -d "$SYSTEMD_USER_DIR"
     printf '%s\n' "$(service_unit)" >"$SERVICE_PATH"
+    printf '%s\n' "$(apps_service_unit)" >"$APPS_SERVICE_PATH"
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     pz_info "unit instalada: $SERVICE_PATH"
 }
@@ -148,6 +182,22 @@ install_profile() {
     pz_backup_file "$PROFILE_DEST" user >/dev/null 2>&1 || true
     printf '%s\n' "$content" >"$PROFILE_DEST"
     pz_info "perfil instalado: $PROFILE_DEST"
+    install_app_profiles
+}
+
+# Derived from the installed desktop profile, so they carry the same PZ_ROOT
+# substitution and pick up any desktop change on the next start.
+install_app_profiles() {
+    local report
+    if ! report="$(python3 "$APPS_HELPER" generate --base "$PROFILE_DEST" --out-dir "$PROFILE_DIR" 2>&1)"; then
+        pz_warn "perfis por aplicativo não gerados: $report"
+        return 0
+    fi
+    pz_info "perfis por aplicativo: $(jq -r '[.profiles[].profile] | join(", ")' <<<"$report" 2>/dev/null || echo '?')"
+    jq -r '.notes[]?' <<<"$report" 2>/dev/null | while IFS= read -r note; do
+        [ -n "$note" ] && pz_warn "$note"
+    done
+    return 0
 }
 
 arm_revert() {
@@ -231,8 +281,18 @@ cmd_start() {
         "$bin" "$PROFILE_DEST" start >/dev/null 2>&1 || true
         sleep 1
     fi
+    start_app_switcher
     arm_revert
     pz_info "perfil desktop ativo"
+}
+
+start_app_switcher() {
+    if ! apps_switcher_available; then
+        pz_warn "kdotool ausente: sem troca automática por aplicativo (Ashyterm usa o mapa desktop)"
+        return 0
+    fi
+    systemctl --user start "$APPS_SERVICE_NAME" >/dev/null 2>&1 ||
+        pz_warn "não consegui iniciar $APPS_SERVICE_NAME; aplicativos usam o mapa desktop"
 }
 
 cmd_confirm() {
@@ -260,6 +320,10 @@ cmd_confirm() {
         else
             pz_warn "não consegui habilitar $SERVICE_NAME; o perfil não voltará após reboot"
         fi
+        if [ -f "$APPS_SERVICE_PATH" ] && apps_switcher_available; then
+            systemctl --user enable "$APPS_SERVICE_NAME" >/dev/null 2>&1 ||
+                pz_warn "não consegui habilitar $APPS_SERVICE_NAME; a troca por aplicativo não voltará após reboot"
+        fi
     fi
 }
 
@@ -270,6 +334,7 @@ cmd_stop() {
         return 0
     fi
     local pid
+    systemctl --user disable --now "$APPS_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
     scc-daemon stop >/dev/null 2>&1 || true
     # `scc-daemon stop` reports success even when it finds no pidfile, so it
@@ -292,7 +357,16 @@ cmd_status() {
     conflict="$(conflicting_session || true)"
     local enabled="false"
     systemctl --user is-enabled "$SERVICE_NAME" >/dev/null 2>&1 && enabled="true"
-    printf '{"profile":"%s","profileInstalled":%s,"serviceInstalled":%s,"enabledAtLogin":%s,"controllerPresent":%s,"daemonRunning":%s,"conflictingSession":"%s","revertPending":%s}\n' \
+    local app_profiles="[]" switcher="false"
+    app_profiles="$(python3 "$APPS_HELPER" list 2>/dev/null | jq -r '.[] | "\(.app)\t\(.profile)"' 2>/dev/null |
+        while IFS=$'\t' read -r app profile; do
+            installed=false
+            [ -f "$PROFILE_DIR/$profile.sccprofile" ] && installed=true
+            printf '{"app":"%s","profile":"%s","installed":%s}\n' "$app" "$profile" "$installed"
+        done | jq -sc . 2>/dev/null || echo '[]')"
+    [ -n "$app_profiles" ] || app_profiles="[]"
+    systemctl --user is-active --quiet "$APPS_SERVICE_NAME" 2>/dev/null && switcher="true"
+    printf '{"profile":"%s","profileInstalled":%s,"serviceInstalled":%s,"enabledAtLogin":%s,"controllerPresent":%s,"daemonRunning":%s,"conflictingSession":"%s","revertPending":%s,"appProfiles":%s,"appSwitcherActive":%s}\n' \
         "$PROFILE_NAME" \
         "$([ -f "$PROFILE_DEST" ] && echo true || echo false)" \
         "$([ -f "$SERVICE_PATH" ] && echo true || echo false)" \
@@ -300,7 +374,9 @@ cmd_status() {
         "$(controller_present && echo true || echo false)" \
         "$(daemon_running && echo true || echo false)" \
         "$conflict" \
-        "$([ -f "$REVERT_PIDFILE" ] && echo true || echo false)"
+        "$([ -f "$REVERT_PIDFILE" ] && echo true || echo false)" \
+        "$app_profiles" \
+        "$switcher"
 }
 
 case "${1:-status}" in

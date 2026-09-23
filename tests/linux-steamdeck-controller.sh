@@ -192,6 +192,48 @@ jq -e '.buttons.DOTS.action | contains("hotkey-actions.sh keyboard")' <<<"$rende
     { echo "FAIL: DOTS deveria chamar o teclado virtual do PhaseZero" >&2; exit 29; }
 echo "  substituição de caminho ok"
 
+echo "=== camada de compatibilidade por aplicativo (Ashyterm) ==="
+# O Ashyterm troca de aba com Ctrl+PageUp/PageDown; L1/R1 do mapa desktop
+# mandam Ctrl+Shift+Tab/Ctrl+Tab, que ele entrega ao shell. Sem a camada os
+# ombros não fazem nada visível no terminal - e nada acusa erro.
+APPS="$REPO_ROOT/linux/steamdeck/controller_apps.py"
+gen_dir="$TMP_ROOT/apps-profiles"
+printf '%s\n' "$rendered" >"$TMP_ROOT/desktop-rendered.sccprofile"
+python3 "$APPS" generate --base "$TMP_ROOT/desktop-rendered.sccprofile" --out-dir "$gen_dir" >/dev/null
+ashy="$gen_dir/PhaseZero-Ashyterm.sccprofile"
+jq -e '.buttons.LB.action | contains("KEY_PAGEUP")' "$ashy" >/dev/null ||
+    { echo "FAIL: L1 no Ashyterm deve ser Ctrl+PageUp" >&2; exit 56; }
+jq -e '.buttons.RB.action | contains("KEY_PAGEDOWN")' "$ashy" >/dev/null ||
+    { echo "FAIL: R1 no Ashyterm deve ser Ctrl+PageDown" >&2; exit 57; }
+# O restante é o mapa desktop: só as abas mudam.
+jq -e --slurpfile d "$TMP_ROOT/desktop-rendered.sccprofile" \
+    '.buttons.A == $d[0].buttons.A and .buttons.DOTS == $d[0].buttons.DOTS and .pad_right == $d[0].pad_right' \
+    "$ashy" >/dev/null || { echo "FAIL: perfil do Ashyterm divergiu do desktop fora das abas" >&2; exit 58; }
+# Atalho do usuário no Ashyterm vence o padrão.
+mkdir -p "$XDG_CONFIG_HOME/ashyterm"
+printf '{"shortcuts":{"next-tab":"<Alt>Right"}}\n' >"$XDG_CONFIG_HOME/ashyterm/settings.json"
+python3 "$APPS" generate --base "$TMP_ROOT/desktop-rendered.sccprofile" --out-dir "$gen_dir" >/dev/null
+jq -e '.buttons.RB.action | contains("KEY_LEFTALT") and contains("KEY_RIGHT")' "$ashy" >/dev/null ||
+    { echo "FAIL: override do usuário no Ashyterm ignorado" >&2; exit 59; }
+rm -f "$XDG_CONFIG_HOME/ashyterm/settings.json"
+# A troca por foco vive enquanto o mapa vive: presa à unit do mapa, parada
+# junto no stop e pela reversão automática (BindsTo).
+# shellcheck disable=SC2016 # nomes de variável literais no script testado
+grep -q 'BindsTo=\$SERVICE_NAME' "$SCRIPT" ||
+    { echo "FAIL: a troca por aplicativo deve estar presa à unit do mapa" >&2; exit 60; }
+# shellcheck disable=SC2016
+grep -q 'WantedBy=\$SERVICE_NAME' "$SCRIPT" ||
+    { echo "FAIL: a troca por aplicativo deve subir com o mapa" >&2; exit 61; }
+# shellcheck disable=SC2016
+grep -q 'disable --now "\$APPS_SERVICE_NAME"' "$SCRIPT" ||
+    { echo "FAIL: stop deve desligar a troca por aplicativo" >&2; exit 62; }
+out="$(bash "$SCRIPT" status)"
+jq -e '.appProfiles | map(.app) | index("ashyterm") != null' <<<"$out" >/dev/null ||
+    { echo "FAIL: status não lista o Ashyterm: $out" >&2; exit 63; }
+jq -e 'has("appSwitcherActive")' <<<"$out" >/dev/null ||
+    { echo "FAIL: status sem appSwitcherActive" >&2; exit 64; }
+echo "  compatibilidade Ashyterm ok"
+
 echo "=== a visão geral tem ação, atalho e registro no KDE ==="
 grep -q 'overview)' "$REPO_ROOT/linux/steamdeck/hotkey-actions.sh" ||
     { echo "FAIL: hotkey-actions.sh sem ação overview" >&2; exit 30; }
