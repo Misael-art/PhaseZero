@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from . import image_registry as reg
 from .models import ActionSpec
 from .provision_player import ProvisionPlayerWindow
-from .widgets import SectionHeader
+from .widgets import SectionHeader, fit_to_screen
 from .windows_install_dialog import completed_image_indices
 
 
@@ -189,7 +189,7 @@ class ImageManagerDialog(QDialog):
         self.setAutoFillBackground(True)
         self.setWindowTitle("Gerenciar imagens e VMs Windows")
         self.setWindowModality(Qt.WindowModal)
-        self.setMinimumSize(780, 540)
+        fit_to_screen(self, 780, 540)
 
         self._root = Path(root)
         self._runner = runner

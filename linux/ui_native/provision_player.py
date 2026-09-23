@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from .models import ActionSpec
 from .platform import admin_bridge, state_dir, secure_file
+from .widgets import fit_to_screen
 
 
 PLAYER_STATE_PATH = state_dir() / "windows-vm" / "player.json"
@@ -439,8 +440,7 @@ class ProvisionPlayerWindow(QDialog):
 
         self.setWindowTitle("Preparar Windows e reiniciar")
         self.setWindowModality(Qt.WindowModal)
-        self.setMinimumSize(720, 460)
-        self.resize(820, 540)
+        fit_to_screen(self, 820, 540)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -577,7 +577,10 @@ class ProvisionPlayerWindow(QDialog):
         self._log_frame.setVisible(visible)
         self._details_btn.setText("Ocultar detalhes técnicos" if visible else "Ver detalhes técnicos")
         if visible:
-            self.resize(max(self.width(), 820), max(self.height(), 640))
+            self.resize(
+                min(max(self.width(), 820), self.maximumWidth()),
+                min(max(self.height(), 640), self.maximumHeight()),
+            )
 
     def _set_state(self, state: str) -> None:
         self._state = state

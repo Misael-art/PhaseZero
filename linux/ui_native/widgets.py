@@ -138,6 +138,33 @@ def action_icon(widget: QWidget, action: ActionSpec, size: int = 24) -> QIcon:
     return themed_icon(widget, action.icon, fallback)
 
 
+def available_geometry(widget: QWidget):
+    """Usable screen area for ``widget`` (patched by tests to emulate a Deck)."""
+    screen = widget.screen() if widget is not None else None
+    screen = screen or QApplication.primaryScreen()
+    return screen.availableGeometry() if screen is not None else None
+
+
+def fit_to_screen(
+    widget: QWidget, width: int, height: int, *, minimum: tuple[int, int] = (320, 240), margin: int = 24
+) -> None:
+    """LUX-012: prefer ``width×height`` but never exceed the usable screen.
+
+    Steam Deck at 150% offers 853×533 logical pixels; fixed minimums of
+    760×540 pushed the action footer off-screen.
+    """
+    area = available_geometry(widget)
+    if area is None:
+        widget.setMinimumSize(*minimum)
+        widget.resize(width, height)
+        return
+    max_w = max(minimum[0], area.width() - margin)
+    max_h = max(minimum[1], area.height() - margin)
+    widget.setMinimumSize(min(minimum[0], max_w), min(minimum[1], max_h))
+    widget.setMaximumSize(max_w, max_h)
+    widget.resize(min(width, max_w), min(height, max_h))
+
+
 def _repolish(widget: QWidget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
@@ -939,7 +966,7 @@ class ParameterDialog(QDialog):
         super().__init__(parent)
         self.action = action
         self.setWindowTitle(action.title)
-        self.setMinimumWidth(560)
+        fit_to_screen(self, 560, 420)
         layout = QVBoxLayout(self)
         description = QLabel(action.description)
         description.setWordWrap(True)
@@ -1385,7 +1412,7 @@ class StatefulDialog(QDialog):
         self.setObjectName("statefulDialog")
         self.setProperty("state", state)
         self.setWindowTitle(title)
-        self.setMinimumSize(760, 540)
+        fit_to_screen(self, 760, 540)
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
         icon = QLabel(STATE_ICONS.get(state, "ℹ"))
@@ -1398,8 +1425,18 @@ class StatefulDialog(QDialog):
         header.addWidget(icon)
         header.addWidget(heading, 1)
         outer.addLayout(header)
-        self.body = QVBoxLayout()
-        outer.addLayout(self.body, 1)
+        # LUX-012: corpo rola; cabeçalho e rodapé de ações ficam sempre
+        # visíveis, mesmo numa tela pequena com escala alta.
+        body_host = QWidget()
+        body_host.setObjectName("dialogBody")
+        self.body = QVBoxLayout(body_host)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(QFrame.NoFrame)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body_scroll.setWidget(body_host)
+        outer.addWidget(self.body_scroll, 1)
         self.footer = QDialogButtonBox()
         outer.addWidget(self.footer)
 
@@ -1653,8 +1690,7 @@ class ResultDialog(StatefulDialog):
         if restart_required(result.parsed):
             title = "Reinício necessário"
         super().__init__(title, sev, parent)
-        self.setMinimumSize(660, 380)
-        self.resize(760, 480)
+        fit_to_screen(self, 760, 480)
         self.formatted = formatted
         message = {
             "success": "Tudo pronto. A operação terminou como esperado.",

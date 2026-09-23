@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .widgets import themed_icon
+from .widgets import fit_to_screen, themed_icon
 from .platform import admin_bridge
 
 
@@ -87,7 +87,7 @@ class BootSelectorWindow(QDialog):
         self.choice_buttons: dict[int, str] = {}
         self.group = QButtonGroup(self)
         self.setWindowTitle("PhaseZero - Seletor de Boot")
-        self.setMinimumSize(560, 560)
+        fit_to_screen(self, 560, 560)
         self._build_ui()
         if smoke_test:
             self.setProperty("smokeTest", True)
