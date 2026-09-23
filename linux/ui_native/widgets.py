@@ -1434,15 +1434,31 @@ class PreviewDialog(StatefulDialog):
         pending = is_pending_report(result.parsed)
         preview_ok = (result.ok or pending) and not blockers
         dialog_state = "success" if preview_ok and not pending else "warning" if preview_ok else "error"
-        super().__init__("Confirmar operação", dialog_state, parent)
+        state_only = bool(action and action.preview_kind == "state")
+        super().__init__(
+            "Revisar antes de aplicar" if state_only else "Confirmar operação",
+            dialog_state,
+            parent,
+        )
         self.action = action
         guide = guidance(result.parsed)
-        headline = guide["summary"] or "Preview concluído. Nenhuma mutação foi executada."
+        if state_only:
+            # LUX-001: a leitura de estado não simula a mudança; nunca
+            # chamá-la de preview concluído.
+            headline = guide["summary"] or "Estado atual — isto não simula a mudança."
+        else:
+            headline = guide["summary"] or "Preview concluído. Nenhuma mutação foi executada."
         next_step = guide["next_action"]
         summary = QLabel(headline)
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        if state_only and action is not None:
+            impact = QLabel(f"O que vai acontecer: {action.impact or action.description}")
+            impact.setObjectName("impactText")
+            impact.setWordWrap(True)
+            self.body.addWidget(impact)
+            self.impact_label = impact
         for reason in guide["reasons"]:
             reason_label = QLabel(f"• {reason}")
             reason_label.setWordWrap(True)
@@ -1523,8 +1539,10 @@ class PreviewDialog(StatefulDialog):
             self.confirmation.textChanged.connect(
                 lambda text: self.confirm.setEnabled(preview_ok and text.strip() == "CONFIRMAR")
             )
-            self.body.insertWidget(1, warning)
-            self.body.insertWidget(2, self.confirmation)
+            anchor = getattr(self, "impact_label", None) or summary
+            position = self.body.indexOf(anchor) + 1
+            self.body.insertWidget(position, warning)
+            self.body.insertWidget(position + 1, self.confirmation)
             self.confirmation.setFocus()
         cancel.clicked.connect(self.reject)
         self.confirm.clicked.connect(self.accept)

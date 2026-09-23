@@ -45,6 +45,21 @@ class ActionSpec:
     # Restore previews need the passphrase to verify/decrypt the bundle before
     # any mutation. The value still travels only through stdin.
     stdin_on_preview: bool = False
+    # LUX-001: what the user is told will change when the preview is only a
+    # state read. Mandatory for high-risk actions without a real plan.
+    impact: str = ""
+    # "" = infer from preview_args; "plan" or "state" force the kind.
+    preview_kind_override: str = ""
+
+    @property
+    def preview_kind(self) -> str:
+        """``plan`` when the preview simulates the change, else ``state``."""
+        if self.preview_kind_override:
+            return self.preview_kind_override
+        text = " ".join(self.preview_args or ())
+        if any(marker in text for marker in ("dry-run", "plan", "preview")):
+            return "plan"
+        return "state"
 
     def resolved_args(
         self,

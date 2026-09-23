@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from .graphics_profiles import provision_graphics_options
@@ -146,6 +147,35 @@ def _p(
     placeholder: str = "",
 ) -> ActionParameter:
     return ActionParameter(name, label, kind, required, choices, placeholder)
+
+
+# LUX-001: high-risk actions whose preview only reads state must say, in the
+# confirmation itself, what applying will do. Actions whose preview command is
+# itself a plan are listed as "plan" overrides.
+HIGH_RISK_IMPACT: dict[str, str] = {
+    "system.deps.install": "Instala pacotes do sistema com privilégio de administrador. A lista exibida é o estado atual das dependências, não uma simulação.",
+    "windows.provision.cancel": "Interrompe a instalação do Windows em andamento. O disco fica preservado para retomar depois.",
+    "windows.provision.discard": "Apaga os arquivos temporários da instalação cancelada. Não dá para retomar essa instalação depois.",
+    "windows.guest-login.auto": "O Windows passa a entrar sem pedir senha. Quem ligar a VM acessa a área de trabalho direto.",
+    "windows.guest-login.password": "Desliga o autologin e troca a senha da conta do Windows pela que você informar.",
+    "waydroid.boot.next-reboot": "Agenda o Android como próximo boot e REINICIA o computador imediatamente. Trabalho não salvo em outros apps será perdido.",
+    "boot.efi": "Grava um carregador EFI de reserva na partição de boot. Um erro aqui pode exigir o cartão de resgate do GRUB para voltar a iniciar.",
+    "ai.omo.uninstall": "Remove o plugin OMO do OpenCode. Configurações dele deixam de ser aplicadas.",
+    "ai.secrets.rotate": "Gera chaves novas para os provedores de IA gerenciados. Apps que usam as chaves antigas precisam ser reabertos.",
+    "ai.codexbar.plasmoid-remove": "Faz backup do layout do Plasma e remove o KodexBar dos painéis e o pacote do widget.",
+}
+PREVIEW_KIND_OVERRIDES: dict[str, str] = {
+    # `pz host wipe` sem --apply é o plano do wipe.
+    "host.wipe": "plan",
+}
+
+
+def _with_impact(action: ActionSpec) -> ActionSpec:
+    impact = HIGH_RISK_IMPACT.get(action.id, action.impact)
+    kind = PREVIEW_KIND_OVERRIDES.get(action.id, action.preview_kind_override)
+    if impact == action.impact and kind == action.preview_kind_override:
+        return action
+    return replace(action, impact=impact, preview_kind_override=kind)
 
 
 def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSpec]:
@@ -1239,6 +1269,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         )
     )
 
+    actions = [_with_impact(action) for action in actions]
     validate_catalog(actions)
     selected_platform = current_platform(platform_name)
     return [action for action in actions if selected_platform in action.platforms]
@@ -1258,6 +1289,8 @@ def validate_catalog(actions: list[ActionSpec]) -> None:
             raise ValueError(f"invalid risk for {item.id}: {item.risk}")
         if item.mutable and item.preview_args is None:
             raise ValueError(f"mutable action lacks preview: {item.id}")
+        if item.mutable and item.risk == "high" and item.preview_kind != "plan" and not item.impact:
+            raise ValueError(f"high-risk action needs a plan preview or impact text: {item.id}")
         if not item.platforms:
             raise ValueError(f"action lacks platform: {item.id}")
         names = item.parameter_names
