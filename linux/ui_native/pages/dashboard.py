@@ -113,10 +113,11 @@ class DashboardPage(BasePage):
         host_layout.setContentsMargins(2, 2, 8, 8)
         host_layout.setSpacing(14)
 
+        # LUX-032: sem emoji no título — leitores de tela o anunciavam.
         if self.first_use:
-            welcome = QLabel("Vamos configurar seu computador 👋")
+            welcome = QLabel("Vamos configurar seu computador")
         else:
-            welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
+            welcome = QLabel("Bem-vindo de volta ao PhaseZero")
         welcome.setObjectName("welcomeTitle")
         welcome.setWordWrap(True)
         host_layout.addWidget(welcome)
