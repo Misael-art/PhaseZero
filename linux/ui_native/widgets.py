@@ -1411,6 +1411,15 @@ def sanitized_command(command: list[str]) -> str:
     return shlex.join(output)
 
 
+STATE_NAMES_PT = {
+    "success": "concluído",
+    "warning": "aviso",
+    "error": "erro",
+    "running": "em andamento",
+    "info": "informação",
+}
+
+
 class StatefulDialog(QDialog):
     """Accessible dialog foundation with semantic state header and action footer."""
 
@@ -1425,7 +1434,8 @@ class StatefulDialog(QDialog):
         icon = QLabel(STATE_ICONS.get(state, "ℹ"))
         icon.setObjectName("dialogStateIcon")
         icon.setProperty("state", state)
-        icon.setAccessibleName(f"Estado: {state}")
+        # LUX-030: leitor de tela anuncia o estado em português.
+        icon.setAccessibleName(f"Estado: {STATE_NAMES_PT.get(state, state)}")
         heading = QLabel(title)
         heading.setObjectName("dialogTitle")
         heading.setProperty("state", state)
