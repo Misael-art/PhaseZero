@@ -198,12 +198,18 @@ def profile_for_class(window_class: str) -> str:
     return DESKTOP_PROFILE
 
 
+# Fixed argv, resolved through PATH (tests put stubs first on PATH). The
+# environment never chooses what gets executed.
+ACTIVE_WINDOW_ARGV = ("kdotool", "getactivewindow", "getwindowclassname")
+SET_PROFILE_ARGV = ("scc", "set-profile")
+KNOWN_PROFILES = frozenset({DESKTOP_PROFILE, *(app.profile for app in APPS)})
+
+
 def active_window_class() -> str:
     """Class of the focused window, or "" when it cannot be read."""
-    command = os.environ.get("PZ_ACTIVE_WINDOW_CMD", "kdotool getactivewindow getwindowclassname")
     try:
         proc = subprocess.run(
-            command.split(), capture_output=True, text=True, timeout=2, check=False,
+            list(ACTIVE_WINDOW_ARGV), capture_output=True, text=True, timeout=2, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -211,10 +217,12 @@ def active_window_class() -> str:
 
 
 def set_profile(profile: str) -> bool:
-    command = os.environ.get("PZ_SCC_SET_PROFILE_CMD", "scc set-profile")
+    # Only names from the table reach the daemon.
+    if profile not in KNOWN_PROFILES:
+        return False
     try:
         proc = subprocess.run(
-            [*command.split(), profile], capture_output=True, text=True, timeout=5, check=False,
+            [*SET_PROFILE_ARGV, profile], capture_output=True, text=True, timeout=5, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False

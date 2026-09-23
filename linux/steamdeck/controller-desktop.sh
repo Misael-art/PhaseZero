@@ -150,7 +150,6 @@ EOF
 # kdotool is what reads the focused window on KWin Wayland; without it the
 # switcher would only ever see "no window" and the layer silently does nothing.
 apps_switcher_available() {
-    [ -n "${PZ_ACTIVE_WINDOW_CMD:-}" ] && return 0
     command -v kdotool >/dev/null 2>&1
 }
 

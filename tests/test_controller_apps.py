@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -98,17 +99,21 @@ def test_focus_class_picks_profile(window_class, profile):
     assert ca.profile_for_class(window_class) == profile
 
 
-def _script(path: Path, body: str) -> str:
-    path.write_text("#!/bin/sh\n" + body + "\n")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
+def _stubs(tmp_path: Path, monkeypatch, *, kdotool: str, scc: str) -> None:
+    """Fake kdotool/scc first on PATH: the module runs fixed argv only."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name, body in (("kdotool", kdotool), ("scc", scc)):
+        path = bindir / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '')}")
 
 
 def test_watch_switches_only_when_focus_crosses_an_app(tmp_path, monkeypatch):
     focus = tmp_path / "focus"
     calls = tmp_path / "calls"
-    monkeypatch.setenv("PZ_ACTIVE_WINDOW_CMD", _script(tmp_path / "focus.sh", f"cat {focus}"))
-    monkeypatch.setenv("PZ_SCC_SET_PROFILE_CMD", _script(tmp_path / "set.sh", f'echo "$1" >> {calls}'))
+    _stubs(tmp_path, monkeypatch, kdotool=f"cat {focus}", scc=f'echo "$2" >> {calls}')
     sequence = ["org.communitybig.ashyterm", "org.communitybig.ashyterm", "org.kde.dolphin", ""]
     seen: list[str] = []
     current = ""
@@ -126,15 +131,31 @@ def test_watch_switches_only_when_focus_crosses_an_app(tmp_path, monkeypatch):
     assert seen[-1] == "PhaseZero-Desktop"
 
 
-def test_watch_once_uses_the_injected_commands(tmp_path, monkeypatch):
+def test_watch_once_runs_the_fixed_commands(tmp_path, monkeypatch):
     calls = tmp_path / "calls"
-    monkeypatch.setenv("PZ_ACTIVE_WINDOW_CMD", _script(tmp_path / "f.sh", "echo org.communitybig.ashyterm"))
-    monkeypatch.setenv("PZ_SCC_SET_PROFILE_CMD", _script(tmp_path / "s.sh", f'echo "$1" >> {calls}'))
+    _stubs(tmp_path, monkeypatch, kdotool="echo org.communitybig.ashyterm",
+           scc=f'echo "$1 $2" >> {calls}')
     assert ca.watch(0.01, once=True) == 0
-    assert calls.read_text().strip() == "PhaseZero-Ashyterm"
+    assert calls.read_text().strip() == "set-profile PhaseZero-Ashyterm"
 
 
 def test_failed_switch_is_reported_so_the_next_tick_retries(tmp_path, monkeypatch):
-    monkeypatch.setenv("PZ_ACTIVE_WINDOW_CMD", _script(tmp_path / "f.sh", "echo org.communitybig.ashyterm"))
-    monkeypatch.setenv("PZ_SCC_SET_PROFILE_CMD", _script(tmp_path / "s.sh", "exit 1"))
+    _stubs(tmp_path, monkeypatch, kdotool="echo x", scc="exit 1")
     assert ca.set_profile("PhaseZero-Ashyterm") is False
+
+
+def test_unknown_profile_never_reaches_the_daemon(tmp_path, monkeypatch):
+    calls = tmp_path / "calls"
+    _stubs(tmp_path, monkeypatch, kdotool="echo x", scc=f'echo "$2" >> {calls}')
+    assert ca.set_profile("../../evil") is False
+    assert not calls.exists()
+
+
+def test_environment_cannot_choose_the_executable(tmp_path, monkeypatch):
+    marker = tmp_path / "ran"
+    monkeypatch.setenv("PZ_ACTIVE_WINDOW_CMD", f"touch {marker}")
+    monkeypatch.setenv("PZ_SCC_SET_PROFILE_CMD", f"touch {marker}")
+    _stubs(tmp_path, monkeypatch, kdotool="echo org.kde.dolphin", scc="exit 0")
+    ca.active_window_class()
+    ca.set_profile("PhaseZero-Desktop")
+    assert not marker.exists()
