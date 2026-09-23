@@ -1602,7 +1602,8 @@ class PreviewDialog(StatefulDialog):
         self.details_toggle.toggled.connect(
             lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
         )
-        copy = self.add_action("Copiar saída", QDialogButtonBox.ActionRole)
+        # LUX-031: o que é copiado é o detalhe técnico, visível ou não.
+        copy = self.add_action("Copiar detalhes técnicos", QDialogButtonBox.ActionRole)
         copy.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
         cancel = self.add_action("Voltar", QDialogButtonBox.RejectRole)
         self.confirm = self.add_action(
