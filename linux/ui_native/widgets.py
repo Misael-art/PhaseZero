@@ -1532,6 +1532,7 @@ class PreviewDialog(StatefulDialog):
 
 class ProgressDialog(StatefulDialog):
     cancel_requested = Signal()
+    hidden_while_running = Signal()
 
     def __init__(
         self,
@@ -1605,8 +1606,11 @@ class ProgressDialog(StatefulDialog):
         self.accept()
 
     def reject(self) -> None:
+        # LUX-002: Esc/fechar só esconde; a operação continua e o botão
+        # "Mostrar progresso" da barra de status reabre esta janela.
         if self._running:
-            self.cancel_requested.emit()
+            self.hide()
+            self.hidden_while_running.emit()
             return
         super().reject()
 

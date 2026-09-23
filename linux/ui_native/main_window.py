@@ -332,8 +332,12 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancelar")
         self.cancel_button.setObjectName("dangerButton")
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.runner.cancel)
-        self.cancel_button.setAccessibleDescription("Interrompe processo em andamento")
+        self.cancel_button.clicked.connect(self.confirm_cancel)
+        self.cancel_button.setAccessibleDescription("Interrompe processo em andamento (pede confirmação)")
+        self.show_progress_button = QPushButton("Mostrar progresso")
+        self.show_progress_button.setAccessibleDescription("Reabre a janela de progresso da operação atual")
+        self.show_progress_button.setVisible(False)
+        self.show_progress_button.clicked.connect(self._show_progress_dialog)
         self.toggle_logs_button = QPushButton("Logs")
         self.toggle_logs_button.clicked.connect(self.toggle_logs)
         status_row.addWidget(self.status_dot)
@@ -341,6 +345,7 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.elapsed_label)
         status_row.addWidget(self.command_label, 1)
         status_row.addWidget(self.toggle_logs_button)
+        status_row.addWidget(self.show_progress_button)
         status_row.addWidget(self.cancel_button)
         # Frameless window: QSizeGrip is the only mouse-resize affordance.
         status_row.addWidget(QSizeGrip(operation), 0, Qt.AlignBottom | Qt.AlignRight)
@@ -667,7 +672,10 @@ class MainWindow(QMainWindow):
             self.progress_dialog = ProgressDialog(
                 title, command, self, advanced_mode=self.preferences.advanced_mode
             )
-            self.progress_dialog.cancel_requested.connect(self.runner.cancel)
+            self.progress_dialog.cancel_requested.connect(self.confirm_cancel)
+            self.progress_dialog.hidden_while_running.connect(
+                lambda: self.show_progress_button.setVisible(True)
+            )
             self.progress_dialog.show()
 
     def append_output(self, text: str, error: bool) -> None:
@@ -700,6 +708,7 @@ class MainWindow(QMainWindow):
             self.progress_dialog.deleteLater()
             self.progress_dialog = None
         self.cancel_button.setEnabled(False)
+        self.show_progress_button.setVisible(False)
         action = self.pending_action
         is_mutable = bool(action and action.mutable)
         severity = severity_for(result.parsed, result.exit_code, mutable=is_mutable)
@@ -880,10 +889,39 @@ class MainWindow(QMainWindow):
         self.global_context.style().polish(self.global_context)
 
     def cancel_or_clear(self) -> None:
-        if self.runner.running:
-            self.runner.cancel()
-        elif self.search.text():
+        # LUX-002: Esc nunca aborta uma operação — só limpa a busca.
+        if self.search.text():
             self.search.clear()
+
+    def _ask_cancel(self, title: str, elevated: bool) -> bool:
+        text = f"Parar agora pode deixar “{title}” incompleto."
+        if elevated:
+            text += " Pode exigir reparo depois."
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Parar operação?")
+        box.setText(text)
+        keep = box.addButton("Continuar operação", QMessageBox.RejectRole)
+        stop = box.addButton("Parar mesmo assim", QMessageBox.DestructiveRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        box.exec()
+        return box.clickedButton() is stop
+
+    def confirm_cancel(self) -> None:
+        """LUX-002: cancelar exige uma segunda decisão explícita."""
+        if not self.runner.running:
+            return
+        action = self.pending_action
+        title = action.title if action is not None else "a operação"
+        if self._ask_cancel(title, bool(action and action.elevated)):
+            self.runner.cancel()
+
+    def _show_progress_dialog(self) -> None:
+        self.show_progress_button.setVisible(False)
+        if self.progress_dialog is not None:
+            self.progress_dialog.show()
+            self.progress_dialog.raise_()
 
     def toggle_logs(self) -> None:
         self.log_view.setVisible(not self.log_view.isVisible())
