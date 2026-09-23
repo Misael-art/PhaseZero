@@ -105,7 +105,14 @@ kill -0 "$timer_pid" 2>/dev/null ||
 
 # E precisa se limpar sozinho ao fim da janela, em vez de deixar
 # revertPending mentindo para sempre.
-sleep 5
+# Esperar um tempo fixo aqui torna o caso sensível à carga da máquina: a
+# limpeza do timer ainda para o serviço e dispara o aviso de OSD antes de
+# apagar o arquivo, e num host ocupado isso passa de dois segundos. Falhou 1 em
+# 5 execuções com uma VM consumindo sete vCPUs. Aguarda o estado, com prazo.
+revert_deadline=$((SECONDS + 30))
+while [ -f "$revert_pidfile" ] && [ "$SECONDS" -lt "$revert_deadline" ]; do
+    sleep 1
+done
 test ! -f "$revert_pidfile" ||
     { echo "FAIL: o timer não removeu o próprio arquivo ao expirar" >&2; exit 41; }
 jq -e '.revertPending == false' <<<"$(bash "$SCRIPT" status)" >/dev/null ||
@@ -133,8 +140,28 @@ export PZ_SYSTEMD_USER_DIR="$TMP_ROOT/systemd"
 # laço de reinício e o start ainda dizia "perfil desktop ativo".
 grep -q 'ExecStart=.*PROFILE_DEST start' "$SCRIPT" ||
     { echo "FAIL: a unit precisa terminar em 'start' ou o daemon recusa os argumentos" >&2; exit 45; }
-grep -q 'WantedBy=default.target' "$SCRIPT" ||
-    { echo "FAIL: a unit precisa de WantedBy para habilitar no login" >&2; exit 46; }
+# PartOf e WantedBy precisam nomear o mesmo alvo. Com PartOf=graphical-session
+# e WantedBy=default.target o pareamento é de mão única: uma sessão que
+# reinicia por segundos derruba o mapa e nunca o traz de volta. Medido num Deck
+# real — graphical-session.target inativo às 09:46:42, ativo às 09:47:00, mapa
+# morto por onze horas sem erro em lugar nenhum.
+grep -q 'WantedBy=graphical-session.target' "$SCRIPT" ||
+    { echo "FAIL: WantedBy deve nomear o mesmo alvo do PartOf" >&2; exit 46; }
+unit_partof="$(grep -oE 'PartOf=[^ ]+' "$SCRIPT" | head -1 | cut -d= -f2)"
+unit_wantedby="$(grep -oE 'WantedBy=[^ ]+' "$SCRIPT" | head -1 | cut -d= -f2)"
+[ "$unit_partof" = "$unit_wantedby" ] ||
+    { echo "FAIL: PartOf=$unit_partof e WantedBy=$unit_wantedby divergem" >&2; exit 52; }
+# O daemon já saiu 0 sozinho depois de perder o controle. Com on-failure isso
+# conta como fim normal e o Deck fica sem ponteiro.
+grep -q 'Restart=always' "$SCRIPT" ||
+    { echo "FAIL: todo fim do daemon precisa ser retentado, inclusive exit 0" >&2; exit 53; }
+grep -q 'StartLimitBurst' "$SCRIPT" ||
+    { echo "FAIL: Restart=always sem StartLimit vira laço infinito" >&2; exit 54; }
+# A mensagem de stop afirmava que o lizard mode voltava. Não volta.
+if grep -q 'lizard mode volta a valer' "$SCRIPT"; then
+    echo "FAIL: stop não pode prometer o retorno do lizard mode" >&2
+    exit 55
+fi
 # start não pode declarar sucesso sem olhar: systemd reporta "active" durante
 # um laço de reinício.
 grep -q 'NRestarts' "$SCRIPT" ||
@@ -164,6 +191,48 @@ grep -q 'PZ_ROOT' <<<"$rendered" &&
 jq -e '.buttons.DOTS.action | contains("hotkey-actions.sh keyboard")' <<<"$rendered" >/dev/null ||
     { echo "FAIL: DOTS deveria chamar o teclado virtual do PhaseZero" >&2; exit 29; }
 echo "  substituição de caminho ok"
+
+echo "=== camada de compatibilidade por aplicativo (Ashyterm) ==="
+# O Ashyterm troca de aba com Ctrl+PageUp/PageDown; L1/R1 do mapa desktop
+# mandam Ctrl+Shift+Tab/Ctrl+Tab, que ele entrega ao shell. Sem a camada os
+# ombros não fazem nada visível no terminal - e nada acusa erro.
+APPS="$REPO_ROOT/linux/steamdeck/controller_apps.py"
+gen_dir="$TMP_ROOT/apps-profiles"
+printf '%s\n' "$rendered" >"$TMP_ROOT/desktop-rendered.sccprofile"
+python3 "$APPS" generate --base "$TMP_ROOT/desktop-rendered.sccprofile" --out-dir "$gen_dir" >/dev/null
+ashy="$gen_dir/PhaseZero-Ashyterm.sccprofile"
+jq -e '.buttons.LB.action | contains("KEY_PAGEUP")' "$ashy" >/dev/null ||
+    { echo "FAIL: L1 no Ashyterm deve ser Ctrl+PageUp" >&2; exit 56; }
+jq -e '.buttons.RB.action | contains("KEY_PAGEDOWN")' "$ashy" >/dev/null ||
+    { echo "FAIL: R1 no Ashyterm deve ser Ctrl+PageDown" >&2; exit 57; }
+# O restante é o mapa desktop: só as abas mudam.
+jq -e --slurpfile d "$TMP_ROOT/desktop-rendered.sccprofile" \
+    '.buttons.A == $d[0].buttons.A and .buttons.DOTS == $d[0].buttons.DOTS and .pad_right == $d[0].pad_right' \
+    "$ashy" >/dev/null || { echo "FAIL: perfil do Ashyterm divergiu do desktop fora das abas" >&2; exit 58; }
+# Atalho do usuário no Ashyterm vence o padrão.
+mkdir -p "$XDG_CONFIG_HOME/ashyterm"
+printf '{"shortcuts":{"next-tab":"<Alt>Right"}}\n' >"$XDG_CONFIG_HOME/ashyterm/settings.json"
+python3 "$APPS" generate --base "$TMP_ROOT/desktop-rendered.sccprofile" --out-dir "$gen_dir" >/dev/null
+jq -e '.buttons.RB.action | contains("KEY_LEFTALT") and contains("KEY_RIGHT")' "$ashy" >/dev/null ||
+    { echo "FAIL: override do usuário no Ashyterm ignorado" >&2; exit 59; }
+rm -f "$XDG_CONFIG_HOME/ashyterm/settings.json"
+# A troca por foco vive enquanto o mapa vive: presa à unit do mapa, parada
+# junto no stop e pela reversão automática (BindsTo).
+# shellcheck disable=SC2016 # nomes de variável literais no script testado
+grep -q 'BindsTo=\$SERVICE_NAME' "$SCRIPT" ||
+    { echo "FAIL: a troca por aplicativo deve estar presa à unit do mapa" >&2; exit 60; }
+# shellcheck disable=SC2016
+grep -q 'WantedBy=\$SERVICE_NAME' "$SCRIPT" ||
+    { echo "FAIL: a troca por aplicativo deve subir com o mapa" >&2; exit 61; }
+# shellcheck disable=SC2016
+grep -q 'disable --now "\$APPS_SERVICE_NAME"' "$SCRIPT" ||
+    { echo "FAIL: stop deve desligar a troca por aplicativo" >&2; exit 62; }
+out="$(bash "$SCRIPT" status)"
+jq -e '.appProfiles | map(.app) | index("ashyterm") != null' <<<"$out" >/dev/null ||
+    { echo "FAIL: status não lista o Ashyterm: $out" >&2; exit 63; }
+jq -e 'has("appSwitcherActive")' <<<"$out" >/dev/null ||
+    { echo "FAIL: status sem appSwitcherActive" >&2; exit 64; }
+echo "  compatibilidade Ashyterm ok"
 
 echo "=== a visão geral tem ação, atalho e registro no KDE ==="
 grep -q 'overview)' "$REPO_ROOT/linux/steamdeck/hotkey-actions.sh" ||

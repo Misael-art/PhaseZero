@@ -5,11 +5,18 @@ As versões seguem a data de build em `version.json`.
 
 ## [Não lançado]
 
+### Adicionado
+- **Mapa do controle compatível com o Ashyterm.** O terminal da BigCommunity troca de aba com `Ctrl+PageUp/PageDown` e entrega `Ctrl+Tab` ao shell, então L1/R1 do mapa desktop não faziam nada visível nele. Um perfil derivado (`PhaseZero-Ashyterm`) troca só as abas, lendo os atalhos efetivos do Ashyterm — padrões mais o `~/.config/ashyterm/settings.json` do usuário, sem escrever nele —, e um serviço de usuário preso ao do mapa (`phasezero-controller-apps.service`) segue a janela em foco via `kdotool` e alterna o perfil pelo `scc set-profile`, sem reiniciar o daemon. Atalho desativado no Ashyterm mantém o botão do mapa desktop e avisa. A tabela de aplicativos (`linux/steamdeck/controller_apps.py`) aceita outros programas com atalhos próprios.
+
 ### Corrigido
 - **Instalação Windows abandonada podia permanecer `running` para sempre.** O supervisor registra identidade de processo resistente a reutilização de PID, separa o worker, libera descritor de lock nos processos filhos e reconcilia operação órfã como interrompida, preservando arquivos para retomar ou remover.
 - **Inventário ocultava staging parcial e remoção não recuperava operações presas.** Instalações interrompidas, falhas e cancelamentos passam a aparecer com espaço ocupado, retomada, lixeira e liberação permanente confirmada; QEMU vivo bloqueia mutação.
 - **Seletor de edição usava índice global e não inspecionava a mídia escolhida.** O diálogo lê índices da ISO de forma assíncrona e associa conclusões ao SHA-256 da mídia; reinstalar a mesma edição fica permitido.
 - ISO válida com WIM/ESD que não pôde ser interpretado não sugere índice 1 nem opções fictícias: pede o índice manual exato. ISO inválida bloqueia o início.
+- **O mapa do controle sumia quando a sessão gráfica piscava.** A unit declarava `PartOf=graphical-session.target` mas `WantedBy=default.target`: o pareamento era de mão única, então uma sessão que reinicia por segundos — o Plasma se reiniciando basta — derrubava o mapa e nunca o trazia de volta. Medido num Deck real: `graphical-session.target` inativo às 09:46:42, ativo de novo às 09:47:00, e o mapa morto por onze horas sem erro em lugar nenhum. As duas diretivas passam a nomear o mesmo alvo, e um teste recusa que divirjam. O `Restart` também virou `always`: o daemon já saiu 0 sozinho depois de perder o controle, e `on-failure` trata isso como fim normal e deixa o Deck sem ponteiro. `StartLimitBurst` evita trocar um silêncio por um laço.
+- **O `stop` prometia o retorno do lizard mode, que não volta.** Assumir o controle o desprende do `hid-steam`, e devolvê-lo deixa a emulação de mouse e teclado do firmware desligada — o Deck medido ficou só com o nó de gamepad, sem handler de mouse algum. A mensagem passa a dizer o que acontece de fato e como recuperar o ponteiro.
+- **`confirm` deixava para trás o link de enable da unit anterior.** `systemctl enable` só cria o link do alvo que a unit nomeia hoje; quem atualizava ficava com os dois e o serviço subia também fora da sessão gráfica. O `confirm` passa a remover os antigos antes de habilitar.
+- **O teste do temporizador de reversão era sensível à carga da máquina.** Esperava um tempo fixo enquanto a limpeza ainda parava o serviço e disparava o aviso de OSD; falhava 1 em 5 execuções com uma VM ocupando sete vCPUs. Passa a aguardar o estado, com prazo.
 
 ### Testes
 - Suíte hermética de recuperação no CI; `test_provision.sh`, suíte de remoção e testes Qt.
