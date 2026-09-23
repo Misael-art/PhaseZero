@@ -58,6 +58,10 @@ CONTRAST_PAIRS: tuple[tuple[str, str, str, float], ...] = (
     ("sucesso sobre seu fundo", "success", "success_bg", AA_TEXT),
     ("aviso sobre seu fundo", "warning", "warning_bg", AA_TEXT),
     ("erro sobre seu fundo", "error", "error_bg", AA_TEXT),
+    # LUX-010: navegação lateral (item ativo, hover e rótulos de seção).
+    ("item ativo da navegação", "sidebar_active_text", "surface_selected", AA_TEXT),
+    ("item da navegação sob o ponteiro", "sidebar_hover_text", "surface_alt", AA_TEXT),
+    ("rótulo de seção da navegação", "section_label", "surface_inset", AA_TEXT),
     # WCAG 1.4.11 vale para o que identifica um controle — o anel de foco,
     # que precisa ser visível sobre cada superfície onde um controle vive.
     # A borda decorativa de card não entra: as superfícies já se distinguem

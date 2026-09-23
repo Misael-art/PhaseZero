@@ -61,7 +61,7 @@ QMainWindow {
     border-bottom-left-radius: {{radius_lg}}px;
 }
 #sectionLabel {
-    color: {{text_muted}};
+    color: {{section_label}};
     font-size: {{text_xs}}px;
     font-weight: 800;
     padding: {{space_md}}px {{space_sm}}px 4px {{space_sm}}px;
@@ -77,11 +77,11 @@ QMainWindow {
     font-size: {{text_base}}px;
 }
 #sidebarButton:hover {
-    color: {{on_accent}};
+    color: {{sidebar_hover_text}};
     background: {{surface_alt}};
 }
 #sidebarButton:checked {
-    color: {{on_accent}};
+    color: {{sidebar_active_text}};
     background: {{surface_selected}};
     border-left: 3px solid {{accent}};
     font-weight: 600;
