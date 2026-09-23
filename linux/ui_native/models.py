@@ -50,6 +50,8 @@ class ActionSpec:
     impact: str = ""
     # "" = infer from preview_args; "plan" or "state" force the kind.
     preview_kind_override: str = ""
+    # LUX-022: per-action timeout in seconds (0 = runner default by kind).
+    timeout_s: int = 0
 
     @property
     def preview_kind(self) -> str:

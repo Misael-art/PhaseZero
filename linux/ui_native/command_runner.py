@@ -24,6 +24,15 @@ from .result_parser import parse_json_output
 CAPTURE_LIMIT = 8 * 1024 * 1024
 
 
+# LUX-022: progress markers the backends emit on purpose.
+PROGRESS_RE = re.compile(
+    r"PZ_PROGRESS=(\d{1,3})\b"
+    r"|^\s*Progress:\s*(\d{1,3})%"
+    r"|\]\s*(\d{1,3})%\s*\|",
+    re.MULTILINE,
+)
+READ_TIMEOUT_MS = 10 * 60 * 1000
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -77,6 +86,7 @@ class CommandRunner(QObject):
         except OSError:
             pass
         self.timeout_ms = timeout_ms
+        self.current_timeout_ms = timeout_ms
         self.timeout_timer = QTimer(self)
         self.timeout_timer.setSingleShot(True)
         self.timeout_timer.timeout.connect(self._timeout)
@@ -84,6 +94,14 @@ class CommandRunner(QObject):
     @property
     def running(self) -> bool:
         return self.process is not None and self.process.state() != QProcess.NotRunning
+
+    def timeout_for(self, action: ActionSpec, *, preview: bool) -> int:
+        """LUX-022: leituras e prévias não esperam 30 min para falhar."""
+        if action.timeout_s:
+            return action.timeout_s * 1000
+        if preview or not action.mutable:
+            return min(self.timeout_ms, READ_TIMEOUT_MS)
+        return self.timeout_ms
 
     def start(
         self,
@@ -142,7 +160,8 @@ class CommandRunner(QObject):
             # blocks on read and the action hangs until the timeout.
             process.write((stdin_data + "\n").encode("utf-8"))
             process.closeWriteChannel()
-        self.timeout_timer.start(self.timeout_ms)
+        self.current_timeout_ms = self.timeout_for(action, preview=preview)
+        self.timeout_timer.start(self.current_timeout_ms)
         try:
             self.ledger.update(status="previewing" if preview else "running")
         except OSError:
@@ -199,9 +218,11 @@ class CommandRunner(QObject):
         text = self._decode(self.process.readAllStandardOutput().data())
         self._capture(text, stderr=False)
         self.output.emit(text, False)
-        matches = re.findall(r"(?<!\d)(100|[1-9]?\d)%", text)
+        # LUX-022: só marcadores explícitos de progresso. "disco 95% usado"
+        # não é progresso da operação.
+        matches = PROGRESS_RE.findall(text)
         if matches:
-            value = int(matches[-1])
+            value = min(100, int(next(group for group in matches[-1] if group)))
             self.progress.emit(value)
             try:
                 self.ledger.update(progress=value)
@@ -226,7 +247,8 @@ class CommandRunner(QObject):
         if not self.running:
             return
         self.timed_out = True
-        message = f"operation timed out after {self.timeout_ms // 1000}s\n"
+        minutes = max(1, self.current_timeout_ms // 60000)
+        message = f"tempo limite de {minutes} min atingido; operação interrompida\n"
         self._capture(message, stderr=True)
         self.output.emit(message, True)
         self.cancel()
