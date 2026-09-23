@@ -33,7 +33,7 @@ from .provision_player import ProvisionPlayerWindow
 from .windows_install_dialog import WindowsInstallDialog
 from .preferences import UiPreferences
 from .pages.registry import PageRegistry
-from .result_parser import severity_for
+from .result_parser import restart_required, severity_for
 from .widgets import (
     ActionInspector,
     ActionListRow,
@@ -705,6 +705,8 @@ class MainWindow(QMainWindow):
         severity = severity_for(result.parsed, result.exit_code, mutable=is_mutable)
         status_map = {"success": "Concluído", "warning": "Concluído com avisos", "error": "Falhou"}
         status_label = status_map.get(severity, "Falhou")
+        if restart_required(result.parsed):
+            status_label = "Reinício necessário"
         self.status_text.setText(status_label)
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)

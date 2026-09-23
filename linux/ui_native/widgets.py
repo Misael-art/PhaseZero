@@ -50,7 +50,7 @@ from . import __version__
 
 from .models import ActionSpec, OperationResult
 from .platform import open_path
-from .result_parser import guidance, is_pending_report
+from .result_parser import guidance, is_pending_report, restart_required
 
 
 _ICON_CACHE: dict[str, QIcon] = {}
@@ -1628,6 +1628,8 @@ class ResultDialog(StatefulDialog):
         sev = severity or ("success" if result.ok else "error")
         title_map = {"success": "Operação concluída", "warning": "Concluído com avisos", "error": "Operação falhou"}
         title = title_map.get(sev, "Operação falhou")
+        if restart_required(result.parsed):
+            title = "Reinício necessário"
         super().__init__(title, sev, parent)
         self.setMinimumSize(660, 380)
         self.resize(760, 480)
