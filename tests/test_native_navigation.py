@@ -148,11 +148,24 @@ def test_homelab_reachable_from_sidebar_and_registry(qapp):
         window.close()
 
 
-def test_home_journeys_cover_objectives_with_single_entry(qapp):
+def test_home_journeys_cover_objectives_with_single_entry(qapp, tmp_path, monkeypatch):
     """PZ-AUD-029: Início mostra objetivos (não taxonomias), cada um com
-    UMA ação de entrada real mais requisito, custo e maturidade."""
+    UMA ação de entrada real mais requisito, custo e maturidade.
+
+    Host com histórico (não primeiro uso): os seis objetivos aparecem. No
+    primeiro uso o objetivo que repete o passo 2 some (LUX-013)."""
+    import json as _json
     from linux.ui_native.main_window import MainWindow
     from unittest.mock import patch
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    op = tmp_path / "phasezero" / "control-center" / "operations" / "20260101T000000Z-1-a-x"
+    op.mkdir(parents=True)
+    (op / "operation.json").write_text(_json.dumps({
+        "schemaVersion": 1, "operationId": op.name, "actionId": "system.doctor",
+        "title": "Diagnóstico", "category": "Visão geral", "status": "succeeded",
+        "mutable": True, "preview": False,
+    }), encoding="utf-8")
 
     with patch.object(MainWindow, "_host_summary"), patch(
         "linux.ui_native.status_loader.StatusLoader.fetch_action"
