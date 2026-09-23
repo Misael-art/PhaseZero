@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [Não lançado]
+## [1.21.1] - 2026-09-24
 
 ### Adicionado
 - **Mapa do controle compatível com o Ashyterm.** O terminal da BigCommunity troca de aba com `Ctrl+PageUp/PageDown` e entrega `Ctrl+Tab` ao shell, então L1/R1 do mapa desktop não faziam nada visível nele. Um perfil derivado (`PhaseZero-Ashyterm`) troca só as abas, lendo os atalhos efetivos do Ashyterm — padrões mais o `~/.config/ashyterm/settings.json` do usuário, sem escrever nele —, e um serviço de usuário preso ao do mapa (`phasezero-controller-apps.service`) segue a janela em foco via `kdotool` e alterna o perfil pelo `scc set-profile`, sem reiniciar o daemon. Atalho desativado no Ashyterm mantém o botão do mapa desktop e avisa. A tabela de aplicativos (`linux/steamdeck/controller_apps.py`) aceita outros programas com atalhos próprios.
