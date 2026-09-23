@@ -196,3 +196,29 @@ def test_home_journeys_cover_objectives_with_single_entry(qapp, tmp_path, monkey
             seen_actions.add(action_id)
         assert len(seen_actions) == 6
         window.close()
+
+
+def test_ctrl_number_follows_sidebar_order(qapp):
+    """LUX-016: Ctrl+N abre o N-ésimo destino da barra lateral."""
+    from unittest.mock import patch
+    from PySide6.QtGui import QKeySequence
+    from linux.ui_native.main_window import MainWindow
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+    try:
+        order = window.sidebar_order()
+        assert order[0] == "Início"
+        shortcuts = {
+            action.shortcut().toString(): action for action in window.actions()
+            if action.shortcut().toString().startswith("Ctrl+")
+            and action.shortcut().toString()[5:].isdigit()
+        }
+        for index, category in enumerate(order[:9], start=1):
+            shortcuts[f"Ctrl+{index}"].trigger()
+            assert window.current_category == category
+            assert f"(Ctrl+{index})" in window.sidebar_buttons[category].toolTip()
+    finally:
+        window.close()

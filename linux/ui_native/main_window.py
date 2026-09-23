@@ -395,11 +395,25 @@ class MainWindow(QMainWindow):
         cancel_action.setShortcut(QKeySequence(Qt.Key_Escape))
         cancel_action.triggered.connect(self.cancel_or_clear)
         self.addAction(cancel_action)
-        for index, (category, _icon, _hint) in enumerate(CATEGORIES[:9], start=1):
+        # LUX-016: Ctrl+N segue a ordem visual da barra lateral (Início = 1)
+        # e aparece no tooltip de cada destino.
+        for index, category in enumerate(self.sidebar_order()[:9], start=1):
             action = QAction(self)
             action.setShortcut(QKeySequence(f"Ctrl+{index}"))
             action.triggered.connect(lambda _checked=False, name=category: self.show_category(name))
             self.addAction(action)
+            button = self.sidebar_buttons.get(category)
+            if button is not None:
+                button.setToolTip(f"{button.toolTip()} (Ctrl+{index})")
+
+    def sidebar_order(self) -> list[str]:
+        """Destinations in the order the sidebar shows them."""
+        return [
+            category
+            for _group, categories in SIDEBAR_GROUPS
+            for category in categories
+            if category in self.sidebar_buttons
+        ]
 
     def _host_summary(self) -> None:
         process = QProcess(self)
