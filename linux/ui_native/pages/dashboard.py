@@ -92,9 +92,15 @@ class DashboardPage(BasePage):
             # The ledger lives in the state dir, like every other caller.
             # Passing the repo root made every start look like a first use,
             # so "retomar" never had anything to offer.
-            recent = OperationLedger().records(limit=1)
+            records = OperationLedger().records(limit=50)
         except Exception:
-            recent = []
+            records = []
+        # LUX-014: leituras e previews não são "a última tarefa". Registros
+        # antigos sem os campos contam como tarefa real.
+        recent = [
+            record for record in records
+            if record.get("preview") is not True and record.get("mutable") is not False
+        ][:1]
         self.first_use = not recent
         self._recent = recent[0] if recent else {}
 
@@ -238,11 +244,26 @@ class DashboardPage(BasePage):
         copy.addWidget(heading)
         copy.addWidget(detail)
         row.addLayout(copy, 1)
-        resume = QPushButton("Retomar")
-        resume.setObjectName("primaryButton")
-        resume.setAccessibleName(f"Retomar {title}")
-        resume.clicked.connect(lambda _=False, c=category: self.request_category(c))
-        row.addWidget(resume)
+        action = self.by_id.get(str(record.get("actionId") or ""))
+        if status in {"failed", "cancelled"}:
+            # LUX-014: falha oferece entender e repetir, não "retomar".
+            details = QPushButton("Ver o que falhou")
+            details.setObjectName("secondaryButton")
+            details.setAccessibleName(f"Ver o que falhou em {title}")
+            details.clicked.connect(lambda: self.request_category("Resultados"))
+            row.addWidget(details)
+            if action is not None:
+                retry = QPushButton("Tentar de novo")
+                retry.setObjectName("primaryButton")
+                retry.setAccessibleName(f"Tentar de novo: {title}")
+                retry.clicked.connect(lambda _=False, a=action: self.request_action(a))
+                row.addWidget(retry)
+        else:
+            resume = QPushButton("Retomar")
+            resume.setObjectName("primaryButton")
+            resume.setAccessibleName(f"Retomar {title}")
+            resume.clicked.connect(lambda _=False, c=category: self.request_category(c))
+            row.addWidget(resume)
         self.resume_card = card
         return card
 
