@@ -66,8 +66,8 @@ def test_main_window_supports_documented_narrow_viewport(qapp, width, height):
         assert actual_height == height or (
             height > available_height and available_height <= actual_height < height
         )
-        if width >= 700:
-            # LUX-020: trilho de ícones, não menu escondido.
+        if width >= 850:
+            # LUX-020: trilho de ícones (850–1100 px; Deck a 150% = 853).
             assert window.sidebar.isVisible()
             assert window.sidebar.width() <= 72
             assert window.compact_menu.isHidden()

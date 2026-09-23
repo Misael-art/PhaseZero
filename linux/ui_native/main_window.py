@@ -605,10 +605,11 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        # LUX-020: entre 700 e 1100 px lógicos (Deck a 150%) a navegação vira
-        # um trilho de ícones em vez de sumir atrás do menu.
-        compact = event.size().width() < 700
-        self._set_sidebar_rail(700 <= event.size().width() < 1100)
+        # LUX-020: entre 850 e 1100 px lógicos (Deck a 150% = 853) a navegação
+        # vira um trilho de ícones. Abaixo de 850 o trilho roubaria largura
+        # que o Homelab precisa (overflow com fontes largas, ex. DejaVu).
+        compact = event.size().width() < 850
+        self._set_sidebar_rail(850 <= event.size().width() < 1100)
         compact_controls = event.size().width() < 450
         hide_mode_label = event.size().width() < 560
         short_viewport = event.size().height() < 360
