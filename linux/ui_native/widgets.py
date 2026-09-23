@@ -1580,6 +1580,8 @@ class PreviewDialog(StatefulDialog):
             position = self.body.indexOf(anchor) + 1
             self.body.insertWidget(position, warning)
             self.body.insertWidget(position + 1, self.confirmation)
+            # LUX-025: Tab do campo vai direto ao botão que ele libera.
+            QWidget.setTabOrder(self.confirmation, self.confirm)
             self.confirmation.setFocus()
         cancel.clicked.connect(self.reject)
         self.confirm.clicked.connect(self.accept)
