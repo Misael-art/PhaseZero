@@ -105,7 +105,14 @@ kill -0 "$timer_pid" 2>/dev/null ||
 
 # E precisa se limpar sozinho ao fim da janela, em vez de deixar
 # revertPending mentindo para sempre.
-sleep 5
+# Esperar um tempo fixo aqui torna o caso sensível à carga da máquina: a
+# limpeza do timer ainda para o serviço e dispara o aviso de OSD antes de
+# apagar o arquivo, e num host ocupado isso passa de dois segundos. Falhou 1 em
+# 5 execuções com uma VM consumindo sete vCPUs. Aguarda o estado, com prazo.
+revert_deadline=$((SECONDS + 30))
+while [ -f "$revert_pidfile" ] && [ "$SECONDS" -lt "$revert_deadline" ]; do
+    sleep 1
+done
 test ! -f "$revert_pidfile" ||
     { echo "FAIL: o timer não removeu o próprio arquivo ao expirar" >&2; exit 41; }
 jq -e '.revertPending == false' <<<"$(bash "$SCRIPT" status)" >/dev/null ||
@@ -133,8 +140,28 @@ export PZ_SYSTEMD_USER_DIR="$TMP_ROOT/systemd"
 # laço de reinício e o start ainda dizia "perfil desktop ativo".
 grep -q 'ExecStart=.*PROFILE_DEST start' "$SCRIPT" ||
     { echo "FAIL: a unit precisa terminar em 'start' ou o daemon recusa os argumentos" >&2; exit 45; }
-grep -q 'WantedBy=default.target' "$SCRIPT" ||
-    { echo "FAIL: a unit precisa de WantedBy para habilitar no login" >&2; exit 46; }
+# PartOf e WantedBy precisam nomear o mesmo alvo. Com PartOf=graphical-session
+# e WantedBy=default.target o pareamento é de mão única: uma sessão que
+# reinicia por segundos derruba o mapa e nunca o traz de volta. Medido num Deck
+# real — graphical-session.target inativo às 09:46:42, ativo às 09:47:00, mapa
+# morto por onze horas sem erro em lugar nenhum.
+grep -q 'WantedBy=graphical-session.target' "$SCRIPT" ||
+    { echo "FAIL: WantedBy deve nomear o mesmo alvo do PartOf" >&2; exit 46; }
+unit_partof="$(grep -oE 'PartOf=[^ ]+' "$SCRIPT" | head -1 | cut -d= -f2)"
+unit_wantedby="$(grep -oE 'WantedBy=[^ ]+' "$SCRIPT" | head -1 | cut -d= -f2)"
+[ "$unit_partof" = "$unit_wantedby" ] ||
+    { echo "FAIL: PartOf=$unit_partof e WantedBy=$unit_wantedby divergem" >&2; exit 52; }
+# O daemon já saiu 0 sozinho depois de perder o controle. Com on-failure isso
+# conta como fim normal e o Deck fica sem ponteiro.
+grep -q 'Restart=always' "$SCRIPT" ||
+    { echo "FAIL: todo fim do daemon precisa ser retentado, inclusive exit 0" >&2; exit 53; }
+grep -q 'StartLimitBurst' "$SCRIPT" ||
+    { echo "FAIL: Restart=always sem StartLimit vira laço infinito" >&2; exit 54; }
+# A mensagem de stop afirmava que o lizard mode voltava. Não volta.
+if grep -q 'lizard mode volta a valer' "$SCRIPT"; then
+    echo "FAIL: stop não pode prometer o retorno do lizard mode" >&2
+    exit 55
+fi
 # start não pode declarar sucesso sem olhar: systemd reporta "active" durante
 # um laço de reinício.
 grep -q 'NRestarts' "$SCRIPT" ||
