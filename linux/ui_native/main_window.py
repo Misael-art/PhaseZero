@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self._start_failed = False
         self._search_cards: list[QWidget] = []
         self._controls_compact: bool | None = None
+        self._graphics_probe: QProcess | None = None
         self._host_process: QProcess | None = None
         self._closing = False
         self.progress_dialog: ProgressDialog | None = None
@@ -456,24 +457,71 @@ class MainWindow(QMainWindow):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
 
-    def _graphics_status(self) -> dict:
-        """Measured graphics capability of this host, or {} when unknown.
+    GRAPHICS_PROBE_TIMEOUT_MS = 20_000
+
+    def _graphics_probe_command(self) -> list[str]:
+        return [str(self.root / "linux" / "pz"), "windows-vm", "graphics", "status", "--json"]
+
+    def _measure_graphics_then_install(self) -> None:
+        """Measured graphics capability of this host, without blocking the UI.
 
         Bounded and never fatal: an unavailable measurement means the
         install dialog falls back to the compatible profile, never to an
-        optimistic one.
+        optimistic one (UX-010).
         """
-        import json
-        import subprocess
+        if self._graphics_probe is not None:
+            return
+        program, *args = self._graphics_probe_command()
+        process = QProcess(self)
+        process.setWorkingDirectory(str(self.root))
+        self._graphics_probe = process
+        timer = QTimer(process)
+        timer.setSingleShot(True)
+        timer.timeout.connect(process.kill)
 
-        try:
-            proc = subprocess.run(
-                [str(self.root / "linux" / "pz"), "windows-vm", "graphics", "status", "--json"],
-                capture_output=True, text=True, timeout=20, check=False,
-            )
-            return json.loads(proc.stdout) if proc.returncode == 0 else {}
-        except (OSError, ValueError, subprocess.SubprocessError):
-            return {}
+        def done(*_args) -> None:
+            if self._graphics_probe is not process:
+                return
+            self._graphics_probe = None
+            timer.stop()
+            status: dict = {}
+            if process.exitStatus() == QProcess.NormalExit and process.exitCode() == 0:
+                try:
+                    parsed = json.loads(bytes(process.readAllStandardOutput().data()).decode("utf-8", "replace"))
+                    status = parsed if isinstance(parsed, dict) else {}
+                except ValueError:
+                    status = {}
+            process.deleteLater()
+            self.status_text.setText("Pronto")
+            self._open_windows_install(status)
+
+        def failed(error: QProcess.ProcessError) -> None:
+            if error == QProcess.FailedToStart:
+                done()
+
+        process.finished.connect(done)
+        process.errorOccurred.connect(failed)
+        self.status_text.setText("Medindo gráficos deste computador…")
+        process.start(program, args)
+        timer.start(self.GRAPHICS_PROBE_TIMEOUT_MS)
+
+    def _open_windows_install(self, graphics_status: dict) -> None:
+        # UX-010: the dialog only promises what this host measured.
+        dialog = WindowsInstallDialog(
+            self,
+            graphics_status=graphics_status,
+            advanced=self.preferences.advanced_mode,
+        )
+        if dialog.exec() != WindowsInstallDialog.Accepted:
+            return
+        values = dialog.values()
+        ProvisionPlayerWindow.open(
+            self.root, self.runner, self,
+            iso=values["input"],
+            graphics=values["graphics"],
+            image_index=values["image_index"],
+            guest_login=values["guest_login"],
+        )
 
     def show_journey(self, category: str, focus: str = "") -> None:
         """UX-006: open a goal's destination and land on its entry step."""
@@ -590,22 +638,8 @@ class MainWindow(QMainWindow):
             return
         values: dict[str, str] = {}
         if action.id == "windows.provision.player":
-            # UX-010: the dialog only promises what this host measured.
-            dialog = WindowsInstallDialog(
-                self,
-                graphics_status=self._graphics_status(),
-                advanced=self.preferences.advanced_mode,
-            )
-            if dialog.exec() != WindowsInstallDialog.Accepted:
-                return
-            values = dialog.values()
-            ProvisionPlayerWindow.open(
-                self.root, self.runner, self,
-                iso=values["input"],
-                graphics=values["graphics"],
-                image_index=values["image_index"],
-                guest_login=values["guest_login"],
-            )
+            # LUX-015: measure asynchronously; the window keeps responding.
+            self._measure_graphics_then_install()
             return
         if action.id == "windows.images.manage":
             from .image_manager_dialog import ImageManagerDialog
