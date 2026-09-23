@@ -33,7 +33,9 @@ def selector(qapp):
     window.close()
 
 
-def _wait(predicate, timeout_ms=5000):
+def _wait(predicate, timeout_ms=20000):
+    # Só limita a espera pela conclusão; o não-bloqueio é medido à parte
+    # (retorno < 0,5 s). Após suítes pesadas o loop de eventos fica lento.
     deadline = time.monotonic() + timeout_ms / 1000
     while not predicate() and time.monotonic() < deadline:
         QTest.qWait(20)
