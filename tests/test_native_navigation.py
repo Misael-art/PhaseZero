@@ -66,6 +66,24 @@ def test_main_window_supports_documented_narrow_viewport(qapp, width, height):
         assert actual_height == height or (
             height > available_height and available_height <= actual_height < height
         )
+        if width >= 700:
+            # LUX-020: trilho de ícones, não menu escondido.
+            assert window.sidebar.isVisible()
+            assert window.sidebar.width() <= 72
+            assert window.compact_menu.isHidden()
+            assert all(not b.text() for b in window.sidebar_buttons.values())
+            assert all(b.accessibleName() for b in window.sidebar_buttons.values())
+            window.sidebar_buttons["Visão geral"].click()
+            assert window.current_category == "Visão geral"
+            window.show_category("Início")
+            qapp.processEvents()
+            dashboard_scroll = window.registry.page_for("Início").findChild(QScrollArea)
+            assert dashboard_scroll.horizontalScrollBar().maximum() == 0
+            window.resize(1280, 800)
+            qapp.processEvents()
+            assert window.sidebar_buttons["Início"].text() == "Início"
+            window.close()
+            return
         assert not window.sidebar.isVisible()
         assert not window.compact_menu.isHidden()
         assert window.search.isVisible()

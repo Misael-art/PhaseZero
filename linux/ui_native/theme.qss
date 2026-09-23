@@ -76,6 +76,10 @@ QMainWindow {
     text-align: left;
     font-size: {{text_base}}px;
 }
+#sidebarButton[rail="true"] {
+    padding: 3px 0;
+    text-align: center;
+}
 #sidebarButton:hover {
     color: {{sidebar_hover_text}};
     background: {{surface_alt}};

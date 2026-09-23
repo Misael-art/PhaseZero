@@ -49,6 +49,11 @@ from .widgets import (
 )
 
 
+
+def _repolish_widget(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
 class MainWindow(QMainWindow):
     theme_changed = Signal(str)
 
@@ -129,10 +134,13 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(12, 8, 10, 12)
         sidebar_layout.setSpacing(3)
         # EmuDeck-style grouped sidebar: section captions + icon-and-text items.
+        self._section_labels: list[QLabel] = []
+        self._sidebar_rail: bool | None = None
         for group_title, categories in SIDEBAR_GROUPS:
             section = QLabel(group_title.upper())
             section.setObjectName("sectionLabel")
             sidebar_layout.addWidget(section)
+            self._section_labels.append(section)
             for category in categories:
                 meta = self.cat_meta.get(category)
                 if meta is None:
@@ -597,7 +605,10 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        compact = event.size().width() < 1100
+        # LUX-020: entre 700 e 1100 px lógicos (Deck a 150%) a navegação vira
+        # um trilho de ícones em vez de sumir atrás do menu.
+        compact = event.size().width() < 700
+        self._set_sidebar_rail(700 <= event.size().width() < 1100)
         compact_controls = event.size().width() < 450
         hide_mode_label = event.size().width() < 560
         short_viewport = event.size().height() < 360
@@ -610,6 +621,28 @@ class MainWindow(QMainWindow):
         self._set_controls_compact(compact_controls)
         if self.stack.currentIndex() == self._search_page_idx:
             self._search_relayout_timer.start()
+
+    SIDEBAR_WIDTH = 230
+    SIDEBAR_RAIL_WIDTH = 64
+
+    def _sidebar_label(self, category: str) -> str:
+        label = category
+        if category == "Resultados" and self._failure_count:
+            label = f"Resultados ({self._failure_count})"
+        return label.replace("&", "&&")
+
+    def _set_sidebar_rail(self, rail: bool) -> None:
+        if self._sidebar_rail is rail:
+            return
+        self._sidebar_rail = rail
+        self.sidebar.setFixedWidth(self.SIDEBAR_RAIL_WIDTH if rail else self.SIDEBAR_WIDTH)
+        for label in self._section_labels:
+            label.setVisible(not rail)
+        self.system_label.setVisible(not rail)
+        for category, button in self.sidebar_buttons.items():
+            button.setText("" if rail else self._sidebar_label(category))
+            button.setProperty("rail", rail)
+            _repolish_widget(button)
 
     def _set_controls_compact(self, compact: bool) -> None:
         """Stack header controls before they can overlap at high DPI."""
@@ -928,8 +961,8 @@ class MainWindow(QMainWindow):
             self.global_context.setText(text)
             self.global_context.setProperty("state", "error")
             results = self.sidebar_buttons.get("Resultados")
-            if results is not None:
-                results.setText(f"Resultados ({self._failure_count})")
+            if results is not None and not self._sidebar_rail:
+                results.setText(self._sidebar_label("Resultados"))
         else:
             self.global_context.setText("Nenhuma falha pendente")
             self.global_context.setProperty("state", "success")

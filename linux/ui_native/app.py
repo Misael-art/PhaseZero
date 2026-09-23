@@ -14,14 +14,14 @@ if __package__ in {None, ""}:
     from linux.ui_native import __version__
     from linux.ui_native.boot_selector import BootSelectorWindow
     from linux.ui_native.main_window import MainWindow
-    from linux.ui_native.tokens import DARK, LIGHT, render_qss
+    from linux.ui_native.tokens import DARK, LIGHT, font_scale, render_qss
     from linux.ui_native.platform import current_platform
     from linux.ui_native.preferences import UiPreferences, resolve_theme
 else:
     from . import __version__
     from .boot_selector import BootSelectorWindow
     from .main_window import MainWindow
-    from .tokens import DARK, LIGHT, render_qss
+    from .tokens import DARK, LIGHT, font_scale, render_qss
     from .platform import current_platform
     from .preferences import UiPreferences, resolve_theme
 
@@ -40,7 +40,7 @@ def _init_icon_theme() -> None:
 def apply_theme(app: QApplication, theme: str) -> None:
     tokens = LIGHT if theme == "light" else DARK
     app.setStyle("Fusion")
-    app.setStyleSheet(render_qss(tokens))
+    app.setStyleSheet(render_qss(tokens, font_scale(app.font().pointSizeF())))
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(tokens.bg))
     palette.setColor(QPalette.WindowText, QColor(tokens.text))

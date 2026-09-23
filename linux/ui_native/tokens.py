@@ -165,7 +165,7 @@ DARK = ThemeTokens(
     # typography
     font_ui='"Inter", "Noto Sans", "Segoe UI", sans-serif',
     font_mono='"JetBrains Mono", "Cascadia Code", monospace',
-    text_xs=10,
+    text_xs=11,
     text_sm=11,
     text_base=13,
     text_lg=15,
@@ -248,7 +248,7 @@ LIGHT = ThemeTokens(
     # typography (idêntico)
     font_ui='"Inter", "Noto Sans", "Segoe UI", sans-serif',
     font_mono='"JetBrains Mono", "Cascadia Code", monospace',
-    text_xs=10,
+    text_xs=11,
     text_sm=11,
     text_base=13,
     text_lg=15,
@@ -265,12 +265,25 @@ LIGHT = ThemeTokens(
 )
 
 
-def render_qss(tokens: ThemeTokens) -> str:
-    """Read theme.qss and substitute every {{token}} placeholder."""
+def font_scale(point_size: float, base: float = 10.0) -> float:
+    """LUX-020: grow type with the desktop font; never shrink below design."""
+    if point_size <= 0:
+        return 1.0
+    return max(1.0, min(2.0, point_size / base))
+
+
+def render_qss(tokens: ThemeTokens, scale: float = 1.0) -> str:
+    """Read theme.qss and substitute every {{token}} placeholder.
+
+    ``scale`` multiplies the ``text_*`` sizes (desktop font preference).
+    """
     text = QSS_PATH.read_text(encoding="utf-8")
 
     def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
-        return str(getattr(tokens, name))
+        value = getattr(tokens, name)
+        if name.startswith("text_") and isinstance(value, int):
+            return str(round(value * scale))
+        return str(value)
 
     return _PLACEHOLDER_RE.sub(_sub, text)
