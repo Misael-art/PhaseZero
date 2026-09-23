@@ -66,6 +66,24 @@ def test_main_window_supports_documented_narrow_viewport(qapp, width, height):
         assert actual_height == height or (
             height > available_height and available_height <= actual_height < height
         )
+        if width >= 850:
+            # LUX-020: trilho de ícones (850–1100 px; Deck a 150% = 853).
+            assert window.sidebar.isVisible()
+            assert window.sidebar.width() <= 72
+            assert window.compact_menu.isHidden()
+            assert all(not b.text() for b in window.sidebar_buttons.values())
+            assert all(b.accessibleName() for b in window.sidebar_buttons.values())
+            window.sidebar_buttons["Visão geral"].click()
+            assert window.current_category == "Visão geral"
+            window.show_category("Início")
+            qapp.processEvents()
+            dashboard_scroll = window.registry.page_for("Início").findChild(QScrollArea)
+            assert dashboard_scroll.horizontalScrollBar().maximum() == 0
+            window.resize(1280, 800)
+            qapp.processEvents()
+            assert window.sidebar_buttons["Início"].text() == "Início"
+            window.close()
+            return
         assert not window.sidebar.isVisible()
         assert not window.compact_menu.isHidden()
         assert window.search.isVisible()
@@ -148,11 +166,24 @@ def test_homelab_reachable_from_sidebar_and_registry(qapp):
         window.close()
 
 
-def test_home_journeys_cover_objectives_with_single_entry(qapp):
+def test_home_journeys_cover_objectives_with_single_entry(qapp, tmp_path, monkeypatch):
     """PZ-AUD-029: Início mostra objetivos (não taxonomias), cada um com
-    UMA ação de entrada real mais requisito, custo e maturidade."""
+    UMA ação de entrada real mais requisito, custo e maturidade.
+
+    Host com histórico (não primeiro uso): os seis objetivos aparecem. No
+    primeiro uso o objetivo que repete o passo 2 some (LUX-013)."""
+    import json as _json
     from linux.ui_native.main_window import MainWindow
     from unittest.mock import patch
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    op = tmp_path / "phasezero" / "control-center" / "operations" / "20260101T000000Z-1-a-x"
+    op.mkdir(parents=True)
+    (op / "operation.json").write_text(_json.dumps({
+        "schemaVersion": 1, "operationId": op.name, "actionId": "system.doctor",
+        "title": "Diagnóstico", "category": "Visão geral", "status": "succeeded",
+        "mutable": True, "preview": False,
+    }), encoding="utf-8")
 
     with patch.object(MainWindow, "_host_summary"), patch(
         "linux.ui_native.status_loader.StatusLoader.fetch_action"
@@ -182,4 +213,30 @@ def test_home_journeys_cover_objectives_with_single_entry(qapp):
                 assert window.registry.page_for(dest) is not None, dest
             seen_actions.add(action_id)
         assert len(seen_actions) == 6
+        window.close()
+
+
+def test_ctrl_number_follows_sidebar_order(qapp):
+    """LUX-016: Ctrl+N abre o N-ésimo destino da barra lateral."""
+    from unittest.mock import patch
+    from PySide6.QtGui import QKeySequence
+    from linux.ui_native.main_window import MainWindow
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+    try:
+        order = window.sidebar_order()
+        assert order[0] == "Início"
+        shortcuts = {
+            action.shortcut().toString(): action for action in window.actions()
+            if action.shortcut().toString().startswith("Ctrl+")
+            and action.shortcut().toString()[5:].isdigit()
+        }
+        for index, category in enumerate(order[:9], start=1):
+            shortcuts[f"Ctrl+{index}"].trigger()
+            assert window.current_category == category
+            assert f"(Ctrl+{index})" in window.sidebar_buttons[category].toolTip()
+    finally:
         window.close()

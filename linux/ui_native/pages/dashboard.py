@@ -15,7 +15,7 @@ from ..operation_ledger import OperationLedger
 from ..widgets import ActionCard, SectionHeader, themed_icon
 from .base import BasePage
 
-# Jornada de primeiro uso: três passos concretos, cada um uma ação real do
+# Jornada de primeiro uso: dois passos concretos, cada um uma ação real do
 # catálogo (nada de navegação inventada). IDs ausentes simplesmente somem.
 # UX-006: nenhum passo exige IA — quem nunca vai usar assistente conclui o
 # primeiro uso inteiro. IA continua disponível como objetivo, por escolha.
@@ -61,7 +61,9 @@ JOURNEYS: tuple[tuple[str, str, str, str, str, str, str, str], ...] = (
      "toolchain via perfil; logins dos provedores quando pedir",
      "modelos sob demanda",
      "núcleo + proxies", "", ""),
-    ("play", "Jogos, Android e VM",
+    # LUX-013: o card executa só o perfil de jogos; Android e Windows têm
+    # páginas e objetivos próprios, então não são prometidos aqui.
+    ("play", "Jogos e emulação",
      "profile.gaming",
      "drivers/Steam conforme a página de cada área",
      "downloads por área",
@@ -69,6 +71,7 @@ JOURNEYS: tuple[tuple[str, str, str, str, str, str, str, str], ...] = (
 )
 
 _STEP_HINTS = {number: hint for number, _t, hint in ONBOARDING_STEPS}
+ONBOARDING_ACTIONS = {"1": "system.doctor.system", "2": "profile.safe-base"}
 
 
 def _hint_for(number: str) -> str:
@@ -89,9 +92,15 @@ class DashboardPage(BasePage):
             # The ledger lives in the state dir, like every other caller.
             # Passing the repo root made every start look like a first use,
             # so "retomar" never had anything to offer.
-            recent = OperationLedger().records(limit=1)
+            records = OperationLedger().records(limit=50)
         except Exception:
-            recent = []
+            records = []
+        # LUX-014: leituras e previews não são "a última tarefa". Registros
+        # antigos sem os campos contam como tarefa real.
+        recent = [
+            record for record in records
+            if record.get("preview") is not True and record.get("mutable") is not False
+        ][:1]
         self.first_use = not recent
         self._recent = recent[0] if recent else {}
 
@@ -104,10 +113,11 @@ class DashboardPage(BasePage):
         host_layout.setContentsMargins(2, 2, 8, 8)
         host_layout.setSpacing(14)
 
+        # LUX-032: sem emoji no título — leitores de tela o anunciavam.
         if self.first_use:
-            welcome = QLabel("Vamos configurar seu computador 👋")
+            welcome = QLabel("Vamos configurar seu computador")
         else:
-            welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
+            welcome = QLabel("Bem-vindo de volta ao PhaseZero")
         welcome.setObjectName("welcomeTitle")
         welcome.setWordWrap(True)
         host_layout.addWidget(welcome)
@@ -130,11 +140,14 @@ class DashboardPage(BasePage):
             host_layout.addWidget(SectionHeader("Comece por um objetivo", "Uma operação prepara e usa."))
             host_layout.addWidget(journeys)
 
-        host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
-        host_layout.addWidget(self._make_grid(DASHBOARD_QUICK, hero=True, columns=2))
+        # LUX-013: no primeiro uso, só os passos e os objetivos. Atalhos
+        # aparecem depois que o primeiro trabalho foi feito.
+        if not self.first_use:
+            host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
+            host_layout.addWidget(self._make_grid(DASHBOARD_QUICK, hero=True, columns=2))
 
-        host_layout.addWidget(SectionHeader("Ferramentas & utilidades", "Atalhos para status e reparos."))
-        host_layout.addWidget(self._make_grid(DASHBOARD_TOOLS, hero=False, columns=3))
+            host_layout.addWidget(SectionHeader("Ferramentas & utilidades", "Atalhos para status e reparos."))
+            host_layout.addWidget(self._make_grid(DASHBOARD_TOOLS, hero=False, columns=3))
         host_layout.addStretch()
 
         scroll.setWidget(host)
@@ -144,10 +157,7 @@ class DashboardPage(BasePage):
         """Faixa 'Comece por aqui' — 3 passos, só com ações que existem."""
         steps: list[tuple[str, str, ActionSpec]] = []
         for number, title, _hint in ONBOARDING_STEPS:
-            action_id = {
-                "1": "system.doctor.system",
-                "2": "profile.safe-base",
-            }.get(number, "")
+            action_id = ONBOARDING_ACTIONS.get(number, "")
             action = self.by_id.get(action_id)
             if action is not None:
                 steps.append((number, title, action))
@@ -235,11 +245,26 @@ class DashboardPage(BasePage):
         copy.addWidget(heading)
         copy.addWidget(detail)
         row.addLayout(copy, 1)
-        resume = QPushButton("Retomar")
-        resume.setObjectName("primaryButton")
-        resume.setAccessibleName(f"Retomar {title}")
-        resume.clicked.connect(lambda _=False, c=category: self.request_category(c))
-        row.addWidget(resume)
+        action = self.by_id.get(str(record.get("actionId") or ""))
+        if status in {"failed", "cancelled"}:
+            # LUX-014: falha oferece entender e repetir, não "retomar".
+            details = QPushButton("Ver o que falhou")
+            details.setObjectName("secondaryButton")
+            details.setAccessibleName(f"Ver o que falhou em {title}")
+            details.clicked.connect(lambda: self.request_category("Resultados"))
+            row.addWidget(details)
+            if action is not None:
+                retry = QPushButton("Tentar de novo")
+                retry.setObjectName("primaryButton")
+                retry.setAccessibleName(f"Tentar de novo: {title}")
+                retry.clicked.connect(lambda _=False, a=action: self.request_action(a))
+                row.addWidget(retry)
+        else:
+            resume = QPushButton("Retomar")
+            resume.setObjectName("primaryButton")
+            resume.setAccessibleName(f"Retomar {title}")
+            resume.clicked.connect(lambda _=False, c=category: self.request_category(c))
+            row.addWidget(resume)
         self.resume_card = card
         return card
 
@@ -249,6 +274,9 @@ class DashboardPage(BasePage):
         for _key, title, action_id, requirement, cost, maturity, dest, focus in JOURNEYS:
             action = self.by_id.get(action_id)
             if action is None:
+                continue
+            # LUX-013: não repetir o que a faixa "Comece por aqui" já oferece.
+            if self.first_use and action_id in ONBOARDING_ACTIONS.values():
                 continue
             rows.append((action, title, requirement, cost, maturity, dest, focus))
         if not rows:

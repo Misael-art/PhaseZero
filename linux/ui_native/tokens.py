@@ -37,6 +37,11 @@ class ThemeTokens:
     text_dim: str
     text_muted: str
     text_log: str
+    # LUX-010: navegação lateral tem pares próprios (o hover/checked do tema
+    # claro usava on_accent branco sobre lilás claro: 1.2:1).
+    sidebar_active_text: str
+    sidebar_hover_text: str
+    section_label: str
     # Accent
     accent: str
     accent_hover: str
@@ -119,6 +124,9 @@ DARK = ThemeTokens(
     text_dim="#a0a0b0",
     text_muted="#6a6a82",
     text_log="#cfcfe0",
+    sidebar_active_text="#ffffff",
+    sidebar_hover_text="#ffffff",
+    section_label="#a0a0b0",
     # accent
     accent="#7c4dff",
     accent_hover="#8f66ff",
@@ -157,7 +165,7 @@ DARK = ThemeTokens(
     # typography
     font_ui='"Inter", "Noto Sans", "Segoe UI", sans-serif',
     font_mono='"JetBrains Mono", "Cascadia Code", monospace',
-    text_xs=10,
+    text_xs=11,
     text_sm=11,
     text_base=13,
     text_lg=15,
@@ -199,6 +207,9 @@ LIGHT = ThemeTokens(
     text_dim="#5a5a68",
     text_muted="#8a8a98",
     text_log="#2a2a36",
+    sidebar_active_text="#1a1a24",
+    sidebar_hover_text="#1a1a24",
+    section_label="#5a5a68",
     # accent (brand kept identical)
     accent="#7c4dff",
     accent_hover="#9166ff",
@@ -237,7 +248,7 @@ LIGHT = ThemeTokens(
     # typography (idêntico)
     font_ui='"Inter", "Noto Sans", "Segoe UI", sans-serif',
     font_mono='"JetBrains Mono", "Cascadia Code", monospace',
-    text_xs=10,
+    text_xs=11,
     text_sm=11,
     text_base=13,
     text_lg=15,
@@ -254,12 +265,25 @@ LIGHT = ThemeTokens(
 )
 
 
-def render_qss(tokens: ThemeTokens) -> str:
-    """Read theme.qss and substitute every {{token}} placeholder."""
+def font_scale(point_size: float, base: float = 10.0) -> float:
+    """LUX-020: grow type with the desktop font; never shrink below design."""
+    if point_size <= 0:
+        return 1.0
+    return max(1.0, min(2.0, point_size / base))
+
+
+def render_qss(tokens: ThemeTokens, scale: float = 1.0) -> str:
+    """Read theme.qss and substitute every {{token}} placeholder.
+
+    ``scale`` multiplies the ``text_*`` sizes (desktop font preference).
+    """
     text = QSS_PATH.read_text(encoding="utf-8")
 
     def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
-        return str(getattr(tokens, name))
+        value = getattr(tokens, name)
+        if name.startswith("text_") and isinstance(value, int):
+            return str(round(value * scale))
+        return str(value)
 
     return _PLACEHOLDER_RE.sub(_sub, text)

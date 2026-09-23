@@ -25,6 +25,7 @@ from .graphics_profiles import (
     host_profile_state, recommended_profile, simple_graphics_options,
 )
 from .platform import state_dir
+from .widgets import fit_to_screen
 
 
 def completed_image_indices(operations_dir: Path | None = None) -> set[int]:
@@ -65,7 +66,7 @@ class WindowsInstallDialog(QDialog):
         self.setAutoFillBackground(True)
         self.setWindowTitle("Instalar Windows automaticamente")
         self.setWindowModality(Qt.WindowModal)
-        self.setMinimumWidth(620)
+        fit_to_screen(self, 620, 520)
         self._used_indices = set(used_indices if used_indices is not None else completed_image_indices())
         # UX-010: what this host can actually do decides what is offered.
         self._graphics_status = graphics_status or {}

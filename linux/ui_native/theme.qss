@@ -61,7 +61,7 @@ QMainWindow {
     border-bottom-left-radius: {{radius_lg}}px;
 }
 #sectionLabel {
-    color: {{text_muted}};
+    color: {{section_label}};
     font-size: {{text_xs}}px;
     font-weight: 800;
     padding: {{space_md}}px {{space_sm}}px 4px {{space_sm}}px;
@@ -76,12 +76,16 @@ QMainWindow {
     text-align: left;
     font-size: {{text_base}}px;
 }
+#sidebarButton[rail="true"] {
+    padding: 3px 0;
+    text-align: center;
+}
 #sidebarButton:hover {
-    color: {{on_accent}};
+    color: {{sidebar_hover_text}};
     background: {{surface_alt}};
 }
 #sidebarButton:checked {
-    color: {{on_accent}};
+    color: {{sidebar_active_text}};
     background: {{surface_selected}};
     border-left: 3px solid {{accent}};
     font-weight: 600;
@@ -631,6 +635,7 @@ QProgressBar::chunk {
 #dialogTitle[state="running"] { color: {{accent}}; }
 #successTitle { color: {{success}}; }
 #errorTitle { color: {{error}}; }
+#errorText { color: {{error}}; }
 QDialog {
     color: {{text}};
     background: {{bg}};

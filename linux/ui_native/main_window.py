@@ -33,7 +33,7 @@ from .provision_player import ProvisionPlayerWindow
 from .windows_install_dialog import WindowsInstallDialog
 from .preferences import UiPreferences
 from .pages.registry import PageRegistry
-from .result_parser import severity_for
+from .result_parser import restart_required, severity_for
 from .widgets import (
     ActionInspector,
     ActionListRow,
@@ -48,6 +48,11 @@ from .widgets import (
     themed_icon,
 )
 
+
+
+def _repolish_widget(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
 
 class MainWindow(QMainWindow):
     theme_changed = Signal(str)
@@ -70,6 +75,7 @@ class MainWindow(QMainWindow):
         self._start_failed = False
         self._search_cards: list[QWidget] = []
         self._controls_compact: bool | None = None
+        self._graphics_probe: QProcess | None = None
         self._host_process: QProcess | None = None
         self._closing = False
         self.progress_dialog: ProgressDialog | None = None
@@ -128,10 +134,13 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(12, 8, 10, 12)
         sidebar_layout.setSpacing(3)
         # EmuDeck-style grouped sidebar: section captions + icon-and-text items.
+        self._section_labels: list[QLabel] = []
+        self._sidebar_rail: bool | None = None
         for group_title, categories in SIDEBAR_GROUPS:
             section = QLabel(group_title.upper())
             section.setObjectName("sectionLabel")
             sidebar_layout.addWidget(section)
+            self._section_labels.append(section)
             for category in categories:
                 meta = self.cat_meta.get(category)
                 if meta is None:
@@ -332,8 +341,12 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancelar")
         self.cancel_button.setObjectName("dangerButton")
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.runner.cancel)
-        self.cancel_button.setAccessibleDescription("Interrompe processo em andamento")
+        self.cancel_button.clicked.connect(self.confirm_cancel)
+        self.cancel_button.setAccessibleDescription("Interrompe processo em andamento (pede confirmação)")
+        self.show_progress_button = QPushButton("Mostrar progresso")
+        self.show_progress_button.setAccessibleDescription("Reabre a janela de progresso da operação atual")
+        self.show_progress_button.setVisible(False)
+        self.show_progress_button.clicked.connect(self._show_progress_dialog)
         self.toggle_logs_button = QPushButton("Logs")
         self.toggle_logs_button.clicked.connect(self.toggle_logs)
         status_row.addWidget(self.status_dot)
@@ -341,6 +354,7 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.elapsed_label)
         status_row.addWidget(self.command_label, 1)
         status_row.addWidget(self.toggle_logs_button)
+        status_row.addWidget(self.show_progress_button)
         status_row.addWidget(self.cancel_button)
         # Frameless window: QSizeGrip is the only mouse-resize affordance.
         status_row.addWidget(QSizeGrip(operation), 0, Qt.AlignBottom | Qt.AlignRight)
@@ -389,11 +403,25 @@ class MainWindow(QMainWindow):
         cancel_action.setShortcut(QKeySequence(Qt.Key_Escape))
         cancel_action.triggered.connect(self.cancel_or_clear)
         self.addAction(cancel_action)
-        for index, (category, _icon, _hint) in enumerate(CATEGORIES[:9], start=1):
+        # LUX-016: Ctrl+N segue a ordem visual da barra lateral (Início = 1)
+        # e aparece no tooltip de cada destino.
+        for index, category in enumerate(self.sidebar_order()[:9], start=1):
             action = QAction(self)
             action.setShortcut(QKeySequence(f"Ctrl+{index}"))
             action.triggered.connect(lambda _checked=False, name=category: self.show_category(name))
             self.addAction(action)
+            button = self.sidebar_buttons.get(category)
+            if button is not None:
+                button.setToolTip(f"{button.toolTip()} (Ctrl+{index})")
+
+    def sidebar_order(self) -> list[str]:
+        """Destinations in the order the sidebar shows them."""
+        return [
+            category
+            for _group, categories in SIDEBAR_GROUPS
+            for category in categories
+            if category in self.sidebar_buttons
+        ]
 
     def _host_summary(self) -> None:
         process = QProcess(self)
@@ -451,24 +479,71 @@ class MainWindow(QMainWindow):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
 
-    def _graphics_status(self) -> dict:
-        """Measured graphics capability of this host, or {} when unknown.
+    GRAPHICS_PROBE_TIMEOUT_MS = 20_000
+
+    def _graphics_probe_command(self) -> list[str]:
+        return [str(self.root / "linux" / "pz"), "windows-vm", "graphics", "status", "--json"]
+
+    def _measure_graphics_then_install(self) -> None:
+        """Measured graphics capability of this host, without blocking the UI.
 
         Bounded and never fatal: an unavailable measurement means the
         install dialog falls back to the compatible profile, never to an
-        optimistic one.
+        optimistic one (UX-010).
         """
-        import json
-        import subprocess
+        if self._graphics_probe is not None:
+            return
+        program, *args = self._graphics_probe_command()
+        process = QProcess(self)
+        process.setWorkingDirectory(str(self.root))
+        self._graphics_probe = process
+        timer = QTimer(process)
+        timer.setSingleShot(True)
+        timer.timeout.connect(process.kill)
 
-        try:
-            proc = subprocess.run(
-                [str(self.root / "linux" / "pz"), "windows-vm", "graphics", "status", "--json"],
-                capture_output=True, text=True, timeout=20, check=False,
-            )
-            return json.loads(proc.stdout) if proc.returncode == 0 else {}
-        except (OSError, ValueError, subprocess.SubprocessError):
-            return {}
+        def done(*_args) -> None:
+            if self._graphics_probe is not process or self._closing:
+                return
+            self._graphics_probe = None
+            timer.stop()
+            status: dict = {}
+            if process.exitStatus() == QProcess.NormalExit and process.exitCode() == 0:
+                try:
+                    parsed = json.loads(bytes(process.readAllStandardOutput().data()).decode("utf-8", "replace"))
+                    status = parsed if isinstance(parsed, dict) else {}
+                except ValueError:
+                    status = {}
+            process.deleteLater()
+            self.status_text.setText("Pronto")
+            self._open_windows_install(status)
+
+        def failed(error: QProcess.ProcessError) -> None:
+            if error == QProcess.FailedToStart:
+                done()
+
+        process.finished.connect(done)
+        process.errorOccurred.connect(failed)
+        self.status_text.setText("Medindo gráficos deste computador…")
+        process.start(program, args)
+        timer.start(self.GRAPHICS_PROBE_TIMEOUT_MS)
+
+    def _open_windows_install(self, graphics_status: dict) -> None:
+        # UX-010: the dialog only promises what this host measured.
+        dialog = WindowsInstallDialog(
+            self,
+            graphics_status=graphics_status,
+            advanced=self.preferences.advanced_mode,
+        )
+        if dialog.exec() != WindowsInstallDialog.Accepted:
+            return
+        values = dialog.values()
+        ProvisionPlayerWindow.open(
+            self.root, self.runner, self,
+            iso=values["input"],
+            graphics=values["graphics"],
+            image_index=values["image_index"],
+            guest_login=values["guest_login"],
+        )
 
     def show_journey(self, category: str, focus: str = "") -> None:
         """UX-006: open a goal's destination and land on its entry step."""
@@ -530,7 +605,11 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        compact = event.size().width() < 1100
+        # LUX-020: entre 850 e 1100 px lógicos (Deck a 150% = 853) a navegação
+        # vira um trilho de ícones. Abaixo de 850 o trilho roubaria largura
+        # que o Homelab precisa (overflow com fontes largas, ex. DejaVu).
+        compact = event.size().width() < 850
+        self._set_sidebar_rail(850 <= event.size().width() < 1100)
         compact_controls = event.size().width() < 450
         hide_mode_label = event.size().width() < 560
         short_viewport = event.size().height() < 360
@@ -543,6 +622,28 @@ class MainWindow(QMainWindow):
         self._set_controls_compact(compact_controls)
         if self.stack.currentIndex() == self._search_page_idx:
             self._search_relayout_timer.start()
+
+    SIDEBAR_WIDTH = 230
+    SIDEBAR_RAIL_WIDTH = 64
+
+    def _sidebar_label(self, category: str) -> str:
+        label = category
+        if category == "Resultados" and self._failure_count:
+            label = f"Resultados ({self._failure_count})"
+        return label.replace("&", "&&")
+
+    def _set_sidebar_rail(self, rail: bool) -> None:
+        if self._sidebar_rail is rail:
+            return
+        self._sidebar_rail = rail
+        self.sidebar.setFixedWidth(self.SIDEBAR_RAIL_WIDTH if rail else self.SIDEBAR_WIDTH)
+        for label in self._section_labels:
+            label.setVisible(not rail)
+        self.system_label.setVisible(not rail)
+        for category, button in self.sidebar_buttons.items():
+            button.setText("" if rail else self._sidebar_label(category))
+            button.setProperty("rail", rail)
+            _repolish_widget(button)
 
     def _set_controls_compact(self, compact: bool) -> None:
         """Stack header controls before they can overlap at high DPI."""
@@ -585,22 +686,8 @@ class MainWindow(QMainWindow):
             return
         values: dict[str, str] = {}
         if action.id == "windows.provision.player":
-            # UX-010: the dialog only promises what this host measured.
-            dialog = WindowsInstallDialog(
-                self,
-                graphics_status=self._graphics_status(),
-                advanced=self.preferences.advanced_mode,
-            )
-            if dialog.exec() != WindowsInstallDialog.Accepted:
-                return
-            values = dialog.values()
-            ProvisionPlayerWindow.open(
-                self.root, self.runner, self,
-                iso=values["input"],
-                graphics=values["graphics"],
-                image_index=values["image_index"],
-                guest_login=values["guest_login"],
-            )
+            # LUX-015: measure asynchronously; the window keeps responding.
+            self._measure_graphics_then_install()
             return
         if action.id == "windows.images.manage":
             from .image_manager_dialog import ImageManagerDialog
@@ -667,7 +754,10 @@ class MainWindow(QMainWindow):
             self.progress_dialog = ProgressDialog(
                 title, command, self, advanced_mode=self.preferences.advanced_mode
             )
-            self.progress_dialog.cancel_requested.connect(self.runner.cancel)
+            self.progress_dialog.cancel_requested.connect(self.confirm_cancel)
+            self.progress_dialog.hidden_while_running.connect(
+                lambda: self.show_progress_button.setVisible(True)
+            )
             self.progress_dialog.show()
 
     def append_output(self, text: str, error: bool) -> None:
@@ -700,11 +790,14 @@ class MainWindow(QMainWindow):
             self.progress_dialog.deleteLater()
             self.progress_dialog = None
         self.cancel_button.setEnabled(False)
+        self.show_progress_button.setVisible(False)
         action = self.pending_action
         is_mutable = bool(action and action.mutable)
         severity = severity_for(result.parsed, result.exit_code, mutable=is_mutable)
         status_map = {"success": "Concluído", "warning": "Concluído com avisos", "error": "Falhou"}
         status_label = status_map.get(severity, "Falhou")
+        if restart_required(result.parsed):
+            status_label = "Reinício necessário"
         self.status_text.setText(status_label)
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
@@ -869,8 +962,8 @@ class MainWindow(QMainWindow):
             self.global_context.setText(text)
             self.global_context.setProperty("state", "error")
             results = self.sidebar_buttons.get("Resultados")
-            if results is not None:
-                results.setText(f"Resultados ({self._failure_count})")
+            if results is not None and not self._sidebar_rail:
+                results.setText(self._sidebar_label("Resultados"))
         else:
             self.global_context.setText("Nenhuma falha pendente")
             self.global_context.setProperty("state", "success")
@@ -878,10 +971,39 @@ class MainWindow(QMainWindow):
         self.global_context.style().polish(self.global_context)
 
     def cancel_or_clear(self) -> None:
-        if self.runner.running:
-            self.runner.cancel()
-        elif self.search.text():
+        # LUX-002: Esc nunca aborta uma operação — só limpa a busca.
+        if self.search.text():
             self.search.clear()
+
+    def _ask_cancel(self, title: str, elevated: bool) -> bool:
+        text = f"Parar agora pode deixar “{title}” incompleto."
+        if elevated:
+            text += " Pode exigir reparo depois."
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Parar operação?")
+        box.setText(text)
+        keep = box.addButton("Continuar operação", QMessageBox.RejectRole)
+        stop = box.addButton("Parar mesmo assim", QMessageBox.DestructiveRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        box.exec()
+        return box.clickedButton() is stop
+
+    def confirm_cancel(self) -> None:
+        """LUX-002: cancelar exige uma segunda decisão explícita."""
+        if not self.runner.running:
+            return
+        action = self.pending_action
+        title = action.title if action is not None else "a operação"
+        if self._ask_cancel(title, bool(action and action.elevated)):
+            self.runner.cancel()
+
+    def _show_progress_dialog(self) -> None:
+        self.show_progress_button.setVisible(False)
+        if self.progress_dialog is not None:
+            self.progress_dialog.show()
+            self.progress_dialog.raise_()
 
     def toggle_logs(self) -> None:
         self.log_view.setVisible(not self.log_view.isVisible())
@@ -910,7 +1032,10 @@ class MainWindow(QMainWindow):
 
     def toggle_theme(self) -> None:
         self.dark_theme = not self.dark_theme
-        self.theme_changed.emit("dark" if self.dark_theme else "light")
+        theme = "dark" if self.dark_theme else "light"
+        # LUX-021: a escolha explícita sobrevive ao reinício.
+        self.preferences.set_theme(theme)
+        self.theme_changed.emit(theme)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.runner.running:
@@ -925,6 +1050,10 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._closing = True
+        probe, self._graphics_probe = self._graphics_probe, None
+        if probe is not None:
+            probe.kill()
+            probe.waitForFinished(500)
         self.runner.shutdown()
         if self._host_process is not None:
             self._host_process.kill()

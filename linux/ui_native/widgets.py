@@ -50,7 +50,8 @@ from . import __version__
 
 from .models import ActionSpec, OperationResult
 from .platform import open_path
-from .result_parser import guidance, is_pending_report
+from .preferences import reduced_motion
+from .result_parser import guidance, is_pending_report, restart_required
 
 
 _ICON_CACHE: dict[str, QIcon] = {}
@@ -136,6 +137,33 @@ def action_icon(widget: QWidget, action: ActionSpec, size: int = 24) -> QIcon:
             fallback = candidate
             break
     return themed_icon(widget, action.icon, fallback)
+
+
+def available_geometry(widget: QWidget):
+    """Usable screen area for ``widget`` (patched by tests to emulate a Deck)."""
+    screen = widget.screen() if widget is not None else None
+    screen = screen or QApplication.primaryScreen()
+    return screen.availableGeometry() if screen is not None else None
+
+
+def fit_to_screen(
+    widget: QWidget, width: int, height: int, *, minimum: tuple[int, int] = (320, 240), margin: int = 24
+) -> None:
+    """LUX-012: prefer ``width×height`` but never exceed the usable screen.
+
+    Steam Deck at 150% offers 853×533 logical pixels; fixed minimums of
+    760×540 pushed the action footer off-screen.
+    """
+    area = available_geometry(widget)
+    if area is None:
+        widget.setMinimumSize(*minimum)
+        widget.resize(width, height)
+        return
+    max_w = max(minimum[0], area.width() - margin)
+    max_h = max(minimum[1], area.height() - margin)
+    widget.setMinimumSize(min(minimum[0], max_w), min(minimum[1], max_h))
+    widget.setMaximumSize(max_w, max_h)
+    widget.resize(min(width, max_w), min(height, max_h))
 
 
 def _repolish(widget: QWidget) -> None:
@@ -939,7 +967,7 @@ class ParameterDialog(QDialog):
         super().__init__(parent)
         self.action = action
         self.setWindowTitle(action.title)
-        self.setMinimumWidth(560)
+        fit_to_screen(self, 560, 420)
         layout = QVBoxLayout(self)
         description = QLabel(action.description)
         description.setWordWrap(True)
@@ -1064,6 +1092,12 @@ def start_shimmer(widget: QWidget) -> None:
     """Start a shimmer opacity loop on a skeleton widget."""
     existing = getattr(widget, "_phasezero_shimmer", None)
     if existing is not None:
+        return
+    if reduced_motion():
+        # LUX-021: movimento reduzido — destaque estático, sem animação.
+        widget.setProperty("shimmer", "true")
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
         return
     effect = QGraphicsOpacityEffect(widget)
     widget.setGraphicsEffect(effect)
@@ -1377,6 +1411,15 @@ def sanitized_command(command: list[str]) -> str:
     return shlex.join(output)
 
 
+STATE_NAMES_PT = {
+    "success": "concluído",
+    "warning": "aviso",
+    "error": "erro",
+    "running": "em andamento",
+    "info": "informação",
+}
+
+
 class StatefulDialog(QDialog):
     """Accessible dialog foundation with semantic state header and action footer."""
 
@@ -1385,21 +1428,32 @@ class StatefulDialog(QDialog):
         self.setObjectName("statefulDialog")
         self.setProperty("state", state)
         self.setWindowTitle(title)
-        self.setMinimumSize(760, 540)
+        fit_to_screen(self, 760, 540)
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
         icon = QLabel(STATE_ICONS.get(state, "ℹ"))
         icon.setObjectName("dialogStateIcon")
         icon.setProperty("state", state)
-        icon.setAccessibleName(f"Estado: {state}")
+        # LUX-030: leitor de tela anuncia o estado em português.
+        icon.setAccessibleName(f"Estado: {STATE_NAMES_PT.get(state, state)}")
         heading = QLabel(title)
         heading.setObjectName("dialogTitle")
         heading.setProperty("state", state)
         header.addWidget(icon)
         header.addWidget(heading, 1)
         outer.addLayout(header)
-        self.body = QVBoxLayout()
-        outer.addLayout(self.body, 1)
+        # LUX-012: corpo rola; cabeçalho e rodapé de ações ficam sempre
+        # visíveis, mesmo numa tela pequena com escala alta.
+        body_host = QWidget()
+        body_host.setObjectName("dialogBody")
+        self.body = QVBoxLayout(body_host)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(QFrame.NoFrame)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body_scroll.setWidget(body_host)
+        outer.addWidget(self.body_scroll, 1)
         self.footer = QDialogButtonBox()
         outer.addWidget(self.footer)
 
@@ -1434,15 +1488,58 @@ class PreviewDialog(StatefulDialog):
         pending = is_pending_report(result.parsed)
         preview_ok = (result.ok or pending) and not blockers
         dialog_state = "success" if preview_ok and not pending else "warning" if preview_ok else "error"
-        super().__init__("Confirmar operação", dialog_state, parent)
+        state_only = bool(action and action.preview_kind == "state")
+        if not preview_ok:
+            dialog_title = "Não é seguro aplicar agora"
+        elif state_only:
+            dialog_title = "Revisar antes de aplicar"
+        else:
+            dialog_title = "Confirmar operação"
+        super().__init__(
+            dialog_title,
+            dialog_state,
+            parent,
+        )
         self.action = action
         guide = guidance(result.parsed)
-        headline = guide["summary"] or "Preview concluído. Nenhuma mutação foi executada."
+        if not preview_ok:
+            # LUX-023: prévia que falhou ou tem bloqueios diz por quê.
+            headline = guide["summary"] or (
+                "A verificação encontrou bloqueios." if blockers
+                else "A verificação prévia falhou; nada foi alterado."
+            )
+        elif state_only:
+            # LUX-001: a leitura de estado não simula a mudança; nunca
+            # chamá-la de preview concluído.
+            headline = guide["summary"] or "Estado atual — isto não simula a mudança."
+        else:
+            headline = guide["summary"] or "Preview concluído. Nenhuma mutação foi executada."
         next_step = guide["next_action"]
         summary = QLabel(headline)
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        if not preview_ok:
+            items = [str(item) for item in blockers] if isinstance(blockers, list) else []
+            for item in items[:8]:
+                blocker = QLabel(f"• {item}")
+                blocker.setObjectName("errorText")
+                blocker.setWordWrap(True)
+                self.body.addWidget(blocker)
+            unlock = QLabel(
+                "Resolva os bloqueios acima e tente de novo." if items
+                else "Veja os detalhes técnicos para a causa e tente de novo."
+            )
+            unlock.setObjectName("cardDescription")
+            unlock.setWordWrap(True)
+            self.body.addWidget(unlock)
+            self.blocked_reason = unlock
+        if state_only and action is not None:
+            impact = QLabel(f"O que vai acontecer: {action.impact or action.description}")
+            impact.setObjectName("impactText")
+            impact.setWordWrap(True)
+            self.body.addWidget(impact)
+            self.impact_label = impact
         for reason in guide["reasons"]:
             reason_label = QLabel(f"• {reason}")
             reason_label.setWordWrap(True)
@@ -1505,7 +1602,8 @@ class PreviewDialog(StatefulDialog):
         self.details_toggle.toggled.connect(
             lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
         )
-        copy = self.add_action("Copiar saída", QDialogButtonBox.ActionRole)
+        # LUX-031: o que é copiado é o detalhe técnico, visível ou não.
+        copy = self.add_action("Copiar detalhes técnicos", QDialogButtonBox.ActionRole)
         copy.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
         cancel = self.add_action("Voltar", QDialogButtonBox.RejectRole)
         self.confirm = self.add_action(
@@ -1523,8 +1621,12 @@ class PreviewDialog(StatefulDialog):
             self.confirmation.textChanged.connect(
                 lambda text: self.confirm.setEnabled(preview_ok and text.strip() == "CONFIRMAR")
             )
-            self.body.insertWidget(1, warning)
-            self.body.insertWidget(2, self.confirmation)
+            anchor = getattr(self, "impact_label", None) or summary
+            position = self.body.indexOf(anchor) + 1
+            self.body.insertWidget(position, warning)
+            self.body.insertWidget(position + 1, self.confirmation)
+            # LUX-025: Tab do campo vai direto ao botão que ele libera.
+            QWidget.setTabOrder(self.confirmation, self.confirm)
             self.confirmation.setFocus()
         cancel.clicked.connect(self.reject)
         self.confirm.clicked.connect(self.accept)
@@ -1532,6 +1634,7 @@ class PreviewDialog(StatefulDialog):
 
 class ProgressDialog(StatefulDialog):
     cancel_requested = Signal()
+    hidden_while_running = Signal()
 
     def __init__(
         self,
@@ -1605,8 +1708,11 @@ class ProgressDialog(StatefulDialog):
         self.accept()
 
     def reject(self) -> None:
+        # LUX-002: Esc/fechar só esconde; a operação continua e o botão
+        # "Mostrar progresso" da barra de status reabre esta janela.
         if self._running:
-            self.cancel_requested.emit()
+            self.hide()
+            self.hidden_while_running.emit()
             return
         super().reject()
 
@@ -1628,9 +1734,10 @@ class ResultDialog(StatefulDialog):
         sev = severity or ("success" if result.ok else "error")
         title_map = {"success": "Operação concluída", "warning": "Concluído com avisos", "error": "Operação falhou"}
         title = title_map.get(sev, "Operação falhou")
+        if restart_required(result.parsed):
+            title = "Reinício necessário"
         super().__init__(title, sev, parent)
-        self.setMinimumSize(660, 380)
-        self.resize(760, 480)
+        fit_to_screen(self, 760, 480)
         self.formatted = formatted
         message = {
             "success": "Tudo pronto. A operação terminou como esperado.",

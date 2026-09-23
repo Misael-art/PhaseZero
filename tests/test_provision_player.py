@@ -352,7 +352,13 @@ def test_player_action_intercepted_in_request_action(qapp) -> None:
         patch.object(WindowsInstallDialog, "values", return_value={"input": "/fake.iso", "graphics": "compat", "image_index": "1", "guest_login": "auto"}),
     ):
         win = MainWindow(ROOT)
+        # LUX-015: a medição de gráficos é assíncrona.
+        win._graphics_probe_command = lambda: ["sh", "-c", "echo '{}'"]
         win.request_action(player_action[0])
+        deadline = time.monotonic() + 5
+        while not mock_open.called and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.02)
         mock_open.assert_called_once()
         assert mock_open.call_args.kwargs["guest_login"] == "auto"
         mock_start.assert_not_called()

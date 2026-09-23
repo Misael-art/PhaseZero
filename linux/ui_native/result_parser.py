@@ -49,6 +49,20 @@ _RESUMABLE_STATUSES = {
     "gui-required", "guirequired",
 }
 
+# LUX-003: envelopes cujo estado diz que a operação falhou. Um nextAction ou
+# resumable junto não transforma falha em "pendente".
+_FAILURE_STATES = {
+    "error", "failed", "failure", "fail", "blocked", "timeout", "timed-out",
+    "unhealthy", "crashed", "aborted",
+}
+
+
+def restart_required(value: Any) -> bool:
+    """True when the payload asks for a reboot to finish (not a failure)."""
+    if not isinstance(value, dict):
+        return False
+    return str(value.get("status", "")).casefold().replace("-", "") == "requiresrestart"
+
 
 def is_pending_report(value: Any) -> bool:
     """True when the payload is a valid diagnostic saying work is pending.
@@ -59,10 +73,13 @@ def is_pending_report(value: Any) -> bool:
     """
     if not isinstance(value, dict) or not value:
         return False
+    for key in ("state", "status"):
+        if str(value.get(key, "")).strip().casefold() in _FAILURE_STATES:
+            return False
     if value.get("resumable") is True:
         return True
     state = value.get("state")
-    if isinstance(state, str) and state.strip() and state.strip().casefold() != "error":
+    if isinstance(state, str) and state.strip():
         return True
     if str(value.get("status", "")).casefold() in _RESUMABLE_STATUSES:
         return True
@@ -103,8 +120,10 @@ def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output
         return "warning" if has_output else "error"
     if not isinstance(value, dict):
         return "success"
+    if restart_required(value):
+        return "warning"
     status = str(value.get("status", "")).casefold()
-    if status in {"failed", "error", "blocked", "requiresrestart", "manualaction"}:
+    if status in {"failed", "error", "blocked", "manualaction"}:
         return "error"
     if status in {
         "warn", "warning", "degraded", "needsinstall", "needsrepair",

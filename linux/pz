@@ -21,7 +21,7 @@ Usage:
   pz steamdeck keyboard repair Configure KDE/Maliit virtual keyboard
   pz steamdeck console [mode]  Apply mode and launch Steam Gamepad UI
   pz steamdeck dev [mode]      Apply desktop/dev session mode
-  pz steamdeck hotkeys install Install Ctrl+Alt+F1..F6 shortcuts
+  pz steamdeck hotkeys install Install Meta+Shift+F1..F8 shortcuts
   pz steamdeck watcher install Install dynamic mode-watcher user service
   pz steamdeck privileged status Manage TDP/GPU privileged bridge
   pz steamdeck boot status   Manage GRUB SteamOS-like console boot entry

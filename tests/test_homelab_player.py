@@ -1195,9 +1195,11 @@ def test_pages_reflow_in_real_window_with_theme(app):
         finally:
             win.hide()
             win.close()
-    app.setStyleSheet(previous_qss)
-    if previous_style:
-        app.setStyle(previous_style)
+            # Restaurar sempre: um assert acima não pode vazar o tema global
+            # para os testes seguintes (mascarou a causa real no CI do #97).
+            app.setStyleSheet(previous_qss)
+            if previous_style:
+                app.setStyle(previous_style)
 
 
 def test_plan_survives_telemetry_drift_blocks_on_verdict_fail(app):
