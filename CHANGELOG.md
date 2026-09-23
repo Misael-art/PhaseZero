@@ -3,6 +3,18 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [Não lançado]
+
+### Corrigido
+- **Instalação Windows abandonada podia permanecer `running` para sempre.** O supervisor registra identidade de processo resistente a reutilização de PID, separa o worker, libera descritor de lock nos processos filhos e reconcilia operação órfã como interrompida, preservando arquivos para retomar ou remover.
+- **Inventário ocultava staging parcial e remoção não recuperava operações presas.** Instalações interrompidas, falhas e cancelamentos passam a aparecer com espaço ocupado, retomada, lixeira e liberação permanente confirmada; QEMU vivo bloqueia mutação.
+- **Seletor de edição usava índice global e não inspecionava a mídia escolhida.** O diálogo lê índices da ISO de forma assíncrona e associa conclusões ao SHA-256 da mídia; reinstalar a mesma edição fica permitido.
+- ISO válida com WIM/ESD que não pôde ser interpretado não sugere índice 1 nem opções fictícias: pede o índice manual exato. ISO inválida bloqueia o início.
+
+### Testes
+- Suíte hermética de recuperação no CI; `test_provision.sh`, suíte de remoção e testes Qt.
+- A validação de instalação, desligamento, remoção, reinstalação e aceleração no Steam Deck exige execução física e medição no Windows; continua pendente.
+
 ## [1.21.0] - 2026-09-23
 
 ### Corrigido
