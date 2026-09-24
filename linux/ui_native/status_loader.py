@@ -6,7 +6,10 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from shiboken6 import isValid
 
 from .models import ActionSpec, ProductInstance
-from .product_inventory import instances_from_capability_status, instances_from_status_payload
+from .product_inventory import (
+    instances_from_capability_status, instances_from_proxy_auth_status,
+    instances_from_status_payload,
+)
 from .result_parser import parse_json_output
 
 _SECRET_PATTERNS = (
@@ -133,9 +136,16 @@ class StatusLoader(QObject):
     ) -> tuple[ProductInstance, ...]:
         """Normalize one status response using context registered at fetch time."""
         context = self._product_contexts.pop(action_id, None)
-        if context is None or not isinstance(payload, dict):
+        if context is None:
             return ()
         app_id, host_id, scope, instance_key = context
+        if isinstance(payload, list):
+            return instances_from_proxy_auth_status(
+                payload, app_id=app_id, host_id=host_id, scope=scope,
+                instance_key=instance_key,
+            )
+        if not isinstance(payload, dict):
+            return ()
         if isinstance(payload.get("capabilities"), list):
             return tuple(
                 instance for instance in instances_from_capability_status(payload, host_id=host_id)

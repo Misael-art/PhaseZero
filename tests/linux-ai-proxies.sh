@@ -38,6 +38,9 @@ plan="$("$ROOT/linux/pz" ai proxies plan all)"
 grep -Eq '^would install kimiproxy .* at commit [0-9a-f]{40} ' <<< "$plan"
 auth="$("$ROOT/linux/pz" ai proxies auth all)"
 [ "$(jq 'length' <<< "$auth")" -eq 11 ]
+scoped_auth="$("$ROOT/linux/pz" ai proxies auth qwenproxy)"
+[ "$(jq 'length' <<< "$scoped_auth")" -eq 1 ]
+jq -e '.[0].id == "qwenproxy"' <<< "$scoped_auth" >/dev/null
 jq -e '
   .[] | select(.id == "qwenproxy") |
   .webValidation.required == true and

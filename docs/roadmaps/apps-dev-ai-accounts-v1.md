@@ -503,3 +503,13 @@ cliques públicos: `test_native_navigation.py`: 12 passaram; `test_ai_session_ui
 `test_product_inventory.py`: 32 passaram. `compileall` e `git diff --check` passaram.
 Ruff/Black/Flake8 ausentes. Sem execução de serviços ou contas. PXA-003 segue `in_progress`
 por recuperação segura incompleta e execução remota/instância ambígua ainda indisponível.
+
+PXA-003 status de proxy: cada produto Kimi, Qwen, DeepSeek e MiMo agora consulta `auth <id>`
+read-only, e o adaptador seleciona somente o ID exato da resposta. Serviço e estado de sessão
+alimentam dimensões separadas; origem permanece unknown, e ausência na store privada não vira
+ausência global. Isso mantém mutação bloqueada até prova de origem aprovada. `test_product_inventory.py`,
+`test_product_status_loader.py` e `test_product_registry_ui.py`: 37 passaram; `tests/linux-ai-proxies.sh`
+passou com HOME/XDG temporários e confirmou resposta com um único proxy; `compileall` e
+`git diff --check` passaram. Nenhum serviço, pacote, login ou conta real foi alterado. Limite:
+recovery de proxy segue indisponível sem identidade/integridade e autoridade seguras; PXA-003
+permanece `in_progress`.

@@ -798,6 +798,22 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 visibility=visibility,
             )
         )
+
+    # Product detail gets a scoped, read-only probe for its own proxy. The
+    # suite auth response is an array, so the adapter filters by exact proxy ID.
+    for token, proxy_id, title in (
+        ("kimi", "kimiproxy", "Status Kimi"),
+        ("qwen", "qwenproxy", "Status Qwen"),
+        ("deeps", "deepsproxy", "Status DeepSeek"),
+        ("mimo", "mimo-ai-proxy", "Status MiMo"),
+    ):
+        args = ("ai", "proxies", "auth", proxy_id)
+        actions.append(_a(
+            f"ai.proxies-{token}-status", "Proxies IA", title,
+            "Consulta somente instalação, sessão e serviço deste proxy.",
+            args, "system-search", badge="JSON", visibility="advanced",
+            status_args=args,
+        ))
     actions.append(
         _a(
             "ai.proxies-credentials-mimo",

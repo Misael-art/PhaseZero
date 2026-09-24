@@ -85,3 +85,34 @@ def test_status_loader_normalizes_capability_catalog_by_app_and_scope(tmp_path):
         "app.vscode", "host", "external",
     )
     assert instances[0].ready
+
+
+def test_status_loader_filters_proxy_auth_array_by_selected_app(tmp_path):
+    action = ActionSpec(
+        "ai.proxies-qwen-status", "Proxies IA", "Status Qwen", "",
+        ("ai", "proxies", "auth", "qwenproxy"), "",
+        status_args=("ai", "proxies", "auth", "qwenproxy"),
+    )
+    loader = StatusLoader(tmp_path)
+    with patch.object(loader, "fetch") as fetch:
+        loader.fetch_product_status(
+            action, app_id="app.qwen-proxy", host_id="local", scope="local",
+            instance_key="selected-qwen",
+        )
+    fetch.assert_called_once_with(action.id, ["ai", "proxies", "auth", "qwenproxy"])
+    entries = [
+        {"id": "kimiproxy", "installed": True, "service": "active",
+         "webValidation": {"status": "authenticated"}},
+        {"id": "qwenproxy", "installed": True, "service": "crash-loop",
+         "webValidation": {"status": "session-present"}},
+    ]
+    instances = loader.product_instances_from_result(action.id, entries)
+    assert len(instances) == 1
+    instance = instances[0]
+    assert (instance.instance_id, instance.app_id, instance.scope) == (
+        "local:local:app.qwen-proxy:selected-qwen", "app.qwen-proxy", "local",
+    )
+    assert (instance.installation, instance.origin, instance.configuration, instance.health) == (
+        "present", "unknown", "needed", "failed",
+    )
+    assert not instance.ready

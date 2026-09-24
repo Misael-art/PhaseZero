@@ -94,7 +94,11 @@ def _ai_app(action_id: str) -> str | None:
         return {"claude": "claude-desktop", "qwen": "qwen-code-desktop", "codex": "codex-desktop"}.get(name)
     if suffix.startswith("proxies-"):
         for token, name in _PROXIES.items():
-            if suffix.endswith(f"-{token}") or suffix.endswith(f"-{token}-login"):
+            if (
+                suffix.endswith(f"-{token}")
+                or suffix.endswith(f"-{token}-login")
+                or suffix.endswith(f"-{token}-status")
+            ):
                 return name
         return None
     for prefix, name in _AI_APPS.items():
@@ -471,4 +475,66 @@ def instances_from_status_payload(
         configuration=raw_configuration,
         health=raw_health,
         observed_at=str(payload.get("observedAt") or ""),
+    ),)
+
+
+_PROXY_STATUS_IDS = {
+    "app.kimiproxy": "kimiproxy",
+    "app.qwen-proxy": "qwenproxy",
+    "app.deepseek-proxy": "deepsproxy",
+    "app.mimo-proxy": "mimo-ai-proxy",
+}
+
+
+def instances_from_proxy_auth_status(
+    payload: object,
+    *,
+    app_id: str,
+    host_id: str,
+    scope: str,
+    instance_key: str = "default",
+) -> tuple[ProductInstance, ...]:
+    """Normalize only the named proxy from the read-only auth-status array."""
+    proxy_id = _PROXY_STATUS_IDS.get(app_id)
+    if proxy_id is None or not isinstance(payload, list):
+        return ()
+    entry = next((item for item in payload if isinstance(item, dict) and item.get("id") == proxy_id), None)
+    if entry is None:
+        return ()
+
+    installed = entry.get("installed")
+    installation = "present" if installed is True else "unknown"
+    service = entry.get("service")
+    health = {
+        "active": "online",
+        "inactive": "offline",
+        "failed": "failed",
+        "crash-loop": "failed",
+    }.get(service if isinstance(service, str) else "", "unknown")
+    web = entry.get("webValidation")
+    web = web if isinstance(web, dict) else {}
+    auth_status = web.get("status")
+    auth_status = auth_status if isinstance(auth_status, str) else ""
+    if auth_status in {"authenticated", "configured"}:
+        configuration = "ready"
+    elif auth_status in {
+        "not-installed", "login-running", "session-present", "gui-required",
+        "ready-for-login", "missing-credentials", "start-required",
+    }:
+        configuration = "needed"
+    else:
+        configuration = "unknown"
+
+    return (ProductInstance(
+        instance_id=f"{host_id}:{scope}:{app_id}:{instance_key}",
+        app_id=app_id,
+        host_id=host_id,
+        scope=scope,
+        manager="phasezero-ai-proxy-suite",
+        installation=installation,
+        # This probe observes the suite's private store, not approved source
+        # integrity or exclusive ownership. Keep origin unknown.
+        origin="unknown",
+        configuration=configuration,
+        health=health,
     ),)
