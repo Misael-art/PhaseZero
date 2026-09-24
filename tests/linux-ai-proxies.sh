@@ -41,6 +41,18 @@ auth="$("$ROOT/linux/pz" ai proxies auth all)"
 scoped_auth="$("$ROOT/linux/pz" ai proxies auth qwenproxy)"
 [ "$(jq 'length' <<< "$scoped_auth")" -eq 1 ]
 jq -e '.[0].id == "qwenproxy"' <<< "$scoped_auth" >/dev/null
+product_status="$("$ROOT/linux/pz" ai proxies product-status qwenproxy)"
+jq -e '
+  .schemaVersion == 1 and .hasStatus == true and
+  .installationState == "unknown" and .origin == "unknown" and
+  .configurationState == "needed" and .manager == "phasezero-ai-proxy-suite" and
+  (keys | sort) == ["configurationState","hasStatus","health","installationState",
+                    "manager","origin","schemaVersion"]
+' <<< "$product_status" >/dev/null
+if "$ROOT/linux/pz" ai proxies product-status all >/dev/null 2>&1; then
+    echo "FAIL: product status accepted aggregate target"
+    exit 1
+fi
 jq -e '
   .[] | select(.id == "qwenproxy") |
   .webValidation.required == true and

@@ -32,6 +32,34 @@ _RECOVERY_ACTION_BY_APP = {
     # as an implicit recovery action.
     "app.ollama": "ai.ollama",
     "app.opencode": "ai.opencode-install",
+    "app.kimiproxy": "ai.proxies-start-kimi",
+    "app.qwen-proxy": "ai.proxies-start-qwen",
+    "app.deepseek-proxy": "ai.proxies-start-deeps",
+    "app.mimo-proxy": "ai.proxies-start-mimo",
+}
+_PROXY_RECOVERY_AUTHORITY_BY_APP = {
+    "app.kimiproxy": "linux/ai/proxy-suite.sh",
+    "app.qwen-proxy": "linux/ai/proxy-suite.sh",
+    "app.deepseek-proxy": "linux/ai/proxy-suite.sh",
+    "app.mimo-proxy": "linux/ai/proxy-suite.sh",
+}
+_PROXY_RECOVERY_TARGET_BY_APP = {
+    "app.kimiproxy": "kimiproxy",
+    "app.qwen-proxy": "qwenproxy",
+    "app.deepseek-proxy": "deepsproxy",
+    "app.mimo-proxy": "mimo-ai-proxy",
+}
+_PROXY_CONFIGURE_ACTION_BY_APP = {
+    "app.kimiproxy": "ai.proxies-login-kimi",
+    "app.qwen-proxy": "ai.proxies-login-qwen",
+    "app.deepseek-proxy": "ai.proxies-login-deeps",
+    "app.mimo-proxy": "ai.proxies-credentials-mimo",
+}
+_PROXY_CONFIGURE_TARGET_BY_APP = {
+    "app.kimiproxy": ("login", "kimiproxy"),
+    "app.qwen-proxy": ("login", "qwenproxy"),
+    "app.deepseek-proxy": ("login", "deepsproxy"),
+    "app.mimo-proxy": ("set-credentials", "mimo-ai-proxy"),
 }
 _RECOVERY_IMPACT_BY_APP = {
     "app.ollama": (
@@ -42,6 +70,19 @@ _RECOVERY_IMPACT_BY_APP = {
         "Sincroniza OpenCode e mescla a rota local 9Router com rollback; pode instalar "
         "ou atualizar a CLI. Não inicia login nem importa credenciais."
     ),
+    "app.kimiproxy": (
+        "Habilita e inicia somente o serviço Kimi deste usuário; proxies Node também "
+        "podem religar o runtime Node isolado antes de iniciar."
+    ),
+    "app.qwen-proxy": (
+        "Habilita e inicia somente o serviço Qwen deste usuário; proxies Node também "
+        "podem religar o runtime Node isolado antes de iniciar."
+    ),
+    "app.deepseek-proxy": (
+        "Habilita e inicia somente o serviço DeepSeek deste usuário; proxies Node também "
+        "podem religar o runtime Node isolado antes de iniciar."
+    ),
+    "app.mimo-proxy": "Habilita e inicia somente o serviço MiMo deste usuário.",
 }
 
 
@@ -561,6 +602,21 @@ class ProductRegistryPage(BasePage):
             return next((action for action in actions if self._action_matches_selected_instance(action)
                          and self._manifest_action(action.id).get(
                              "installationAuthorityId") in authority_ids and action.mutable), None)
+        if state == "configure":
+            configure_id = _PROXY_CONFIGURE_ACTION_BY_APP.get(self._selected_app_id, "")
+            configure = self.by_id.get(configure_id)
+            instance = self._selected_instance()
+            route = _PROXY_CONFIGURE_TARGET_BY_APP.get(self._selected_app_id)
+            if (
+                configure is not None and route is not None and instance is not None
+                and configure_id in product.get("actionIds", [])
+                and self._action_matches_selected_instance(configure)
+                and instance.origin == "phasezero"
+                and instance.manager == "phasezero-ai-proxy-suite"
+                and configure.mutable and len(configure.args) == 4
+                and configure.args[2:] == route
+            ):
+                return configure
         terms = {
             "configure": {"configure", "setup"},
             # Resolver may run a read-only diagnostic automatically. Mutable
@@ -574,13 +630,24 @@ class ProductRegistryPage(BasePage):
             recovery_id = _RECOVERY_ACTION_BY_APP.get(self._selected_app_id, "")
             recovery = self.by_id.get(recovery_id)
             instance = self._selected_instance()
+            proxy_authority = _PROXY_RECOVERY_AUTHORITY_BY_APP.get(self._selected_app_id)
+            proxy_recovery_owned = bool(
+                recovery is not None and instance is not None
+                and proxy_authority == "linux/ai/proxy-suite.sh"
+                and instance.manager == "phasezero-ai-proxy-suite"
+                and recovery.id == recovery_id
+                and recovery.args[:3] == ("ai", "proxies", "start")
+                and len(recovery.args) > 3
+                and recovery.args[3] == _PROXY_RECOVERY_TARGET_BY_APP.get(self._selected_app_id)
+            )
             if (
                 recovery is not None and recovery_id in product.get("actionIds", [])
                 and self._action_matches_selected_instance(recovery)
                 and instance is not None and instance.origin == "phasezero"
             ):
                 authority_id = self._manifest_action(recovery_id).get("installationAuthorityId")
-                if recovery.mutable and authority_id in product.get("installationAuthorityIds", []):
+                declared_authority = authority_id in product.get("installationAuthorityIds", [])
+                if recovery.mutable and (declared_authority or proxy_recovery_owned):
                     return replace(
                         recovery,
                         impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),

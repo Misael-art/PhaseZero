@@ -504,12 +504,18 @@ cliques públicos: `test_native_navigation.py`: 12 passaram; `test_ai_session_ui
 Ruff/Black/Flake8 ausentes. Sem execução de serviços ou contas. PXA-003 segue `in_progress`
 por recuperação segura incompleta e execução remota/instância ambígua ainda indisponível.
 
-PXA-003 status de proxy: cada produto Kimi, Qwen, DeepSeek e MiMo agora consulta `auth <id>`
-read-only, e o adaptador seleciona somente o ID exato da resposta. Serviço e estado de sessão
-alimentam dimensões separadas; origem permanece unknown, e ausência na store privada não vira
-ausência global. Isso mantém mutação bloqueada até prova de origem aprovada. `test_product_inventory.py`,
-`test_product_status_loader.py` e `test_product_registry_ui.py`: 37 passaram; `tests/linux-ai-proxies.sh`
-passou com HOME/XDG temporários e confirmou resposta com um único proxy; `compileall` e
-`git diff --check` passaram. Nenhum serviço, pacote, login ou conta real foi alterado. Limite:
-recovery de proxy segue indisponível sem identidade/integridade e autoridade seguras; PXA-003
-permanece `in_progress`.
+PXA-003 status/recovery de proxy: Kimi, Qwen, DeepSeek e MiMo recebem probe read-only
+`product-status <id>` que combina autenticação redigida e procedência; origem `phasezero` só
+aparece para snapshot aprovado íntegro e metadados do worktree válidos. Store ausente ou
+snapshot alterado mantém instalação/origem `unknown`. Resolver mapeia start por app, manager,
+argumento ID e escopo; Configurar mapeia login visível ou chave MiMo via stdin. Ambos exigem
+origem íntegra; login/chave mostram preview próprio. Só a jornada composta “Usar” mantém
+execução sem preview. Qwen offline autenticado abriu Resolver com start/preview; sessão pendente
+abriu Configurar com login/preview; manager divergente e app externo ficaram bloqueados. Mimo
+agora pede secret parameter e nunca passa valor em argv. Evidência: 38 testes focados passaram
+antes da expansão; no ciclo atual `test_product_inventory.py -k proxy_status` (1),
+`test_product_status_loader.py` (4), `test_product_registry_ui.py -k proxy_resolver` (1) e
+`test_ai_session_ui.py` nos contratos de preview/Usar (2) passaram; `tests/linux-ai-proxies.sh`
+passou com HOME/XDG temporários, resposta exata e target agregado rejeitado; `bash -n`,
+`compileall` e `git diff --check` passaram. Nenhum serviço, pacote, login, conta ou host real
+foi alterado. G2/G4 seguem pendentes; PXA-003 permanece `in_progress`.

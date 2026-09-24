@@ -10,8 +10,7 @@ sys.path.insert(0, str(ROOT))
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import (
-    instances_from_capability_status, instances_from_proxy_auth_status,
-    instances_from_status_payload,
+    instances_from_capability_status, instances_from_status_payload,
     inventory, inventory_manifest, render_inventory_manifest, target_for,
 )
 
@@ -166,7 +165,7 @@ def test_status_adapter_ignores_malformed_state_fields():
     assert instance.origin == instance.configuration == instance.health == "unknown"
 
 
-def test_proxy_status_actions_target_the_exact_proxy_and_keep_origin_unknown():
+def test_proxy_status_actions_target_exact_product_and_preserve_provenance_contract():
     actions = {action.id: action for action in build_catalog(ROOT)}
     expected = {
         "app.kimiproxy": ("ai.proxies-kimi-status", "kimiproxy"),
@@ -178,29 +177,26 @@ def test_proxy_status_actions_target_the_exact_proxy_and_keep_origin_unknown():
     for app_id, (action_id, proxy_id) in expected.items():
         action = actions[action_id]
         assert not action.mutable
-        assert action.status_args == ("ai", "proxies", "auth", proxy_id)
+        assert action.status_args == ("ai", "proxies", "product-status", proxy_id)
         assert rows[action_id].target_id == app_id
         assert rows[action_id].instance_scope == "local"
-
-    observed = instances_from_proxy_auth_status([
-        {"id": "qwenproxy", "installed": True, "service": "inactive",
-         "webValidation": {"status": "session-present"}},
-        {"id": "kimiproxy", "installed": True, "service": "active",
-         "webValidation": {"status": "authenticated"}},
-    ], app_id="app.qwen-proxy", host_id="local", scope="local")
-    assert len(observed) == 1
-    assert observed[0].installation == "present"
-    assert observed[0].origin == "unknown"
-    assert observed[0].configuration == "needed"
-    assert observed[0].health == "offline"
-    assert instances_from_proxy_auth_status(
-        [{"id": "qwenproxy", "installed": False, "service": "inactive",
-          "webValidation": {"status": "not-installed"}}],
-        app_id="app.qwen-proxy", host_id="local", scope="local",
-    )[0].installation == "unknown"
-    malformed = instances_from_proxy_auth_status(
-        [{"id": "qwenproxy", "installed": "true", "service": [],
-          "webValidation": {"status": []}}],
+    mimo_credentials = actions["ai.proxies-credentials-mimo"]
+    assert mimo_credentials.stdin_parameter == "credentials"
+    assert mimo_credentials.parameters[0].name == "credentials"
+    assert mimo_credentials.parameters[0].kind == "secret"
+    assert "{credentials}" not in mimo_credentials.args
+    observed = instances_from_status_payload(
+        {"hasStatus": True, "installationState": "present", "origin": "phasezero",
+         "configurationState": "ready", "health": "offline",
+         "manager": "phasezero-ai-proxy-suite"},
         app_id="app.qwen-proxy", host_id="local", scope="local",
     )[0]
-    assert malformed.installation == malformed.health == malformed.configuration == "unknown"
+    assert (observed.installation, observed.origin, observed.configuration, observed.health) == (
+        "present", "phasezero", "ready", "offline",
+    )
+    malformed = instances_from_status_payload(
+        {"hasStatus": True, "installationState": [], "origin": [],
+         "configurationState": [], "health": [], "installed": "yes"},
+        app_id="app.qwen-proxy", host_id="local", scope="local",
+    )[0]
+    assert malformed.installation == malformed.origin == malformed.configuration == malformed.health == "unknown"

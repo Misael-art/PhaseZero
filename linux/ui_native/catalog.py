@@ -799,18 +799,18 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             )
         )
 
-    # Product detail gets a scoped, read-only probe for its own proxy. The
-    # suite auth response is an array, so the adapter filters by exact proxy ID.
+    # Product detail gets a scoped probe normalized by the suite for one exact
+    # proxy; unapproved or modified checkouts never claim PhaseZero ownership.
     for token, proxy_id, title in (
         ("kimi", "kimiproxy", "Status Kimi"),
         ("qwen", "qwenproxy", "Status Qwen"),
         ("deeps", "deepsproxy", "Status DeepSeek"),
         ("mimo", "mimo-ai-proxy", "Status MiMo"),
     ):
-        args = ("ai", "proxies", "auth", proxy_id)
+        args = ("ai", "proxies", "product-status", proxy_id)
         actions.append(_a(
             f"ai.proxies-{token}-status", "Proxies IA", title,
-            "Consulta somente instalação, sessão e serviço deste proxy.",
+            "Consulta instalação, origem aprovada, sessão e serviço deste proxy.",
             args, "system-search", badge="JSON", visibility="advanced",
             status_args=args,
         ))
@@ -825,6 +825,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             mutable=True,
             preview=("ai", "proxies", "auth", "mimo-ai-proxy"),
             stdin_parameter="credentials",
+            parameters=(_p("credentials", "Chave oficial MiMo", "secret"),),
         )
     )
 

@@ -300,6 +300,60 @@ def test_resolve_uses_read_only_diagnostic_and_never_starts_external_proxy(qapp)
         status_patcher.stop()
 
 
+def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.qwen-proxy")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:local:app.qwen-proxy:managed", "app.qwen-proxy", "local", "local",
+            manager="phasezero-ai-proxy-suite", installation="present", origin="phasezero",
+            configuration="ready", health="offline",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == "ai.proxies-start-qwen"
+        assert "serviço Qwen" in page._primary_action.impact
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.proxies-start-qwen"
+        assert start.call_args.kwargs["preview"] is True
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:local:app.qwen-proxy:login", "app.qwen-proxy", "local", "local",
+            manager="phasezero-ai-proxy-suite", installation="present", origin="phasezero",
+            configuration="needed", health="online",
+        ),))
+        assert page._primary_button.text() == "Configurar"
+        assert page._primary_action.id == "ai.proxies-login-qwen"
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.proxies-login-qwen"
+        assert start.call_args.kwargs["preview"] is True
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "external:local:app.qwen-proxy", "app.qwen-proxy", "local", "local",
+            manager="external", installation="present", origin="phasezero",
+            configuration="ready", health="offline",
+        ),))
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "unknown-manager:local:app.qwen-proxy", "app.qwen-proxy", "local", "local",
+            manager="unknown", installation="present", origin="phasezero",
+            configuration="needed", health="online",
+        ),))
+        assert page._primary_button.text() == "Configurar"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_multiple_instances_require_explicit_local_scope_selection(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:

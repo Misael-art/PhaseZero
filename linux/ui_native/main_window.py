@@ -803,12 +803,11 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self.log_view.setVisible(self.preferences.advanced_mode)
         try:
-            # One-click proxy journeys: install/start/login already confirmed by Usar.
+            # Only the explicit composite "Usar" journey skips its preview.
+            # Login and credential routes still require their own confirmation.
             skip_preview = (
                 action.id.startswith("ai.proxies-ensure")
-                or action.id.startswith("ai.proxies-login")
                 or action.id.startswith("ai.proxies-open")
-                or action.id == "ai.proxies-credentials-mimo"
             )
             page = self.registry.page_for(self.current_category)
             extra = getattr(page, "consume_action_values", None)

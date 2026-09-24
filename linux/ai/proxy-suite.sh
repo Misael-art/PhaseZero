@@ -1462,6 +1462,42 @@ auth_status_json() {
     printf ']\n'
 }
 
+# Product detail receives one normalized proxy status. Origin is trusted only
+# when the working tree still matches the approved source snapshot and managed
+# worktree metadata; merely residing under the private store proves nothing.
+product_status_json() {
+    local entry provenance
+    case "$TARGET" in
+        kimiproxy|qwenproxy|deepsproxy|mimo-ai-proxy) ;;
+        *) pz_error "product status requires one supported proxy id"; return 2 ;;
+    esac
+    entry="$(auth_status_json | jq -c '.[0]')"
+    provenance="$(provenance_json_one "$TARGET")"
+    jq -cn --argjson entry "$entry" --argjson provenance "$provenance" \
+        --arg manager "phasezero-ai-proxy-suite" \
+        '($entry.webValidation.status // "") as $auth |
+         ($entry.service // "unknown") as $service |
+         {
+           schemaVersion:1,
+           hasStatus:true,
+           installationState:(if $entry.installed == true then "present" else "unknown" end),
+           origin:(if $provenance.ready == true then "phasezero" else "unknown" end),
+           configurationState:(
+             if ($auth == "authenticated" or $auth == "configured") then "ready"
+             elif (["not-installed","login-running","session-present","gui-required",
+                    "ready-for-login","missing-credentials","start-required"] | index($auth)) then "needed"
+             else "unknown" end
+           ),
+           health:(
+             if $service == "active" then "online"
+             elif $service == "inactive" then "offline"
+             elif ($service == "failed" or $service == "crash-loop") then "failed"
+             else "unknown" end
+           ),
+           manager:$manager
+         }'
+}
+
 # Read-only snapshot of what configure_ides has already wired, so the UI can
 # show integration health without mutating any IDE configuration.
 ide_status_json() {
@@ -2255,6 +2291,7 @@ case "$ACTION" in
         configure_ides
         ;;
     auth|auth-status|login-status) auth_status_json ;;
+    product-status) product_status_json ;;
     provenance|sources|source-status) provenance_status_json ;;
     manifest|manifest-check) manifest_check_json ;;
     detailed-status|detailed|overview) detailed_status_json ;;
@@ -2293,5 +2330,5 @@ case "$ACTION" in
     open-studio)
         open_mimo_studio
         ;;
-    *) pz_error "usage: proxy-suite.sh (status|detailed-status|provenance|plan|install|configure-ides|auth|test|start|stop|restart|login|ensure|open|set-credentials) [all|id] [--dry-run]"; exit 2 ;;
+    *) pz_error "usage: proxy-suite.sh (status|detailed-status|provenance|plan|install|configure-ides|auth|product-status|test|start|stop|restart|login|ensure|open|set-credentials) [all|id] [--dry-run]"; exit 2 ;;
 esac
