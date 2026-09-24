@@ -7,7 +7,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | **pending** |
+| Status | **G1 done** 2026-09-24 (AISR-001..004 em `fix/ai-stack-remediation`); G2 aguarda aceite do operador |
 | Criado | 2026-09-24, America/Sao_Paulo |
 | Base observada | `origin/main` `720b7d5` (v1.21.1) |
 | Origem | AICR-001..004 |
@@ -31,6 +31,18 @@
 | AISR-003 | AICR-003 | `setup-codex.sh`: se `codex` existente ≥ mínimo suportado, não reinstala nem troca symlink; pin vira mínimo (`PZ_CODEX_MIN_VERSION`); adiciona `status` e `--dry-run` | Teste: codex fake 0.156.1 no PATH → nenhuma chamada `npm install`, symlink intacto |
 | AISR-004 | AICR-004 | `setup-agent-compat.sh rules` sem workspace → recusa com `needs-project` exit 2 (mesmo guarda de `init`: vazio, `/`, `$HOME`) | Teste: `rules` sem `PZ_WORKSPACE_ROOT` e sem registro → exit 2, zero arquivo criado; `linux-admin-bridge.sh` sem WARN |
 
+## Execução
+
+| ID | Commit | Teste |
+|---|---|---|
+| AISR-001 | `848b504` | `tests/linux-ai-runtime-shim.sh` (falha no código anterior) |
+| AISR-002 | `dcc9c3f` | `tests/linux-ai-proxy-crash-loop.sh`, `test_crash_looping_proxy_is_not_shown_as_running` |
+| AISR-003 | `1f506b7` | `tests/linux-ai-codex.sh` (falha no código anterior) |
+| AISR-004 | `5962461` | `tests/linux-ai-rules-workspace.sh` (falha no código anterior) |
+
+Nota: nenhuma suíte shell de IA roda no CI (`.github/workflows/ci.yml` só faz
+`bash -n`). Item de backlog: incluir `tests/linux-ai*.sh` no job Linux.
+
 ## Gates
 
 - G1: AISR-001..004 com testes verdes; suíte completa no mesmo estado ou melhor.
@@ -48,4 +60,5 @@
 - AICR-011 backup de `9router/settings.json` e `ai-routing`.
 - AICR-012/013 `pz updates check` inventaria codex, opencode, hermes, codexbar, omniroute, rtk, ai-memory, snapshots.
 - AICR-014 `pz ai help|--help|<vazio>`.
+- CI: rodar `tests/linux-ai*.sh` no job Linux.
 - AICR-015..018 polimento (campo MiMo, preview de setup, shellcheck, naming via LUX-016).
