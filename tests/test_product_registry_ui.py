@@ -90,6 +90,34 @@ def test_legacy_page_action_routes_to_detail_and_detail_keeps_execute_path(qapp)
         status_patcher.stop()
 
 
+def test_every_app_action_resolves_to_canonical_detail_with_source_context(qapp):
+    from linux.ui_native.product_inventory import target_for
+
+    window, host_patcher, status_patcher = _window(qapp)
+    routes = []
+    try:
+        product_page = window.registry.page_for("Aplicativos")
+        expected = {
+            action.id: target_for(action).target_id
+            for action in window.registry.by_id.values()
+            if target_for(action).target_kind == "app"
+        }
+        window.open_product = lambda app_id, context_action_id="": routes.append(
+            (app_id, context_action_id)
+        )
+        for action_id in expected:
+            window.inspect_action(window.registry.by_id[action_id])
+
+        assert set(expected.values()) == {
+            product["appId"] for product in product_page.products
+        }
+        assert routes == [(expected[action_id], action_id) for action_id in expected]
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_registry_has_all_manifest_products_and_unknown_is_not_absent(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
