@@ -7,6 +7,7 @@ replace duplicate installers with one product detail and instance contract.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,6 +54,15 @@ _EXTRA_APPS = {
     "omniroute": "OmniRoute", "open-webui": "Open WebUI", "opencode": "OpenCode",
     "qwen-code-desktop": "Qwen Code Desktop", "qwen-proxy": "Qwen Proxy",
     "9router": "9Router", "usagebar": "UsageBar",
+}
+
+# Existing contexts can offer the same app without owning a second installer.
+# `server.llm` keeps its model/server workflow, but delegates the package setup
+# to the canonical Ollama installer.
+_CANONICAL_APP_ACTIONS = {"app.ollama": "ai.ollama"}
+_INSTALL_AUTHORITY_BY_ACTION = {
+    "ai.ollama": "linux/ai/setup-ollama.sh",
+    "server.llm": "linux/ai/setup-ollama.sh",
 }
 
 
@@ -105,8 +115,10 @@ def target_for(action: ActionSpec) -> ProductTarget:
     if aid.startswith("ai."):
         app = _ai_app(aid)
         if app:
+            canonical = _CANONICAL_APP_ACTIONS.get(f"app.{app}") == aid
             return ProductTarget(aid, f"app.{app}", "app", "Inteligência artificial",
-                                 "shortcut", category, "local")
+                                 "canonical" if canonical else "shortcut", category,
+                                 "host" if app == "ollama" else "local")
         if "auth" in aid or "login" in aid or "credentials" in aid or "secrets" in aid:
             destination = "Contas e conexões"
         else:
@@ -150,11 +162,66 @@ def inventory(actions: list[ActionSpec]) -> tuple[ProductTarget, ...]:
     return rows
 
 
+def _is_install_route(row: ProductTarget, action: ActionSpec) -> bool:
+    if row.target_kind != "app":
+        return False
+    if action.id.startswith("capability.plan."):
+        return True
+    if "watchdog" in action.id:
+        return False
+    return any(verb in action.args for verb in ("install", "setup")) or action.args[:2] == ("ai", "setup")
+
+
+def _installation_authority(row: ProductTarget, action: ActionSpec) -> str | None:
+    if not _is_install_route(row, action):
+        return None
+    if row.action_id in _INSTALL_AUTHORITY_BY_ACTION:
+        return _INSTALL_AUTHORITY_BY_ACTION[row.action_id]
+    if row.action_id.startswith("capability.plan."):
+        return "linux/capabilities/engine.py"
+    # A route with one installer is its own current owner. If a second route
+    # appears for the same app/scope, manifest generation requires an explicit
+    # shared authority above instead of silently declaring two installers.
+    return f"action:{row.action_id}"
+
+
 def inventory_manifest(root: Path) -> dict[str, object]:
     from .catalog import build_catalog
 
     actions = build_catalog(root)
     rows = inventory(actions)
+    action_by_id = {action.id: action for action in actions}
+    action_ids_by_app: dict[str, list[str]] = {}
+    canonical_by_app: dict[str, str] = {}
+    authorities_by_app_scope: dict[tuple[str, str], dict[str, list[str]]] = {}
+    authority_by_action: dict[str, str] = {}
+    for row in rows:
+        if row.target_kind != "app":
+            continue
+        action_ids_by_app.setdefault(row.target_id, []).append(row.action_id)
+        if row.role == "canonical":
+            if row.target_id in canonical_by_app:
+                raise ValueError(f"multiple canonical actions for {row.target_id}")
+            canonical_by_app[row.target_id] = row.action_id
+        authority_id = _installation_authority(row, action_by_id[row.action_id])
+        if authority_id:
+            authority_by_action[row.action_id] = authority_id
+            scopes = authorities_by_app_scope.setdefault(
+                (row.target_id, row.instance_scope), {},
+            )
+            scopes.setdefault(authority_id, []).append(row.action_id)
+    ambiguous_authorities = {
+        key: authorities for key, authorities in authorities_by_app_scope.items()
+        if len(authorities) > 1
+    }
+    if ambiguous_authorities:
+        raise ValueError(f"multiple install authorities per app and scope: {ambiguous_authorities}")
+    installation_authorities = [
+        {"appId": app_id, "instanceScope": scope,
+         "authorityId": authority_id, "actionIds": sorted(authority_actions)}
+        for (app_id, scope), authorities in sorted(authorities_by_app_scope.items())
+        for authority_id, authority_actions in sorted(authorities.items())
+    ]
     products = [
         {"appId": _capability_target(item.id), "name": item.title,
          "capabilityId": item.id, "sources": [
@@ -172,6 +239,17 @@ def inventory_manifest(root: Path) -> dict[str, object]:
     missing_apps = {row.target_id for row in rows if row.target_kind == "app"} - known_apps
     if missing_apps:
         raise ValueError(f"app targets without a product record: {sorted(missing_apps)}")
+    if len({item["appId"] for item in products}) != len(products):
+        raise ValueError("duplicate app ID in canonical product registry")
+    for product in products:
+        app_id = str(product["appId"])
+        product["actionIds"] = sorted(action_ids_by_app.get(app_id, ()))
+        product["canonicalActionId"] = canonical_by_app.get(app_id)
+        product["installationAuthorityIds"] = sorted({
+            authority_by_action[action_id]
+            for action_id in product["actionIds"]
+            if action_id in authority_by_action
+        })
     return {
         "schemaVersion": 1,
         "source": "linux.ui_native.catalog.build_catalog",
@@ -186,14 +264,48 @@ def inventory_manifest(root: Path) -> dict[str, object]:
             "routing.<operation>.<task>.<policy>",
         ],
         "products": products,
+        "installationAuthorities": installation_authorities,
+        "dynamicInstallationAuthorities": [
+            {"pattern": "hub.capability.install.<capabilityId>",
+             "authorityId": "linux/capabilities/engine.py"},
+        ],
         "actions": [
             {"actionId": row.action_id, "targetId": row.target_id,
              "targetKind": row.target_kind, "destination": row.destination,
              "role": row.role, "context": row.context,
-             "instanceScope": row.instance_scope}
+             "instanceScope": row.instance_scope,
+             "installationAuthorityId": authority_by_action.get(row.action_id)}
             for row in rows
         ],
     }
+
+
+def render_inventory_manifest(payload: dict[str, object]) -> str:
+    """Render stable JSON with one compact record per inventory row."""
+    lines = ["{"]
+    entries = list(payload.items())
+    for entry_index, (key, value) in enumerate(entries):
+        suffix = "," if entry_index < len(entries) - 1 else ""
+        encoded_key = json.dumps(key, ensure_ascii=False)
+        if isinstance(value, list):
+            lines.append(f"  {encoded_key}: [")
+            for index, item in enumerate(value):
+                item_suffix = "," if index < len(value) - 1 else ""
+                encoded_item = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                lines.append(f"    {encoded_item}{item_suffix}")
+            lines.append(f"  ]{suffix}")
+        else:
+            encoded_value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            lines.append(f"  {encoded_key}: {encoded_value}{suffix}")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def write_inventory_manifest(root: Path, destination: Path) -> None:
+    """Write the generated action/product contract to an explicit path."""
+    destination.write_text(
+        render_inventory_manifest(inventory_manifest(root)), encoding="utf-8",
+    )
 
 
 def instances_from_capability_status(

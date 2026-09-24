@@ -11,7 +11,7 @@ from linux.ui_native.catalog import build_catalog
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import (
     instances_from_capability_status, instances_from_status_payload,
-    inventory, inventory_manifest, target_for,
+    inventory, inventory_manifest, render_inventory_manifest, target_for,
 )
 
 
@@ -21,6 +21,29 @@ def test_every_action_has_exactly_one_target_and_snapshot_is_current():
     assert saved == payload
     assert payload["actionCount"] == len(build_catalog(ROOT))
     assert len({item["actionId"] for item in payload["actions"]}) == payload["actionCount"]
+    assert json.loads(render_inventory_manifest(payload)) == payload
+    assert all(len(item["installationAuthorityIds"]) <= 1 for item in payload["products"])
+
+
+def test_install_routes_have_one_authority_per_app_scope():
+    payload = inventory_manifest(ROOT)
+    app_actions = {item.id: item for item in build_catalog(ROOT)}
+    grouped = {}
+    for action in payload["actions"]:
+        authority = action["installationAuthorityId"]
+        if not authority:
+            continue
+        key = (action["targetId"], action["instanceScope"])
+        grouped.setdefault(key, set()).add(authority)
+    assert grouped
+    assert all(len(authorities) == 1 for authorities in grouped.values())
+    assert all(
+        action["installationAuthorityId"]
+        for action in payload["actions"]
+        if action["targetKind"] == "app"
+        and "watchdog" not in action["actionId"]
+        and any(verb in app_actions[action["actionId"]].args for verb in ("install", "setup"))
+    )
 
 
 def test_existing_shortcuts_converge_on_one_product():
@@ -29,6 +52,26 @@ def test_existing_shortcuts_converge_on_one_product():
     assert rows["ai.hermes-status"].target_id == rows["server.hermes"].target_id == "app.hermes"
     assert rows["capability.plan.development.vscode"].target_id == "app.vscode"
     assert rows["capability.plan.development.vscodium"].target_id == "app.vscodium"
+
+
+def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
+    payload = inventory_manifest(ROOT)
+    actions = {item["actionId"]: item for item in payload["actions"]}
+    product = next(item for item in payload["products"] if item["appId"] == "app.ollama")
+    authority = next(
+        item for item in payload["installationAuthorities"]
+        if item["appId"] == "app.ollama" and item["instanceScope"] == "host"
+    )
+
+    assert product["canonicalActionId"] == "ai.ollama"
+    assert product["actionIds"] == sorted(("ai.ollama", "server.llm", "server.llm.expose",
+                                           "server.llm.restore", "server.llm.status"))
+    assert actions["ai.ollama"]["role"] == "canonical"
+    assert actions["server.llm"]["role"] == "shortcut"
+    assert actions["ai.ollama"]["instanceScope"] == actions["server.llm"]["instanceScope"] == "host"
+    assert actions["ai.ollama"]["installationAuthorityId"] == "linux/ai/setup-ollama.sh"
+    assert actions["server.llm"]["installationAuthorityId"] == "linux/ai/setup-ollama.sh"
+    assert authority["actionIds"] == ["ai.ollama", "server.llm"]
 
 
 def test_unclassified_action_fails_closed():
