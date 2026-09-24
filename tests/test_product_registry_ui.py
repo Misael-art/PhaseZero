@@ -299,6 +299,28 @@ def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
         status_patcher.stop()
 
 
+def test_ready_odysseus_uses_registered_open_route(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.odysseus")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:host:app.odysseus", "app.odysseus", "local", "host",
+            installation="present", origin="phasezero", configuration="ready", health="online",
+        ),))
+        assert page._primary_button.text() == "Abrir"
+        assert page._primary_action.id == "ai.odysseus-open"
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.odysseus-open"
+        assert start.call_args.kwargs["preview"] is False
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_desktop_launcher_rejects_entry_symlink_outside_xdg_root(tmp_path):
     from linux.ui_native.icons import find_desktop_entry
 
