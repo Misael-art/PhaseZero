@@ -294,7 +294,54 @@ import yaml
 path = Path(sys.argv[1])
 endpoint = sys.argv[2]
 model_name = sys.argv[3]
-data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+# --- PhaseZero durable config IO (AISR-011/013; same block in hermes-router.sh,
+# 9router-hermes-provider.sh and setup-hermes.sh) ---
+def _pz_fsync_write(target, payload):
+    with open(target, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(target, 0o600)
+
+
+def _pz_fsync_dir(directory):
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def pz_load_config(path):
+    """Empty/missing config: restore the last good .pz-bak instead of starting
+    from {} (an interrupted write once left config.yaml at 0 bytes)."""
+    raw = path.read_bytes() if path.exists() else b""
+    if raw.strip():
+        return yaml.safe_load(raw.decode("utf-8")) or {}
+    bak = path.with_name(path.name + ".pz-bak")
+    if bak.is_file() and bak.stat().st_size > 0:
+        try:
+            restored = yaml.safe_load(bak.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            restored = None
+        if isinstance(restored, dict) and restored:
+            print(f"PhaseZero: {path.name} vazio; restaurado de {bak.name}", file=sys.stderr)
+            return restored
+    return {}
+
+
+def pz_durable_write(path, text):
+    """Backup (only a non-empty file), fsynced tmp, atomic replace, fsynced dir."""
+    if path.exists() and path.stat().st_size > 0:
+        _pz_fsync_write(path.with_name(path.name + ".pz-bak"), path.read_bytes())
+    tmp = path.with_name("." + path.name + ".pz-tmp")
+    _pz_fsync_write(tmp, text.encode("utf-8"))
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    _pz_fsync_dir(path.parent)
+# --- end PhaseZero durable config IO ---
+
+data = pz_load_config(path)
 if not isinstance(data, dict):
     raise SystemExit("Hermes config root must be a mapping")
 model = data.setdefault("model", {})
@@ -310,17 +357,7 @@ for slot in ("compression", "web_extract", "skills_hub", "mcp"):
     if isinstance(current, dict):
         current["provider"] = "main"
 path.parent.mkdir(parents=True, exist_ok=True)
-# Escrita staged + backup: config.yaml vivo do agente não pode ser truncado
-# por uma escrita direta (crash/disco cheio no meio = config perdida).
-if path.exists():
-    backup = path.with_name(path.name + ".pz-bak")
-    backup.write_bytes(path.read_bytes())
-    backup.chmod(0o600)
-tmp = path.with_name(f".{path.name}.pz-tmp")
-tmp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-tmp.chmod(0o600)
-os.replace(tmp, path)
-path.chmod(0o600)
+pz_durable_write(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 PY
     config_has_router_reference || {
         pz_error "Hermes 9Router configuration did not pass reference validation"
@@ -517,7 +554,9 @@ status_json() {
     if [ -n "$cmd" ]; then
         installed=true
         version="$(timeout 10 "$cmd" --version 2>/dev/null | head -1 | tr -d '\r' || true)"
-        timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
+        # `hermes config check` accepts an empty config.yaml; an empty file
+        # (interrupted write) must not read as a passing check.
+        [ -s "$HERMES_CONFIG" ] && timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
         timeout 30 "$cmd" doctor >/dev/null 2>&1 && doctor_ok=true
     fi
     [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
@@ -539,7 +578,7 @@ status_json() {
     distribution_install_allowed && distribution_ok=true
     operator_risk_accepted && risk=true
     [ "$mcp_count" -gt 0 ] && [ "$sdk" = true ] && mcp_ready=true
-    if [ -f "$HERMES_CONFIG" ] && [ -f "$ENV_FILE" ] && [ "$config_safe" = true ] &&
+    if [ -s "$HERMES_CONFIG" ] && [ -f "$ENV_FILE" ] && [ "$config_safe" = true ] &&
         [ "$config_mode" = 600 ] && [ "$env_mode" = 600 ]; then
         configured=true
     fi

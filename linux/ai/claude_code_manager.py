@@ -634,10 +634,17 @@ function probeHttp() {
             for item in store_dir.rglob("*"):
                 if item.is_file() and not item.is_symlink() and stat.S_IMODE(item.stat().st_mode) != 0o600:
                     insecure_files += 1
+        update_check = self._bonsai_update_check(path)
         return {
             "installed": bool(path),
             "path": path,
             "version": version,
+            "updateCheck": update_check,
+            "nextAction": (
+                "remova o runner que fixa a versão e reinstale pelo canal oficial (https://www.trybons.ai)"
+                if update_check == "forged"
+                else ""
+            ),
             "credentialStorePresent": store_present,
             "authenticated": True if store_present else None,
             "snapshotConsent": "interactive-upstream",
@@ -647,6 +654,34 @@ function probeHttp() {
                 "secure": bool(directory_mode == 0o700 and insecure_files == 0),
             },
         }
+
+    @staticmethod
+    def _bonsai_update_check(path: str | None) -> str:
+        """Follow the launcher chain and flag a runner that fakes npm "latest".
+
+        A hand-made runner once pinned PZ_BONSAI_INSTALLED_VERSION and answered
+        /@bonsai-ai/cli/latest with the installed version whenever the registry
+        failed, so the CLI believed it was current forever.
+        """
+        if not path:
+            return "not-installed"
+        seen: set[Path] = set()
+        pending = [Path(path)]
+        while pending and len(seen) < 6:
+            current = pending.pop()
+            try:
+                current = current.resolve()
+                if current in seen or not current.is_file() or current.stat().st_size > 65536:
+                    continue
+                seen.add(current)
+                text = current.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "latest-fail-open" in text or "PZ_BONSAI_INSTALLED_VERSION" in text:
+                return "forged"
+            for match in re.finditer(r"^(?:upstream=|exec\s+)['\"]?([^'\"\s]+)", text, re.MULTILINE):
+                pending.append(Path(match.group(1)))
+        return "upstream"
 
     def node_info(self) -> dict[str, Any]:
         node = command_path("node")
@@ -1060,6 +1095,15 @@ function probeHttp() {
         env["PATH"] = f"{Path(node).parent}:{env.get('PATH', '')}"
         rc, metadata_out, err = run_capture([npm, "view", "@bonsai-ai/cli", "version", "dist.integrity", "--json"], timeout=30, env=env)
         if rc != 0:
+            if "E404" in err or "404" in err:
+                # @bonsai-ai/cli was unpublished from npm (registry 404 since
+                # 2026-09). An existing install keeps working; only a fresh one
+                # has no verifiable source.
+                raise RuntimeError(
+                    "Bonsai CLI indisponível no npm (@bonsai-ai/cli retorna 404). "
+                    "Instale pelo canal oficial em https://www.trybons.ai e rode de novo; "
+                    "uma instalação existente continua sendo reutilizada."
+                )
             raise RuntimeError(f"Bonsai registry metadata failed: {err.strip()}")
         metadata = json.loads(metadata_out)
         version = metadata.get("version")

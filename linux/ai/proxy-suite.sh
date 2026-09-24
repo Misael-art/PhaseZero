@@ -631,7 +631,7 @@ status_json() {
             [ -d "$dir/.git" ] && installed=true
         fi
         { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } &&
-            service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
+            service="$(unit_service_state "$id" "$port")"
         $first || printf ','
         first=false
         jq -cn --arg id "$id" --arg repo "$repo" --arg kind "$kind" --arg path "$dir" \
@@ -651,8 +651,21 @@ service_rows() {
     supported_rows
 }
 
+# Older 9Router managers repointed the shared $RUNTIME/bin/node shim to the
+# system Node. Proxies resolve `npx tsx` through that shim, so their Node 24
+# native modules then fail to load and the unit crash-loops. Relink it to the
+# isolated runtime before (re)starting; no download, no-op when already right.
+repair_runtime_shim() {
+    [ -x "$NODE_BIN" ] || return 0
+    [ "$(readlink -f "$RUNTIME/bin/node" 2>/dev/null)" = "$(readlink -f "$NODE_BIN")" ] && return 0
+    install -d "$RUNTIME/bin"
+    ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+    pz_warn "proxy runtime shim repointed to isolated Node $("$NODE_BIN" --version 2>/dev/null)"
+}
+
 service_action() {
     local mode="$1" id repo port kind count=0
+    [ "$mode" = stop ] || repair_runtime_shim
     if [ "$mode" != stop ]; then
         while IFS='|' read -r id repo port kind; do
             { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } || continue
@@ -1014,6 +1027,25 @@ port_open() {
     timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null
 }
 
+# `systemctl is-active` says "active" between the crashes of a unit that dies
+# right after launch (Restart=on-failure), so status used to show a dead proxy
+# as running. Repeated restarts with no listener mean crash-loop.
+unit_service_state() {
+    local id="$1" port="$2" state restarts
+    state="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
+    case "$state" in
+        active|activating) ;;
+        *) printf '%s\n' "$state"; return 0 ;;
+    esac
+    restarts="$(systemctl --user show "phasezero-$id.service" -p NRestarts --value 2>/dev/null || true)"
+    if [[ "$restarts" =~ ^[0-9]+$ ]] && [ "$restarts" -ge "${PZ_PROXY_CRASH_LOOP_RESTARTS:-3}" ] \
+        && [[ "$port" =~ ^[1-9][0-9]*$ ]] && ! port_open "$port"; then
+        printf '%s\n' crash-loop
+        return 0
+    fi
+    printf '%s\n' "$state"
+}
+
 # --- Enable + OAuth login (UI "Habilitar" buttons) ---------------------------
 #
 # kimiproxy/qwenproxy/deepsproxy authenticate by scraping the vendor's own web
@@ -1357,7 +1389,7 @@ auth_status_json() {
         [ "$id" = "mimo-ai-proxy" ] && mimo_official_configured && installed=true
         service="not-applicable"
         { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } &&
-            service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
+            service="$(unit_service_state "$id" "$port")"
         api_configured=false
         dotenv_has_any_key "$env_file" API_KEY && api_configured=true
         [ "$id" = "mimo-ai-proxy" ] && mimo_official_configured && api_configured=true
@@ -1623,6 +1655,7 @@ proxy_chat_probe() {
 test_proxies() {
     local id repo port kind first=true
     local ids=() ports=()
+    repair_runtime_shim
     # Pass 1: start every user-facing proxy so they warm up concurrently.
     while IFS='|' read -r id repo port kind; do
         [ -n "$id" ] || continue
@@ -1847,7 +1880,7 @@ ensure_one() {
         fi
     fi
 
-    service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
+    service="$(unit_service_state "$id" "$port")"
 
     if is_login_capable_proxy "$id"; then
         if saved_login_status "$id"; then

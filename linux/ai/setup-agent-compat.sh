@@ -375,6 +375,11 @@ is_ponytail_workspace() {
 }
 
 apply_rules() {
+    # Every target is "$WORKSPACE_ROOT/<file>": an empty root would write
+    # /AGENTS.md, /CLAUDE.md, ... (and succeed under sudo).
+    case "$WORKSPACE_ROOT" in
+        ""|/|"$HOME") pz_error "refusing to write agent rules without a project (workspace: '${WORKSPACE_ROOT}')"; return 2 ;;
+    esac
     local caveman_body="$PZ_ROOT/assets/agent-skills/caveman-always-on.md"
     local tools_body="$PZ_ROOT/assets/agent-skills/phasezero-tools-always-on.md"
     local ponytail_body="$PZ_ROOT/assets/agent-skills/ponytail-architecture-runtime.md"
@@ -905,6 +910,11 @@ case "${1:-setup}" in
         status_json | jq '.tools.headroom'
         ;;
     rules|caveman)
+        [ -n "$WORKSPACE_ROOT" ] || WORKSPACE_ROOT="$(registered_workspace_root || true)"
+        if [ -z "$WORKSPACE_ROOT" ]; then
+            jq -cn '{mode:"needs-project",rules:[],summary:"Nenhum projeto registrado para receber as regras.",next:"linux/pz ai init <pasta-do-projeto>"}'
+            exit 2
+        fi
         apply_rules
         write_state
         status_json | jq '{mode,rules,tools:{caveman:.tools.caveman,ponytail:.tools.ponytail}}'

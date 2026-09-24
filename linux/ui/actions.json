@@ -3042,6 +3042,29 @@
       "input_label": ""
     },
     {
+      "name": "ai.drift-status",
+      "label": "Cópias instaladas × repositório",
+      "command": "linux/pz ai drift status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.drift-sync",
+      "label": "Atualizar cópias instaladas",
+      "command": "linux/pz ai drift sync",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai drift sync --dry-run"
+    },
+    {
       "name": "ai.operations-resume",
       "label": "Retomada segura",
       "command": "linux/pz ai operations resume-info",

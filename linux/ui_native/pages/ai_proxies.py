@@ -91,6 +91,8 @@ def _friendly_proxy_copy(state: ProxyState) -> tuple[str, str, str]:
     """Return (headline, detail, semantic state) for simple-mode cards."""
     if not state.installed:
         return "Precisa preparar", "Um clique instala, inicia e abre o login se faltar.", "warning"
+    if state.crash_looping:
+        return "Falhando ao iniciar", "O serviço reinicia sem responder. Reinicie o proxy; se continuar, veja o log.", "error"
     if state.auth_status == "login-running":
         return "Login no navegador", "Conclua o login na janela do Chromium.", "warning"
     if state.auth_status == "authenticated":

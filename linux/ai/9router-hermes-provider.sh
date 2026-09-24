@@ -188,7 +188,54 @@ import sys, yaml, os
 from pathlib import Path
 path = Path(sys.argv[1])
 endpoint, pname, plabel, combo = sys.argv[2:6]
-data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+# --- PhaseZero durable config IO (AISR-011/013; same block in hermes-router.sh,
+# 9router-hermes-provider.sh and setup-hermes.sh) ---
+def _pz_fsync_write(target, payload):
+    with open(target, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(target, 0o600)
+
+
+def _pz_fsync_dir(directory):
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def pz_load_config(path):
+    """Empty/missing config: restore the last good .pz-bak instead of starting
+    from {} (an interrupted write once left config.yaml at 0 bytes)."""
+    raw = path.read_bytes() if path.exists() else b""
+    if raw.strip():
+        return yaml.safe_load(raw.decode("utf-8")) or {}
+    bak = path.with_name(path.name + ".pz-bak")
+    if bak.is_file() and bak.stat().st_size > 0:
+        try:
+            restored = yaml.safe_load(bak.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            restored = None
+        if isinstance(restored, dict) and restored:
+            print(f"PhaseZero: {path.name} vazio; restaurado de {bak.name}", file=sys.stderr)
+            return restored
+    return {}
+
+
+def pz_durable_write(path, text):
+    """Backup (only a non-empty file), fsynced tmp, atomic replace, fsynced dir."""
+    if path.exists() and path.stat().st_size > 0:
+        _pz_fsync_write(path.with_name(path.name + ".pz-bak"), path.read_bytes())
+    tmp = path.with_name("." + path.name + ".pz-tmp")
+    _pz_fsync_write(tmp, text.encode("utf-8"))
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    _pz_fsync_dir(path.parent)
+# --- end PhaseZero durable config IO ---
+
+data = pz_load_config(path)
 if not isinstance(data, dict):
     raise SystemExit("Hermes config root must be a mapping")
 
@@ -219,17 +266,7 @@ for slot in ("compression", "web_extract", "skills_hub", "mcp"):
     if isinstance(current, dict):
         current["provider"] = "main"
 
-# Config vivo do agente: nunca truncar no lugar. Backup + escrita staged no
-# mesmo diretorio, atomica via replace.
-if path.exists():
-    bak = path.with_name(path.name + ".pz-bak")
-    bak.write_bytes(path.read_bytes())
-    bak.chmod(0o600)
-tmp = path.with_name("." + path.name + ".pz-tmp")
-tmp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-tmp.chmod(0o600)
-os.replace(tmp, path)
-os.chmod(path, 0o600)
+pz_durable_write(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 PY
 
     # Post-`set -e` guard: rerun checks now that the file changed.
@@ -273,7 +310,10 @@ except (OSError, json.JSONDecodeError):
 if key in data and isinstance(data[key], dict):
     data[key]["at"] = time.time()
     tmp = path.with_name("." + path.name + ".pz-tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(data))
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, path)
 PY
     fi
