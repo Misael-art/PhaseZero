@@ -11,6 +11,9 @@ shift 2>/dev/null || true
 PROXY_ROOT="${PZ_AI_PROXY_ROOT:-$HOME/.local/share/phasezero/ai-proxies}"
 INSTALL_ROOT="${PZ_9ROUTER_INSTALL_ROOT:-$PROXY_ROOT/9router}"
 RUNTIME="$PROXY_ROOT/.runtime/node24"
+# 9Router may run on a newer system Node; its PATH shim lives apart from the
+# proxy suite shim ($RUNTIME/bin), whose native modules are built for Node 24.
+ROUTER_BIN="$PROXY_ROOT/.runtime/9router-bin"
 NODE_BIN="${PZ_9ROUTER_NODE_BIN:-$RUNTIME/node_modules/node/bin/node}"
 NPM_CLI="${PZ_9ROUTER_NPM_CLI:-$RUNTIME/node_modules/npm/bin/npm-cli.js}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
@@ -85,8 +88,8 @@ ensure_node_runtime() {
     local npm system_node system_npm_cli node_version node_major
     if [ -n "${PZ_9ROUTER_NODE_BIN:-}" ] && [ -x "$NODE_BIN" ] \
         && [ -n "${PZ_9ROUTER_NPM_CLI:-}" ] && [ -f "$NPM_CLI" ]; then
-        install -d "$RUNTIME/bin"
-        ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+        install -d "$ROUTER_BIN"
+        ln -sfn "$NODE_BIN" "$ROUTER_BIN/node"
         pz_debug "Using verified external Node.js runtime for 9Router"
         return 0
     fi
@@ -102,8 +105,8 @@ ensure_node_runtime() {
             && [ -f "$system_npm_cli" ]; then
             NODE_BIN="$system_node"
             NPM_CLI="$system_npm_cli"
-            install -d "$RUNTIME/bin"
-            ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+            install -d "$ROUTER_BIN"
+            ln -sfn "$NODE_BIN" "$ROUTER_BIN/node"
             pz_debug "Using existing Node.js $node_version for 9Router"
             return 0
         fi
@@ -113,8 +116,8 @@ ensure_node_runtime() {
         install -d "$RUNTIME"
         "$npm" install --prefix "$RUNTIME" --no-save "node@24" "npm@10"
     fi
-    install -d "$RUNTIME/bin"
-    ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+    install -d "$ROUTER_BIN"
+    ln -sfn "$NODE_BIN" "$ROUTER_BIN/node"
 }
 
 # Keep a rotating 0600 copy of the env before every rewrite. This file holds the
@@ -219,7 +222,7 @@ if [ "\${HOSTNAME:-}" != "$HOST" ] || [ "\${PORT:-}" != "$PORT" ]; then
   echo "repair with: pz ai 9router repair" >&2
   exit 78
 fi
-export PATH="$RUNTIME/bin:\$PATH"
+export PATH="$ROUTER_BIN:\$PATH"
 exec "$NODE_BIN" "$SERVER_RUNNER" "$PACKAGE_ROOT"
 EOF
     chmod 0700 "$SERVER_WRAPPER"
@@ -437,7 +440,7 @@ registry_metadata() {
     ensure_node_runtime
     # npm >= 10 wraps multi-field `view` output in an array; older npm emits a
     # bare object.  Normalize to an object so callers can index fields directly.
-    PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" view 9router version dist.integrity dist.shasum --json \
+    PATH="$ROUTER_BIN:$PATH" "$NODE_BIN" "$NPM_CLI" view 9router version dist.integrity dist.shasum --json \
         | jq -c 'if type == "array" then (.[0] // {}) else . end'
 }
 
@@ -455,7 +458,7 @@ install_verified_package() (
     work="$(mktemp -d)"
     stage="$PROXY_ROOT/.9router-stage.$$"
     trap 'rm -rf "${work:-}" "${stage:-}"' EXIT
-    pack_json="$(PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" pack "9router@$version" --pack-destination "$work" --json)"
+    pack_json="$(PATH="$ROUTER_BIN:$PATH" "$NODE_BIN" "$NPM_CLI" pack "9router@$version" --pack-destination "$work" --json)"
     [ "$(jq -r '.[0].integrity // empty' <<< "$pack_json")" = "$expected_integrity" ] || {
         pz_error "9Router npm integrity mismatch"
         return 1
@@ -463,7 +466,7 @@ install_verified_package() (
     tarball="$work/$(jq -r '.[0].filename' <<< "$pack_json")"
     [ -f "$tarball" ] || { pz_error "9Router package archive missing"; return 1; }
     install -d "$stage"
-    PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" install -g --prefix "$stage" --ignore-scripts "$tarball"
+    PATH="$ROUTER_BIN:$PATH" "$NODE_BIN" "$NPM_CLI" install -g --prefix "$stage" --ignore-scripts "$tarball"
     [ -x "$stage/bin/9router" ] || { pz_error "9Router staged binary missing"; return 1; }
     [ "$(jq -r '.version // empty' "$stage/lib/node_modules/9router/package.json")" = "$version" ] || {
         pz_error "9Router staged version mismatch"
