@@ -86,6 +86,15 @@ Nota: nenhuma suíte shell de IA roda no CI (`.github/workflows/ci.yml` só faz
 - G2 (aceite do operador): validação viva repetida — Qwen deixa de estar
   `broken`; status/UI não mostram "rodando" para serviço em crash-loop.
 
+## Próxima onda (varredura `docs/audit/ai-services-sweep-2026-09-24.md`)
+
+| ID | Origem | Entrega |
+|---|---|---|
+| AISR-011 | AICR-021 | Helper de escrita durável (tmp + `fsync` + `os.replace` + `fsync` do diretório) usado por todos os writers de config do Hermes/OpenCode/9Router |
+| AISR-012 | AICR-020/022 | Cópias gerenciadas carregam hash da fonte; `status` expõe `runtimeDrift`; `pz ai doctor --drift` lista divergências e o comando de atualização |
+| AISR-013 | AICR-019 | Auto-heal do Hermes restaura `config.yaml` vazio a partir do `.pz-bak` válido (validação YAML) e registra a restauração |
+| AISR-014 | AICR-023 | `routing status`: `health` reflete providers disponíveis; alerta de combo sem membro disponível |
+
 ## Backlog P2/P3
 
 - AICR-005 `proxies test`: exit 0/2/3, envelope `summary/next`, classificação `upstream-error`/`unreachable`.
@@ -98,4 +107,5 @@ Nota: nenhuma suíte shell de IA roda no CI (`.github/workflows/ci.yml` só faz
 - AICR-012/013 `pz updates check` inventaria codex, opencode, hermes, codexbar, omniroute, rtk, ai-memory, snapshots.
 - AICR-014 `pz ai help|--help|<vazio>`.
 - CI: rodar `tests/linux-ai*.sh` no job Linux.
+- AICR-024..031 (redação no routing, propagação de remoção MCP, ciclo ollama/webui, doc de desinstalação, `pz ai memory`, envelope comum, latência, unit legada).
 - AICR-015..018 polimento (campo MiMo, preview de setup, shellcheck, naming via LUX-016).
