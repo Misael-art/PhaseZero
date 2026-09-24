@@ -26,7 +26,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
+from .catalog import (
+    CATEGORIES, DASHBOARD, NESTED_CATEGORIES, NESTED_CATEGORY_PARENTS,
+    SIDEBAR_GROUPS, build_catalog,
+)
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
 from .product_inventory import target_for
@@ -298,16 +301,12 @@ class MainWindow(QMainWindow):
         if development_page is not None and hasattr(development_page, "product_requested"):
             development_page.product_requested.connect(self.open_product)
         self.stack = QStackedWidget()
-        # Add every category page from the registry in sidebar order.
-        seen: set[str] = set()
-        for _group_title, categories in SIDEBAR_GROUPS:
-            for category in categories:
-                if category in seen:
-                    continue
-                seen.add(category)
-                page = self.registry.page_for(category)
-                if page is not None:
-                    self.stack.addWidget(page)
+        # Keep nested technical pages in the stack without exposing them as
+        # peer destinations in the sidebar or compact navigation menu.
+        for category in (DASHBOARD[0], *(row[0] for row in CATEGORIES)):
+            page = self.registry.page_for(category)
+            if page is not None:
+                self.stack.addWidget(page)
         # Search results page (keeps old ActionCard grid for cross-category search).
         self.search_page = QWidget()
         sp_layout = QVBoxLayout(self.search_page)
@@ -476,15 +475,13 @@ class MainWindow(QMainWindow):
         self.current_category = category
         self.inspector.clear_action()
         self.inspector.hide()
+        sidebar_category = NESTED_CATEGORY_PARENTS.get(category, category)
         for name, button in self.sidebar_buttons.items():
-            button.setChecked(name == category)
+            button.setChecked(name == sidebar_category)
         if self.search.text().strip():
             self.search.clear()
         meta = self.cat_meta.get(category)
-        section = next(
-            (title for title, categories in SIDEBAR_GROUPS if category in categories),
-            "Navegação",
-        )
+        section = self._navigation_section(category)
         self.breadcrumb.set_path(section, category)
         page = self.registry.page_for(category)
         if page is not None:
@@ -494,6 +491,15 @@ class MainWindow(QMainWindow):
             if hasattr(page, "reload"):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
+
+    @staticmethod
+    def _navigation_section(category: str) -> str:
+        if category in NESTED_CATEGORIES:
+            return "Inteligência artificial · Conexões avançadas"
+        return next(
+            (title for title, categories in SIDEBAR_GROUPS if category in categories),
+            "Navegação",
+        )
 
     GRAPHICS_PROBE_TIMEOUT_MS = 20_000
 
@@ -589,10 +595,7 @@ class MainWindow(QMainWindow):
             section, page_name = "Navegação", "Busca"
             if self.stack.currentIndex() != self._search_page_idx:
                 page_name = self.current_category
-                section = next(
-                    (title for title, categories in SIDEBAR_GROUPS if self.current_category in categories),
-                    "Navegação",
-                )
+                section = self._navigation_section(self.current_category)
             self._product_origin_state = (
                 current_page, self.current_category, section, page_name,
                 self.page_title.text(), self.page_subtitle.text(), self.global_state.text(),
@@ -636,8 +639,9 @@ class MainWindow(QMainWindow):
             self.page_subtitle.setText(subtitle)
             self.global_state.setText(state)
             self.breadcrumb.set_path(section, page_name)
+            sidebar_category = NESTED_CATEGORY_PARENTS.get(category, category)
             for name, button in self.sidebar_buttons.items():
-                button.setChecked(name == category)
+                button.setChecked(name == sidebar_category)
             return
         self.page_title.setText("Aplicativos")
         self.page_subtitle.setText(self.cat_meta["Aplicativos"][2])

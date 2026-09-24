@@ -99,6 +99,10 @@ class AiRoutingPage(BasePage):
             action = self.by_id.get(aid) if self.by_id else None
             if action is not None:
                 self.mark_represented(action)
+        back = QPushButton("‹ Inteligência artificial")
+        back.setObjectName("backToAiHome")
+        back.clicked.connect(lambda: self.request_category("IA & Dev"))
+        self._layout.addWidget(back)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)

@@ -493,3 +493,13 @@ selecionado. `tests/test_product_registry_ui.py` + `tests/test_product_inventory
 instalados no runtime. Sem acesso remoto, pacote ou serviço real. PXA-003 permanece aberto
 para host remoto acionável, IDs múltiplos no mesmo escopo, recuperação restante e migração
 de páginas técnicas.
+
+PXA-003 navegação técnica: Proxies IA e Roteamento IA saíram dos destinos laterais e do
+menu compacto; cards públicos em Inteligência artificial → Conexões avançadas abrem as
+páginas. Ambas têm retorno para IA. IDs de página e ações legadas continuam no registry;
+rota direta preserva breadcrumb de conexões avançadas e destaca o destino pai. Prova por
+cliques públicos: `test_native_navigation.py`: 12 passaram; `test_ai_session_ui.py` +
+`test_linux_native_ui.py`: 57 passaram; detalhe/catálogo `test_product_registry_ui.py` +
+`test_product_inventory.py`: 32 passaram. `compileall` e `git diff --check` passaram.
+Ruff/Black/Flake8 ausentes. Sem execução de serviços ou contas. PXA-003 segue `in_progress`
+por recuperação segura incompleta e execução remota/instância ambígua ainda indisponível.

@@ -33,6 +33,13 @@ CATEGORIES = (
     ("Resultados", "text-x-log", "Histórico local de operações"),
 )
 
+# Technical AI surfaces keep their legacy page IDs but live under the AI home.
+NESTED_CATEGORY_PARENTS = {
+    "Proxies IA": "IA & Dev",
+    "Roteamento IA": "IA & Dev",
+}
+NESTED_CATEGORIES = tuple(NESTED_CATEGORY_PARENTS)
+
 # The dashboard "home" pseudo-category (Welcome back screen).
 DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
 
@@ -44,7 +51,6 @@ SIDEBAR_GROUPS = (
     ("Desenvolvimento", ("Desenvolvimento",)),
     ("Inteligência artificial", ("IA & Dev",)),
     ("Contas e conexões", ("Contas e conexões",)),
-    ("IA · Conexões avançadas", ("Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos", "Temas")),
     ("Histórico", ("Resultados",)),
 )

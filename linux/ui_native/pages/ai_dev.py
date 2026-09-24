@@ -140,6 +140,7 @@ class AiDevPage(BasePage):
         cards.setColumnStretch(0, 1)
         cards.setColumnStretch(1, 1)
         layout.addLayout(cards)
+        layout.addWidget(self._build_advanced_connections())
         layout.addWidget(self._build_shortcuts())
         layout.addStretch()
         scroll.setWidget(inner)
@@ -241,6 +242,33 @@ class AiDevPage(BasePage):
             button = self._action_button(aid, label, primary=False)
             if button is not None:
                 row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+        return card
+
+    def _build_advanced_connections(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("aiAdvancedConnections")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader(
+            "Conexões avançadas",
+            "Proxies, rotas e políticas. Contas e permissões ficam em Contas e conexões.",
+        ))
+        row = QHBoxLayout()
+        for category, label, object_name in (
+            ("Proxies IA", "Proxies e provedores", "openAiProxiesPage"),
+            ("Roteamento IA", "Rotas e políticas", "openAiRoutingPage"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName(object_name)
+            button.setAccessibleName(f"Abrir {label}")
+            button.setToolTip("Abrir ferramentas técnicas de IA; contas continuam independentes.")
+            button.clicked.connect(
+                lambda _checked=False, target=category: self.request_category(target)
+            )
+            row.addWidget(button)
         row.addStretch()
         layout.addLayout(row)
         return card

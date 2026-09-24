@@ -197,6 +197,10 @@ class AiProxiesPage(BasePage):
             action = self.by_id.get(action_id)
             if action is not None:
                 self.mark_represented(action)
+        back = QPushButton("‹ Inteligência artificial")
+        back.setObjectName("backToAiHome")
+        back.clicked.connect(lambda: self.request_category("IA & Dev"))
+        self._layout.addWidget(back)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
