@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from linux.ui_native.models import ProductInstance
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -121,6 +122,29 @@ def test_comparison_only_enables_curated_functional_alternatives(qapp):
             "Comparar Visual Studio Code e VSCodium" in label.text()
             for label in page._comparison_page.findChildren(QLabel)
         )
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_primary_action_waits_for_observed_state_then_prepares_absent_app(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.vscode", "capability.plan.development.vscode")
+        assert page._primary_button.text() == "Verificar"
+        assert page._primary_button.isEnabled()
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:host:app.vscode", "app.vscode", "local", "host",
+            installation="absent",
+        ),))
+        assert page._primary_button.text() == "Preparar"
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.kwargs["preview"] is True
+        assert start.call_args.args[0].id == "capability.plan.development.vscode"
     finally:
         window.close()
         host_patcher.stop()

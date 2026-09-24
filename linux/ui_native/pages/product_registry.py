@@ -60,6 +60,8 @@ class ProductRegistryPage(BasePage):
         self._detail_layout: QVBoxLayout | None = None
         self._detail_actions_start = 0
         self._status_label: QLabel | None = None
+        self._primary_button: QPushButton | None = None
+        self._primary_action: ActionSpec | None = None
         self._product_summary: QLabel | None = None
         self._product_facts: QLabel | None = None
         self._context_label: QLabel | None = None
@@ -195,6 +197,11 @@ class ProductRegistryPage(BasePage):
         self._status_label.setObjectName("productStatus")
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
+        self._primary_button = QPushButton("Verificar")
+        self._primary_button.setObjectName("productPrimaryAction")
+        self._primary_button.setToolTip("Confere status antes de escolher uma ação.")
+        self._primary_button.clicked.connect(self._primary_clicked)
+        layout.addWidget(self._primary_button)
         layout.addWidget(SectionHeader("Ações disponíveis", "Ações atuais convergem neste produto e mantêm a confirmação existente."))
         self._detail_actions_start = layout.count()
         return page
@@ -380,10 +387,12 @@ class ProductRegistryPage(BasePage):
         self.product_opened.emit(app_id, context_action_id)
         status_action = self._status_action(product)
         self._status_action_id = status_action.id if status_action is not None else ""
+        target = self._targets.get(status_action.id) if status_action is not None else None
+        self._status_scope = target.instance_scope if target is not None else "host"
+        self._render_primary_action()
         if status_action is not None:
-            target = self._targets[status_action.id]
             self.status_loader.fetch_product_status(
-                status_action, app_id=app_id, host_id="local", scope=target.instance_scope,
+                status_action, app_id=app_id, host_id="local", scope=self._status_scope,
             )
 
     def _manifest_action(self, action_id: str) -> dict[str, object]:
@@ -400,7 +409,68 @@ class ProductRegistryPage(BasePage):
                 and action.status_args
             ):
                 candidates.append((target.instance_scope != "host", action.id, action))
-        return min(candidates, default=(False, "", None))[2]
+        if candidates:
+            return min(candidates)[2]
+        if product.get("capabilityId"):
+            return ActionSpec(
+                "product.capabilities.status", "Aplicativos", "Verificar aplicativo", "",
+                ("capabilities", "status", "--json"), "",
+                status_args=("capabilities", "status", "--json"),
+            )
+        return None
+
+    def _action_for_state(self, state: str) -> ActionSpec | None:
+        if not self._selected_app_id:
+            return None
+        product = self._product_by_id[self._selected_app_id]
+        actions = [self.by_id[item] for item in product.get("actionIds", []) if item in self.by_id]
+        if state == "prepare":
+            authority_ids = set(product.get("installationAuthorityIds", []))
+            return next((action for action in actions if self._manifest_action(action.id).get(
+                "installationAuthorityId") in authority_ids and action.mutable), None)
+        terms = {
+            "configure": {"configure", "setup"},
+            "resolve": {"repair", "doctor", "restore", "start"},
+            "open": {"open", "launch"},
+        }.get(state, set())
+        return next((action for action in actions if any(
+            term in action.id.casefold().replace("-", ".").split(".")
+            or term in action.args for term in terms
+        ) and action.id != self._status_action_id), None)
+
+    def _render_primary_action(self) -> None:
+        if self._primary_button is None:
+            return
+        instance = next(iter(self._instances.values()), None)
+        state = instance.next_action if instance is not None else "verify"
+        labels = {"prepare": "Preparar", "configure": "Configurar",
+                  "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
+        self._primary_button.setText(labels.get(state, "Verificar"))
+        self._primary_action = self._action_for_state(state) if state != "verify" else None
+        self._primary_button.setEnabled(bool(self._status_action_id) if state == "verify" else self._primary_action is not None)
+        if state == "verify":
+            self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
+        else:
+            self._primary_button.setToolTip(
+                self._primary_action.description if self._primary_action is not None
+                else "Ação principal indisponível para este estado observado."
+            )
+
+    def _primary_clicked(self) -> None:
+        if not self._selected_app_id:
+            return
+        if self._primary_action is not None:
+            self.action_requested.emit(self._primary_action)
+            return
+        product = self._product_by_id[self._selected_app_id]
+        status_action = self._status_action(product)
+        if status_action is not None:
+            self._status_action_id = status_action.id
+            target = self._targets.get(status_action.id)
+            self._status_scope = target.instance_scope if target is not None else "host"
+            self.status_loader.fetch_product_status(
+                status_action, app_id=self._selected_app_id, host_id="local", scope=self._status_scope,
+            )
 
     def _instances_ready(self, action_id: str, instances: object) -> None:
         if action_id != self._status_action_id:
@@ -414,10 +484,12 @@ class ProductRegistryPage(BasePage):
         if action_id == self._status_action_id:
             self._instances.clear()
             self._status_label.setText("Status indisponível · instalação, configuração e saúde desconhecidas")
+            self._render_primary_action()
 
     def _render_status(self) -> None:
         if not self._instances:
             self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
+            self._render_primary_action()
             return
         instance = next(iter(self._instances.values()))
         self._status_label.setText(
@@ -425,6 +497,7 @@ class ProductRegistryPage(BasePage):
             f"Configuração: {instance.configuration} · Saúde: {instance.health} · "
             f"Ação: {instance.next_action}"
         )
+        self._render_primary_action()
 
     def _clear_detail_actions(self) -> None:
         if self._detail_layout is None:

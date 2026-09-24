@@ -59,3 +59,29 @@ def test_status_loader_rejects_mutating_action(tmp_path):
         )
     fetch.assert_not_called()
     assert failures == [(action.id, "product status requires a read-only action")]
+
+
+def test_status_loader_normalizes_capability_catalog_by_app_and_scope(tmp_path):
+    action = ActionSpec(
+        "product.capabilities.status", "Aplicativos", "Status de recursos", "",
+        ("capabilities", "status", "--json"), "",
+        status_args=("capabilities", "status", "--json"),
+    )
+    loader = StatusLoader(tmp_path)
+    with patch.object(loader, "fetch"):
+        loader.fetch_product_status(
+            action, app_id="app.vscode", host_id="local", scope="host",
+        )
+    instances = loader.product_instances_from_result(action.id, {
+        "hasStatus": True,
+        "capabilities": [
+            {"id": "development.vscode", "installed": True,
+             "origin": "external", "configuration": "ready", "health": "online"},
+            {"id": "development.neovim", "installed": False},
+        ],
+    })
+    assert len(instances) == 1
+    assert (instances[0].app_id, instances[0].scope, instances[0].origin) == (
+        "app.vscode", "host", "external",
+    )
+    assert instances[0].ready

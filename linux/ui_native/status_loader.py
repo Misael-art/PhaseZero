@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from shiboken6 import isValid
 
 from .models import ActionSpec, ProductInstance
-from .product_inventory import instances_from_status_payload
+from .product_inventory import instances_from_capability_status, instances_from_status_payload
 from .result_parser import parse_json_output
 
 _SECRET_PATTERNS = (
@@ -136,6 +136,11 @@ class StatusLoader(QObject):
         if context is None or not isinstance(payload, dict):
             return ()
         app_id, host_id, scope, instance_key = context
+        if isinstance(payload.get("capabilities"), list):
+            return tuple(
+                instance for instance in instances_from_capability_status(payload, host_id=host_id)
+                if instance.app_id == app_id
+            )
         return instances_from_status_payload(
             payload, app_id=app_id, host_id=host_id, scope=scope,
             instance_key=instance_key,
