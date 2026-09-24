@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QRadioButton
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from linux.ai.account_adapters import router_provider_accounts
+
 
 @pytest.fixture(scope="module")
 def qapp():
@@ -117,6 +119,27 @@ def test_account_without_photo_uses_accessible_initials(qapp):
         page = window.registry.page_for("Contas e conexões")
         assert page._initials("Account Two") == "AT"
         assert page._initials("") == "?"
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_invalid_grant_ledger_disables_consent_controls(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    ledger_path = tmp_path / "phasezero" / "ai-accounts" / "grants.json"
+    ledger_path.parent.mkdir(parents=True)
+    ledger_path.write_text("not-json")
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        assert page._grant_load_error
+        account, connection = router_provider_accounts({"connections": [{
+            "id": "record-a", "provider": "openai", "name": "Private Account", "active": True,
+        }]})[0]
+        page._accounts = ((account, connection),)
+        page._render_cards()
+        assert page.findChildren(QPushButton, "accountConsumerGrant") == []
+        assert "ledger local inválido" in page.findChild(QLabel, "accountGrantUnavailable").text()
     finally:
         window.close()
         host_patcher.stop()
