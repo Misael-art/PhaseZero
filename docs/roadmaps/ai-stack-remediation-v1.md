@@ -7,7 +7,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | **G1 done** 2026-09-24 (AISR-001..004 em `fix/ai-stack-remediation`); G2 aguarda aceite do operador |
+| Status | AISR-001..006, 011..014 e AICR-033 implementados no PR #102; implantação e itens restantes em `docs/handoff/ai-stack-remediation-handoff.md` |
 | Criado | 2026-09-24, America/Sao_Paulo |
 | Base observada | `origin/main` `720b7d5` (v1.21.1) |
 | Origem | AICR-001..004 |
@@ -90,10 +90,10 @@ Nota: nenhuma suíte shell de IA roda no CI (`.github/workflows/ci.yml` só faz
 
 | ID | Origem | Entrega |
 |---|---|---|
-| AISR-011 | AICR-021 | Helper de escrita durável (tmp + `fsync` + `os.replace` + `fsync` do diretório) usado por todos os writers de config do Hermes/OpenCode/9Router |
-| AISR-012 | AICR-020/022 | Cópias gerenciadas carregam hash da fonte; `status` expõe `runtimeDrift`; `pz ai doctor --drift` lista divergências e o comando de atualização |
-| AISR-013 | AICR-019 | Auto-heal do Hermes restaura `config.yaml` vazio a partir do `.pz-bak` válido (validação YAML) e registra a restauração |
-| AISR-014 | AICR-023 | `routing status`: `health` reflete providers disponíveis; alerta de combo sem membro disponível |
+| AISR-011 ✅ | AICR-021 | Helper de escrita durável (tmp + `fsync` + `os.replace` + `fsync` do diretório) usado por todos os writers de config do Hermes/OpenCode/9Router |
+| AISR-012 ✅ | AICR-020/022 | Cópias gerenciadas carregam hash da fonte; `status` expõe `runtimeDrift`; `pz ai doctor --drift` lista divergências e o comando de atualização |
+| AISR-013 ✅ | AICR-019 | Auto-heal do Hermes restaura `config.yaml` vazio a partir do `.pz-bak` válido (validação YAML) e registra a restauração |
+| AISR-014 ✅ | AICR-023 | `routing status`: `health` reflete providers disponíveis; alerta de combo sem membro disponível |
 
 ## Backlog P2/P3
 

@@ -554,7 +554,9 @@ status_json() {
     if [ -n "$cmd" ]; then
         installed=true
         version="$(timeout 10 "$cmd" --version 2>/dev/null | head -1 | tr -d '\r' || true)"
-        timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
+        # `hermes config check` accepts an empty config.yaml; an empty file
+        # (interrupted write) must not read as a passing check.
+        [ -s "$HERMES_CONFIG" ] && timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
         timeout 30 "$cmd" doctor >/dev/null 2>&1 && doctor_ok=true
     fi
     [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
@@ -576,7 +578,7 @@ status_json() {
     distribution_install_allowed && distribution_ok=true
     operator_risk_accepted && risk=true
     [ "$mcp_count" -gt 0 ] && [ "$sdk" = true ] && mcp_ready=true
-    if [ -f "$HERMES_CONFIG" ] && [ -f "$ENV_FILE" ] && [ "$config_safe" = true ] &&
+    if [ -s "$HERMES_CONFIG" ] && [ -f "$ENV_FILE" ] && [ "$config_safe" = true ] &&
         [ "$config_mode" = 600 ] && [ "$env_mode" = 600 ]; then
         configured=true
     fi
