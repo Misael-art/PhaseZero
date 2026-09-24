@@ -299,7 +299,7 @@ posterior ao handoff de planejamento acima.
 | PXA-005 | `in_progress` | `5fa5db8`, `8753d96`: Nova página `Desenvolvimento`: objetivo Web JS/TS ou Python; editor VS Code/VSCodium é opcional e entra no mesmo plano. A ação reutiliza preview/apply das capabilities; botões Validar (status read-only) e Abrir ferramenta levam ao detalhe canônico. Copy Python confirma que Python do SO não muda. Fixture interrompe após Node e retoma sem reinstalar Node. Cancelamento pelo botão público encerra processo e filho fake, grava ledger `cancelled` retryable. Limites: cancelamento real com pacman e jornada em host limpo ainda não provados; validação concreta depende do host G2. |
 | PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`, `11c22fa`, `ae814d7`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; deadline agregado e adaptadores read-only para Claude, sessões de proxy e provedores 9Router. Evidência de credencial, sessão, serviço e acesso permanece separada; 401, expiração, timeout e backend ausente têm estados distintos. Claude status agora diferencia probe falho de sessão ausente, preservando `loggedIn`/schema v1 como campo compatível. `lastVerifiedAt` não é inferido de leitura. Faltam sessão/cota real e operador; nenhum login executado. |
 | PXA-007 | `in_progress` | Nova tela privada Contas e conexões usa adaptadores existentes em probes read-only acionados por Atualizar status. Abrir página não inicia probes. Dois registros OpenAI com IDs opacos aparecem separados; seleção por provider rejeita estado anterior e callback de probe de geração velha é ignorado. Apelido sem foto usa iniciais acessíveis; projeção exportada contém só contagens. Limites: sem fonte de avatar e sem identidade verificada real; teclado fixture passou, leitor de tela/privacidade com usuários e conta real pendentes. Grants continuam PXA-008. |
-| PXA-008 | `in_progress` | `GrantLedger` exige consentimento explícito e compatibilidade declarada consumer/adaptador/escopo; grant e revogação são idempotentes e independentes, com ledger JSON privado 0700/0600 sem identidade ou segredo. `routing_manager.recommend(..., consumer_id=..., grants=...)` filtra provedor sem grant antes de pontuar; grant ausente deixa cadeia vazia, sem fallback implícito. Testes usam 9Router fake. Pendentes: UI de conceder/revogar, gerenciadores de credenciais/cofre do SO, e wiring do consumidor em sessão real; teste fixture não prova autenticação real. |
+| PXA-008 | `in_progress` | `GrantLedger` exige consentimento explícito e compatibilidade declarada consumer/adaptador/escopo; grant e revogação são idempotentes e independentes, com ledger JSON privado 0700/0600 sem identidade ou segredo. Contas mostra controles por conexão com confirmação e aviso de custo; informa que sessões ainda não aplicam os grants. `routing_manager.recommend(..., consumer_id=..., grants=...)` filtra provedor sem grant antes de pontuar; grant ausente deixa cadeia vazia. Limite: isso ainda não bloqueia conexões irmãs no 9Router nem está wired à sessão, portanto não fecha garantia de sem fallback pago. Pendentes: enforcement isolado por consumidor no executor, gerenciadores de credenciais/cofre do SO e conta real. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -368,10 +368,13 @@ leitor de tela e validação de privacidade com participantes permanecem pendent
 PXA-008: `test_account_grants.py`, `test_account_contract.py` e
 `test_routing_manager.py`: 50 testes passaram. Grant requer consentimento,
 adaptador e escopo suportados; grant/revoke repetidos não duplicam estado; ledger
-é privado e não guarda identidade/segredo. Recomendação opt-in limita modelos às
-conexões com grant do consumer e não oferece cadeia quando grants faltam. As rotas
-atuais não ativam esse modo sem passar consumer e grants; UI/gerenciador e wiring
-de sessão permanecem em aberto.
+é privado e não guarda identidade/segredo. Recomendação opt-in limita candidatos
+às conexões concedidas e não oferece cadeia quando grants faltam. Fixtures da tela
+provam confirmar e revogar em conexões distintas; `test_accounts_page.py`,
+`test_account_grants.py`, `test_account_contract.py`, `test_native_navigation.py` e
+`test_linux_native_ui.py`: 40 testes passaram. O executor ainda não aplica grants
+nem restringe conexões irmãs dentro de 9Router, então sem fallback pago permanece
+pendente; login real e vault também pendentes.
 
 Próximo lote: continuar PXA-003 (rotas Abrir/recuperação e atalhos de páginas técnicas),
 fechar PXA-005 com cancelamento em QProcess/host G2, depois completar UI e wiring
