@@ -20,6 +20,11 @@ def _opaque_id(provider: str, source_id: object) -> str:
     return f"acct:{provider}:{digest}"
 
 
+def router_provider_connection_id(provider: str, source_id: object) -> str:
+    """Stable contract ID used to match a 9Router record to its grant."""
+    return f"connection:{_opaque_id(provider, source_id)}"
+
+
 def _evidence_from_status(
     value: object, *, source: str, observed_at: str = "",
 ) -> Evidence:
@@ -197,7 +202,7 @@ def router_provider_accounts(
             # An inactive/failed provider test is not enough to diagnose bad auth.
             access = Evidence(source="9router-provider-test", observed_at=observed_at)
         connection = Connection(
-            connection_id=f"connection:{account_id}",
+            connection_id=router_provider_connection_id(provider, row.get("id")),
             account_id=account_id,
             adapter_id="9router-provider-status",
             instance_id=f"{host_id}:host:app.9router",

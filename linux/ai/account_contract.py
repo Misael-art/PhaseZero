@@ -108,6 +108,8 @@ class Grant:
     consumer_id: str
     scopes: tuple[str, ...]
     enabled: bool = False
+    consented_at: str = ""
+    revoked_at: str = ""
 
 
 def public_account(account: Account) -> dict[str, object]:

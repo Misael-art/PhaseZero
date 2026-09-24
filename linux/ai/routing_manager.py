@@ -53,6 +53,20 @@ DEFAULT_WEIGHTS = {
 }
 MAX_CHAIN = 5
 
+
+def _contract_connection_id(provider: str, source_id: object) -> str:
+    """Match opaque IDs emitted by account_adapters.router_provider_accounts."""
+    if not isinstance(source_id, (str, int)) or not str(source_id).strip():
+        source_id = "default"
+    digest = hashlib.sha256(f"{provider}:{source_id}".encode("utf-8")).hexdigest()[:24]
+    return f"connection:acct:{provider}:{digest}"
+
+
+def _grant_value(grant: object, attribute: str, key: str, default: object = None) -> object:
+    if isinstance(grant, dict):
+        return grant.get(key, default)
+    return getattr(grant, attribute, default)
+
 # Curated per-task priorities. Real inventory, health, quota, cooldown and
 # capabilities always win over these lists.
 CURATED_PRIORITIES: dict[str, list[str]] = {
@@ -767,7 +781,9 @@ def _cost_score(stats: dict, provider: str) -> float:
     return max(0.0, min(1.0, 1.0 - (per_req - 0.005) / 0.045))
 
 
-def recommend(client: R9Client, config: Config, inventory: dict, task: str, policy: str) -> dict:
+def recommend(client: R9Client, config: Config, inventory: dict, task: str, policy: str,
+              *, consumer_id: str | None = None, grants: list | tuple = (),
+              required_scope: str = "inference") -> dict:
     """Score every eligible model and return an ordered recommendation chain."""
     if task not in TASKS:
         raise RedactionError(f"unknown task '{task}' (expected {', '.join(TASKS)})")
@@ -783,12 +799,33 @@ def recommend(client: R9Client, config: Config, inventory: dict, task: str, poli
     local_boost = config.policy_extra(policy, "localBoost", 1.0)
     oauth_penalty = config.policy_extra(policy, "oauthPenalty", 1.0)
 
-    conns = {c["id"]: c for c in inventory["connections"]}
+    grant_exclusions: list[dict] = []
+    inventory_connections = inventory["connections"]
+    if consumer_id is not None:
+        granted_ids = {
+            _grant_value(grant, "connection_id", "connectionId", "")
+            for grant in grants
+            if _grant_value(grant, "consumer_id", "consumerId", "") == consumer_id
+            and _grant_value(grant, "enabled", "enabled", False)
+            and required_scope in _grant_value(grant, "scopes", "scopes", ())
+        }
+        eligible_connections = []
+        for connection in inventory_connections:
+            connection_id = _contract_connection_id(
+                str(connection.get("provider") or ""), connection.get("id"))
+            if connection_id in granted_ids:
+                eligible_connections.append(connection)
+            else:
+                grant_exclusions.append({"connection": "<redacted>",
+                                         "reason": f"no active grant for consumer {consumer_id}"})
+        inventory_connections = eligible_connections
+
+    conns = {c["id"]: c for c in inventory_connections}
     models = {m["id"]: m for m in inventory["models"]}
     usage = inventory.get("usage", {})
     now = time.time()
 
-    excluded: list[dict] = []
+    excluded: list[dict] = grant_exclusions
     candidates: list[Candidate] = []
 
     for mid, m in models.items():

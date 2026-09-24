@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from linux.ai.account_contract import Grant
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "linux" / "ai"))
 
@@ -367,6 +369,31 @@ def test_recommend_code_chain_and_health_wins(fake, config):
     assert chain[0] == "cx/gpt-5.6-sol"
     assert "cc/claude-opus-5" not in chain
     assert "cx/gpt-5.6-terra" in chain
+
+
+def test_consumer_grants_filter_routes_and_never_fallback(fake, config):
+    _fake, base = fake
+    client = _client_for(fake, base)
+    inv = _fresh_inventory(client)
+
+    denied = rm.recommend(client, config, inv, "code", "balanced",
+                          consumer_id="app.claude-code")
+    assert denied["recommendation"] == []
+    assert denied["eligibleCount"] == 0
+    assert any("no active grant" in item["reason"] for item in denied["excluded"])
+
+    grant = Grant("grant-test", rm._contract_connection_id("codex", "conn-codex-plus"),
+                  "app.claude-code", ("inference",), enabled=True)
+    wrong_scope = Grant("grant-read", grant.connection_id, "app.claude-code",
+                        ("status",), enabled=True)
+    scope_denied = rm.recommend(client, config, inv, "code", "balanced",
+                                consumer_id="app.claude-code", grants=(wrong_scope,))
+    assert scope_denied["recommendation"] == []
+    allowed = rm.recommend(client, config, inv, "code", "balanced",
+                           consumer_id="app.claude-code", grants=(grant,))
+    chain = rm.recommendation_chain(allowed)
+    assert chain
+    assert all(model_id.startswith("cx/") for model_id in chain)
 
 
 def test_save_quota_requires_known_quota(fake, config):
