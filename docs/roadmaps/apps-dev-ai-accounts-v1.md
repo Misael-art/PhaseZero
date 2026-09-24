@@ -292,22 +292,26 @@ posterior ao handoff de planejamento acima.
 
 | Item | Estado | Evidência e limite |
 |---|---|---|
-| PXA-001 | `in_progress` | `5b8ff98`, `d641f30`: manifesto gerado de 576 ações estáticas e 99 produtos; padrões para ações sintetizadas do Hub e roteamento; teste quebra se catálogo e snapshot divergirem. `ai.ollama` e `server.llm` compartilham `app.ollama`; Hermes idem. Instaladores antigos ainda existem nos dois contextos; falta autoridade única antes do aceite. |
-| PXA-002 | `in_progress` | `5b8ff98`, `70ebaca`: `ProductInstance` preserva origem/configuração/saúde; adaptadores de capability e status genérico geram instâncias distintas por host/escopo. Falha de consulta ao gerenciador agora vira `unknown`, bloqueia apply/remoção e permanece desconhecida no Hub. `StatusLoader` aceita apenas ação read-only e descarta probe antigo ao trocar contexto. 125 testes direcionados passam em Qt offscreen. Falta ligar detalhe único após autoridade PXA-001. |
+| PXA-001 | `verified` | `5b8ff98`, `d641f30`, `75f5d6d`: manifesto gerado com 576 ações estáticas, 99 produtos e zero órfãs; papéis canônico/atalho/legada; padrões de ações sintetizadas e roteamento. Verificação impede mais de uma autoridade por app/escopo e exige autoridade para cada rota de instalação/setup. `ai.ollama` é canônico; `server.llm` é atalho; ambos usam escopo host e autoridade `linux/ai/setup-ollama.sh`. Stubs provam as duas rotas sem chamar pacote/serviço real; CodexBar setup também aparece no mapa. |
+| PXA-002 | `in_progress` | `5b8ff98`, `70ebaca`: `ProductInstance` preserva origem/configuração/saúde; adaptadores de capability e status genérico geram instâncias distintas por host/escopo. Falha de consulta ao gerenciador agora vira `unknown`, bloqueia apply/remoção e permanece desconhecida no Hub. `StatusLoader` aceita apenas ação read-only e descarta probe antigo ao trocar contexto. 128 testes direcionados passam em Qt offscreen. Falta integrar contratos aos detalhes e ações canônicos PXA-003. |
 | PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`, `11c22fa`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; timeout agregado no coletor assíncrono; probes do resumo v1 limitados a 8s e falha separada de ausência via `probes`/estado unknown. `lastVerifiedAt` não é preenchido com hora da mera leitura. UI/summary evita mostrar zero contas quando consulta falha; doctor usa aviso para status essencial não verificável. Faltam adaptadores por conta e evidência real de sessão/cota; nenhum login executado. |
 
-Provas: 49 testes focados passaram na base inicial `d9f144f`. Após este ciclo,
-125 testes direcionados (`test_capabilities.py`, inventário/status de produto,
-Hub, contas/IA e regressão Windows VM) passaram com `QT_QPA_PLATFORM=offscreen`.
-`git diff --check` passou. Sem chamadas reais de pacote, serviço ou login nos
-novos testes. A reflow UI de Windows VM falha em 1280 px no QPA da sessão desktop
-e reproduz igual em `main` limpo; passa no Qt offscreen usado pelo CI. Investigar
-escala/DPI na matriz PXA-014. CI remota, conta real, Arch limpo, Windows limpo e
-UX com participantes não executados. Nenhum pacote, serviço, modelo, login, porta,
-VM ou boot do host foi alterado.
+Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 128 testes
+direcionados (`test_capabilities.py`, inventário/status de produto, autoridades
+de instalação, Hub, contas/IA e regressão Windows VM) passaram com
+`QT_QPA_PLATFORM=offscreen`. `git diff --check` passou. Ollama CLI routes usam
+stubs em HOME temporário; prova não chama gerenciador de pacotes, sudo ou serviço
+real. Handoff anterior dizia haver instaladores Ollama separados; inspeção atual
+mostrou que ambos já delegam pacote a `linux/ai/setup-ollama.sh`, enquanto rota
+server também lista/modela o fluxo do servidor. Mapa agora registra essa autoridade
+compartilhada e escopo host. A reflow UI de Windows VM falha em 1280 px no QPA da
+sessão desktop e reproduz igual em `main` limpo; passa no Qt offscreen usado pelo
+CI. Investigar escala/DPI na matriz PXA-014. CI remota, conta real, Arch limpo,
+Windows limpo e UX com participantes não executados. Nenhum pacote, serviço,
+modelo, login, porta, VM ou boot do host foi alterado.
 
-Próximo lote: concluir autoridade única de instalação PXA-001; manter PXA-002
-`in_progress` até essa autoridade integrar os adaptadores de instância. Depois
-conectar contratos PXA-006 aos provedores, sem inferir sessão válida pela presença
-de credencial. Só então iniciar página canônica de apps e permissões por consumidor.
-Não marcar `verified` até gates herméticos e reais correspondentes.
+Próximo lote: conectar contratos PXA-006 aos provedores, sem inferir sessão válida
+pela presença de credencial. PXA-002 fica `in_progress` até a navegação e ação
+canônicas integrarem schema e adaptadores. Em seguida, implementar detalhe único e
+permissões por consumidor. Gates de host, conta real e UX permanecem pendentes;
+nenhuma evidência fixture fecha esses gates.
