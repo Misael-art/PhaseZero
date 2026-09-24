@@ -23,6 +23,7 @@ CATEGORIES = (
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
     ("Desenvolvimento", "applications-development", "Preparar ambientes de projeto"),
+    ("Contas e conexões", "avatar-default", "Contas, sessões e acesso por aplicativo"),
     ("IA & Dev", "applications-development", "OpenCode, Claude, MCPs e agentes"),
     ("Proxies IA", "network-server", "Um clique instala, liga e autentica os proxies"),
     ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
@@ -40,7 +41,7 @@ SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Linux", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
-    ("Desenvolvimento", ("Desenvolvimento", "IA & Dev", "Proxies IA", "Roteamento IA")),
+    ("Desenvolvimento", ("Desenvolvimento", "Contas e conexões", "IA & Dev", "Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos", "Temas")),
     ("Histórico", ("Resultados",)),
 )

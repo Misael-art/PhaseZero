@@ -47,10 +47,11 @@ def test_catalog_covers_every_control_center_category(catalog):
     categories = {item.category for item in catalog}
     # "Resultados" (histórico) e "Linux" (hub) não consomem o catálogo de
     # ações: a primeira lê o ledger, a segunda deriva os itens de
-    # `capabilities`/`tune` e reusa ações de outras categorias. A jornada de
-    # Desenvolvimento também usa receitas `capabilities` em vez de duplicar
-    # ações no catálogo só para satisfazer a navegação.
-    expected = {row[0] for row in CATEGORIES if row[0] not in {"Resultados", "Linux", "Desenvolvimento"}}
+    # `capabilities`/`tune` e reusa ações de outras categorias. Receitas de
+    # desenvolvimento e probes de conta usam adaptadores existentes.
+    expected = {row[0] for row in CATEGORIES if row[0] not in {
+        "Resultados", "Linux", "Desenvolvimento", "Contas e conexões",
+    }}
     assert categories == expected
     assert len(catalog) >= 100
 
