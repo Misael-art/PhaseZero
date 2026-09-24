@@ -89,7 +89,7 @@ Nenhum conteúdo de prompt/resposta registrado.
 |---|---|
 | 13 suítes shell do roadmap | todas rc=0 (admin-bridge com WARN de AICR-004) |
 | `pytest tests` | 1066 passed, 9 subtests, 19m57s — inclui `dualscreen.status` (falha pré-existente não reproduziu) |
-| `generate_actions.py` | sem drift em `actions.json` |
+| `generate_actions.py` | sem drift em `actions.json` — **correção 2026-09-24**: o comando do roadmap omitia o argumento `destination` e falhou em silêncio; refeito com `generate_actions.py <destino>` em `origin/main`: sem drift |
 | shellcheck `-S warning` | 15 avisos (AICR-017) |
 | Pester | não executado (revisão estática de paridade) |
 

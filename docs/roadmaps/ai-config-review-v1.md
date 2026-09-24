@@ -113,7 +113,7 @@ bash tests/linux-opencode-align.sh
 bash tests/linux-agent-workspaces.sh
 bash tests/linux-admin-bridge.sh
 bash tests/linux-qwen-desktop.sh
-python linux/ui/generate_actions.py && git diff --exit-code linux/ui/actions.json
+python linux/ui/generate_actions.py linux/ui/actions.json && git diff --exit-code linux/ui/actions.json
 shellcheck linux/pz linux/ai/*.sh linux/server/ai-policy-broker.sh
 ```
 

@@ -653,6 +653,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("workspaces-doctor", "Diagnóstico Hermes + Odysseus", "Auditoria read-only e redigida da jornada completa.", ("ai", "workspaces", "doctor"), None),
         ("workspaces-plan", "Plano Hermes + Odysseus", "Mostra fases, bloqueios e próxima ação segura sem implantar workloads.", ("ai", "workspaces", "plan"), None),
         ("operations-status", "Operações persistentes", "Estado redigido de operações concluídas, falhas e interrupções recuperáveis.", ("ai", "operations", "status"), None),
+        ("drift-status", "Cópias instaladas × repositório", "Mostra scripts de runtime que ficaram para trás do repositório (correções ainda não ativas).", ("ai", "drift", "status"), None),
+        ("drift-sync", "Atualizar cópias instaladas", "Reinstala as cópias de runtime divergentes a partir do repositório.", ("ai", "drift", "sync"), ("ai", "drift", "sync", "--dry-run")),
         ("operations-resume", "Retomada segura", "Mostra a última operação que pode ser repetida com nova confirmação.", ("ai", "operations", "resume-info"), None),
         ("updates-status", "Atualizações PhaseZero", "Inventário único de apps, host e falhas de atualização.", ("updates", "check"), None),
         ("updates-timer", "Verificação diária", "Ativa timer check-only; aplicação permanece explícita.", ("updates", "install-service"), ("updates", "latest")),

@@ -182,6 +182,7 @@ Usage:
   pz ai opencode run --route=9router -- <args>  Run OpenCode with isolated 9Router route
   pz ai opencode rollback <manifest> Restore an OpenCode route transaction
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
+  pz ai drift [status|sync [--dry-run]]  Compare installed runtime copies with the repo (exit 2 on drift)
   pz ai codexbar <action>      CodexBar CLI + optional KodexBar plasmoid (status|setup|health|auth|watchdog|plasmoid|plasmoid-remove|repair)
   pz ai claude status          Audit Claude, Bonsai, routes, hooks and 9Router conflicts
   pz ai claude install         Transactional install/repair with backup and rollback
@@ -682,6 +683,10 @@ cmd_ai() {
             shift
             PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
                 python3 -m linux.ui_native.operation_ledger "${@:-status}"
+            ;;
+        drift|runtime-drift)
+            shift 2 2>/dev/null || shift
+            bash "$PZ_ROOT/linux/ai/runtime-drift.sh" "${target:-status}" "$@"
             ;;
         codexbar|kodexbar)
             shift
