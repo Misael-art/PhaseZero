@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -283,6 +284,20 @@ def create_plan(
     selected = _expand_selection(capabilities, profiles)
     actions: list[dict] = []
     blockers: list[str] = []
+    selected_ids = {capability.id for capability in selected}
+    for capability in selected:
+        for conflict_id in capability.conflicts:
+            if conflict_id in selected_ids or conflict_id not in BY_ID:
+                continue
+            conflict = BY_ID[conflict_id]
+            conflict_source, conflict_installed = _select_source(
+                conflict, host, package_provider, require_available=False,
+            )
+            if conflict_source is not None and conflict_installed is True:
+                blockers.append(f"conflito instalado: {capability.id} ↔ {conflict_id}")
+            elif conflict_source is not None and conflict_installed is None:
+                blockers.append(f"conflito não verificável: {capability.id} ↔ {conflict_id}")
+    space_by_scope: dict[str, list[dict[str, int | None]]] = {"system": [], "user": []}
     reboot = "no"
     risk = "normal"
     risk_order = {"normal": 0, "elevated": 1, "high": 2}
@@ -317,6 +332,13 @@ def create_plan(
             reason = f"fonte não encontrada no repositório: {source.name}"
         else:
             command = package_provider.install_plan(source) if not installed else None
+        space_estimate = (
+            package_provider.estimate_space(source)
+            if source is not None and not installed else
+            {"downloadBytes": 0, "installedBytes": 0}
+        )
+        scope = "user" if source is not None and source.kind == "flatpak" else "system"
+        space_by_scope[scope].append(space_estimate)
         if status == "blocked":
             blockers.append(f"{capability.title}: {reason}")
         if risk_order[capability.risk] > risk_order[risk]:
@@ -330,6 +352,8 @@ def create_plan(
             "reason": reason,
             "source": _source_dict(source),
             "command": _command_dict(command) if command else None,
+            "spaceEstimate": space_estimate,
+            "spaceScope": scope,
             "recipe": {
                 "kind": "systemd-service",
                 "unit": recipe.unit,
@@ -347,6 +371,39 @@ def create_plan(
         blockers.append(f"risco {risk} excede policy.maxRisk={max_risk}")
     if manifest_policy.get("allowReboot") is False and reboot != "no":
         blockers.append(f"plano requer reboot {reboot}, bloqueado pela policy.allowReboot")
+    space_targets: dict[str, dict] = {}
+    for scope, estimates in space_by_scope.items():
+        if not estimates:
+            continue
+        target_path = Path.home() if scope == "user" else Path("/")
+        available_space = shutil.disk_usage(target_path).free
+        downloads = [item.get("downloadBytes") for item in estimates]
+        installs = [item.get("installedBytes") for item in estimates]
+        required_download = sum(downloads) if all(value is not None for value in downloads) else None
+        required_install = sum(installs) if all(value is not None for value in installs) else None
+        # Repository metadata describes selected packages, not their full dependency closure.
+        target_status = "partial"
+        if required_install is not None and required_install > available_space:
+            target_status = "insufficient"
+            blockers.append(
+                f"espaço estimado insuficiente em {scope}: {required_install} bytes necessários; "
+                f"{available_space} bytes disponíveis"
+            )
+        space_targets[scope] = {
+            "status": target_status,
+            "downloadBytes": required_download,
+            "installedBytes": required_install,
+            "availableBytes": available_space,
+        }
+    all_downloads = [item.get("downloadBytes") for estimates in space_by_scope.values() for item in estimates]
+    all_installs = [item.get("installedBytes") for estimates in space_by_scope.values() for item in estimates]
+    required_download = sum(all_downloads) if all_downloads and all(value is not None for value in all_downloads) else None
+    required_install = sum(all_installs) if all_installs and all(value is not None for value in all_installs) else None
+    space_status = (
+        "insufficient" if any(target["status"] == "insufficient" for target in space_targets.values()) else
+        "partial"
+    )
+    available_space = next(iter(space_targets.values()))["availableBytes"] if len(space_targets) == 1 else None
     plan_id = state.new_id("plan")
     confirmation = state.token()
     record = {
@@ -363,6 +420,15 @@ def create_plan(
         "status": "blocked" if blockers else "ready",
         "risk": risk,
         "reboot": reboot,
+        "space": {
+            "status": space_status,
+            "downloadBytes": required_download,
+            "installedBytes": required_install,
+            "availableBytes": available_space,
+            "targets": space_targets,
+            "estimateSource": "package-repository-metadata",
+            "estimateCompleteness": "direct-packages-lower-bound",
+        },
         "policy": manifest_policy,
         "confirmToken": confirmation,
     }
@@ -406,6 +472,11 @@ def apply_plan(
         raise CapabilityError("plano expirado; gere um novo preview")
     if plan.get("blockers"):
         raise CapabilityError("plano contém bloqueios; revise a seleção")
+    for scope, target in (plan.get("space") or {}).get("targets", {}).items():
+        estimated_install = target.get("installedBytes")
+        target_path = Path.home() if scope == "user" else Path("/")
+        if isinstance(estimated_install, int) and estimated_install > shutil.disk_usage(target_path).free:
+            raise CapabilityError("espaço livre caiu abaixo da estimativa; gere um novo preview")
     if not dry_run and confirmation != plan.get("confirmToken"):
         raise CapabilityError("token de confirmação inválido")
     host = facts or detect()

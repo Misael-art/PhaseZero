@@ -105,7 +105,8 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
     _c("health.earlyoom", "EarlyOOM", "Proteção contra congelamentos por falta de memória.", "health", packages={"arch": "earlyoom", "debian": "earlyoom", "fedora": "earlyoom", "suse": "earlyoom"}, risk="elevated"),
     _c("health.ananicy", "Ananicy Cpp", "Prioridades automáticas por aplicação.", "health", packages={"arch": "ananicy-cpp", "debian": "ananicy-cpp", "fedora": "ananicy-cpp"}, risk="elevated"),
     _c("health.btrfs-assistant", "Btrfs Assistant", "Snapshots, scrub e manutenção Btrfs.", "health", packages={"arch": "btrfs-assistant", "debian": "btrfs-assistant", "fedora": "btrfs-assistant"}),
-    _c("health.iwd", "iNet Wireless Daemon", "Backend Wi-Fi moderno e enxuto.", "health", packages={"arch": "iwd", "debian": "iwd", "fedora": "iwd", "suse": "iwd"}, risk="high", reboot="recommended", conflicts=("network.wpa-supplicant",)),
+    _c("health.iwd", "iNet Wireless Daemon", "Backend Wi-Fi moderno e enxuto.", "health", packages={"arch": "iwd", "debian": "iwd", "fedora": "iwd", "suse": "iwd"}, risk="high", reboot="recommended", conflicts=("health.wpa-supplicant",)),
+    _c("health.wpa-supplicant", "wpa_supplicant", "Backend Wi-Fi compatível com NetworkManager.", "health", packages={"arch": "wpa_supplicant", "debian": "wpasupplicant", "fedora": "wpa_supplicant", "suse": "wpa_supplicant"}, risk="high", reboot="recommended", conflicts=("health.iwd",)),
     _c("security.apparmor", "AppArmor", "Confinamento por perfis de aplicação.", "security", packages={"arch": "apparmor", "debian": "apparmor", "fedora": "apparmor", "suse": "apparmor-parser"}, risk="elevated", reboot="recommended", immutable="layered"),
     _c("security.ufw", "UFW", "Firewall local com política simples.", "security", packages={"arch": "ufw", "debian": "ufw", "fedora": "ufw", "suse": "ufw"}, risk="high"),
     _c("security.flatseal", "Flatseal", "Auditoria e edição de permissões Flatpak.", "security", flatpak="com.github.tchx84.Flatseal"),
@@ -126,12 +127,13 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
     _c("development.docker-compose", "Docker Compose", "Orquestração multi-container (plugin compose).", "development", packages={"arch": "docker-compose", "debian": "docker-compose-plugin", "fedora": "docker-compose-plugin", "suse": "docker-compose"}, requires=("development.docker",), risk="elevated", immutable="layered"),
     _c("development.virt-manager", "Virt-Manager", "Gerenciamento gráfico de libvirt/QEMU.", "development", packages={"arch": "virt-manager", "debian": "virt-manager", "fedora": "virt-manager", "suse": "virt-manager"}),
     _c("development.kind", "Kind", "Clusters Kubernetes locais em containers.", "development", packages={"arch": "kind", "debian": "kind", "fedora": "kind"}, requires=("development.docker",)),
+    _c("development.nodejs", "Node.js", "Runtime JavaScript para projetos web e ferramentas de desenvolvimento.", "development", packages={"arch": "nodejs", "debian": "nodejs", "fedora": "nodejs", "suse": "nodejs"}, keywords=("javascript", "typescript", "web", "js", "ts")),
     _c("development.dotnet", ".NET SDK", "SDK moderno da plataforma .NET.", "development", packages={"arch": "dotnet-sdk", "debian": "dotnet-sdk-8.0", "fedora": "dotnet-sdk-8.0", "suse": "dotnet-sdk-8.0"}),
     _c("development.jdk", "OpenJDK", "JDK livre para Java e ferramentas JVM.", "development", packages={"arch": "jdk-openjdk", "debian": "default-jdk", "fedora": "java-latest-openjdk-devel", "suse": "java-devel"}),
     _c("development.maven", "Maven", "Build e dependências Java.", "development", packages={"arch": "maven", "debian": "maven", "fedora": "maven", "suse": "maven"}, requires=("development.jdk",)),
     _c("development.mise", "Mise", "Gerenciador de runtimes e ferramentas por projeto.", "development", packages={"arch": "mise", "fedora": "mise"}),
     _c("development.pyenv", "Pyenv", "Versões isoladas do Python.", "development", packages={"arch": "pyenv", "debian": "pyenv", "fedora": "pyenv"}),
-    _c("development.pnpm", "pnpm", "Gerenciador eficiente de pacotes Node.", "development", packages={"arch": "pnpm", "debian": "node-pnpm", "fedora": "pnpm"}),
+    _c("development.pnpm", "pnpm", "Gerenciador eficiente de pacotes Node.", "development", packages={"arch": "pnpm", "debian": "node-pnpm", "fedora": "pnpm"}, requires=("development.nodejs",)),
     _c("development.k6", "k6", "Testes de carga reproduzíveis.", "development", packages={"debian": "k6", "fedora": "k6"}),
     _c("development.httpie", "HTTPie", "Cliente HTTP amigável para terminal.", "development", packages={"arch": "httpie", "debian": "httpie", "fedora": "httpie", "suse": "httpie"}),
     _c("development.postman", "Postman", "Cliente e coleções de APIs.", "development", flatpak="com.getpostman.Postman"),
@@ -170,6 +172,8 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
 BY_ID = {capability.id: capability for capability in CAPABILITIES}
 
 PROFILES: dict[str, tuple[str, ...]] = {
+    "development-web-js": ("development.nodejs", "development.pnpm"),
+    "development-python": ("development.pyenv",),
     "gaming-core": ("gaming.gamescope", "gaming.gamemode", "gaming.mangohud", "gaming.goverlay", "gaming.protonplus", "gaming.protontricks"),
     "game-streaming": ("gaming.sunshine", "gaming.moonlight", "gaming.gpu-recorder"),
     "hardware-tools": ("hardware.openrgb", "hardware.piper", "hardware.solaar", "hardware.lact", "hardware.cpu-x", "hardware.qdiskinfo", "hardware.f3"),
@@ -194,6 +198,7 @@ PROFILES["full-workstation"] = tuple(
 # ("creative", "administration", "education", "full-workstation") ficam de fora:
 # pertencer a eles não é recomendação, é só existir no catálogo.
 CURATED_PROFILES = (
+    "development-web-js", "development-python",
     "gaming-core", "game-streaming", "hardware-tools",
     "system-health", "developer", "security", "backup",
 )

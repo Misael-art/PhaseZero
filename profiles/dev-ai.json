@@ -1,7 +1,7 @@
 {
   "schema": "https://phasezero.local/schemas/profile.json",
   "name": "dev-ai",
-  "description": "Developer workstation + AI toolchain setup",
+  "description": "Legacy opt-in bundle: developer tools, local AI, networking daemons and IDE setup scripts",
   "os": ["linux", "windows"],
   "packages": {
     "linux": {

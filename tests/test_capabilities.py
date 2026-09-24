@@ -64,6 +64,11 @@ class FakeProvider(Provider):
     def available(self, source):
         return True
 
+    def estimate_space(self, source):
+        if source.kind == "flatpak":
+            return {"downloadBytes": None, "installedBytes": None}
+        return {"downloadBytes": 1024, "installedBytes": 4096}
+
     def execute(self, plan):
         self.executed.append(plan.command())
         name = plan.args[-1]
@@ -194,6 +199,107 @@ def test_plan_expands_dependencies_and_records_private_preview(private_state):
     assert stat.S_IMODE(record.stat().st_mode) == 0o600
     assert stat.S_IMODE(private_state.stat().st_mode) == 0o700
     assert all(item["command"]["program"] != "sh" for item in plan["actions"])
+
+
+def test_web_js_recipe_has_no_ai_or_remote_service_dependencies(private_state):
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(profile_ids=["development-web-js"], facts=facts, provider=provider)
+    ids = [item["capabilityId"] for item in plan["actions"]]
+    assert ids == ["development.nodejs", "development.pnpm"]
+    assert "ollama" not in " ".join(ids).casefold()
+    assert all(item["recipe"] is None for item in plan["actions"])
+    assert plan["space"] == {
+        "status": "partial", "downloadBytes": 2048,
+        "installedBytes": 8192, "availableBytes": plan["space"]["availableBytes"],
+        "estimateSource": "package-repository-metadata",
+        "estimateCompleteness": "direct-packages-lower-bound",
+        "targets": {
+            "system": {
+                "status": "partial", "downloadBytes": 2048,
+                "installedBytes": 8192,
+                "availableBytes": plan["space"]["targets"]["system"]["availableBytes"],
+            },
+        },
+    }
+    assert plan["space"]["availableBytes"] >= 0
+
+
+def test_conflicting_capabilities_are_rejected_before_apply():
+    facts = host()
+    with pytest.raises(CapabilityError, match="conflitos na seleção"):
+        create_plan(
+            capability_ids=["health.iwd", "health.wpa-supplicant"],
+            facts=facts, provider=FakeProvider(facts),
+        )
+
+
+def test_plan_blocks_when_conflict_is_already_installed(private_state):
+    facts = host()
+    provider = FakeProvider(facts, {"wpa_supplicant"})
+    plan = create_plan(capability_ids=["health.iwd"], facts=facts, provider=provider)
+    assert plan["status"] == "blocked"
+    assert any("conflito instalado" in blocker for blocker in plan["blockers"])
+
+
+def test_package_size_parser_handles_binary_and_decimal_units():
+    assert Provider._size_bytes("1.5 MiB") == 1_572_864
+    assert Provider._size_bytes("2 MB") == 2_000_000
+    assert Provider._size_bytes("128", default_unit="KiB") == 131_072
+    assert Provider._size_bytes("unknown") is None
+
+
+def test_flatpak_space_preview_targets_user_filesystem(private_state):
+    facts = host()
+    seen = []
+
+    def disk_usage(path):
+        seen.append(str(path))
+        return SimpleNamespace(free=777)
+
+    with patch("linux.capabilities.engine.shutil.disk_usage", side_effect=disk_usage):
+        plan = create_plan(
+            capability_ids=["development.vscode"], facts=facts,
+            provider=FakeProvider(facts),
+        )
+    assert plan["space"]["targets"]["user"]["availableBytes"] == 777
+    assert str(Path.home()) in seen
+    assert plan["space"]["status"] == "partial"
+
+
+def test_reapplying_same_plan_does_not_duplicate_install(private_state):
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(capability_ids=["development.nodejs"], facts=facts, provider=provider)
+    first = apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert provider.installed_names == {"nodejs"}
+    second = apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert provider.installed_names == {"nodejs"}
+    assert len(provider.executed) == 1
+    assert first["installedByOperation"]
+    assert second["installedByOperation"] == []
+
+
+def test_apply_rechecks_space_after_preview(private_state, monkeypatch):
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(capability_ids=["development.nodejs"], facts=facts, provider=provider)
+    monkeypatch.setattr("linux.capabilities.engine.shutil.disk_usage", lambda _path: SimpleNamespace(free=1))
+    with pytest.raises(CapabilityError, match="espaço livre caiu"):
+        apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert provider.executed == []
+
+
+def test_preview_blocks_known_insufficient_space(private_state, monkeypatch):
+    facts = host()
+    monkeypatch.setattr("linux.capabilities.engine.shutil.disk_usage", lambda _path: SimpleNamespace(free=1))
+    plan = create_plan(
+        capability_ids=["development.nodejs"], facts=facts,
+        provider=FakeProvider(facts),
+    )
+    assert plan["status"] == "blocked"
+    assert plan["space"]["status"] == "insufficient"
+    assert any("espaço estimado insuficiente" in blocker for blocker in plan["blockers"])
 
 
 def test_all_profiles_resolve_without_catalog_gaps(private_state, monkeypatch):

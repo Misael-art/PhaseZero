@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -70,6 +71,58 @@ class Provider:
             ).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             return False
+
+    def estimate_space(self, source: SourceSpec) -> dict:
+        """Best-effort repository size estimate; missing metadata stays unknown."""
+        if source.kind != "package":
+            return {"downloadBytes": None, "installedBytes": None}
+        family = self.facts.package_family
+        if family == "arch":
+            command = ["pacman", "-Si", source.name]
+            download_key, install_key = "Download Size", "Installed Size"
+        elif family == "debian":
+            command = ["apt-cache", "show", "--no-all-versions", source.name]
+            download_key, install_key = "Size", "Installed-Size"
+        elif family == "fedora":
+            command = ["dnf", "repoquery", "--queryformat", "%{size} %{installsize}", source.name]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                return {"downloadBytes": None, "installedBytes": None}
+            match = re.search(r"(?m)^\s*(\d+)\s+(\d+)\s*$", result.stdout or "")
+            return {
+                "downloadBytes": int(match.group(1)) if match else None,
+                "installedBytes": int(match.group(2)) if match else None,
+            }
+        else:
+            return {"downloadBytes": None, "installedBytes": None}
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return {"downloadBytes": None, "installedBytes": None}
+        values: dict[str, int | None] = {"downloadBytes": None, "installedBytes": None}
+        for line in (result.stdout or "").splitlines():
+            key, separator, raw = line.partition(":")
+            if not separator:
+                continue
+            value = raw.strip()
+            if key.strip() == download_key:
+                values["downloadBytes"] = self._size_bytes(value, default_unit="B" if family == "debian" else "")
+            elif key.strip() == install_key:
+                values["installedBytes"] = self._size_bytes(value, default_unit="KiB" if family == "debian" else "")
+        return values
+
+    @staticmethod
+    def _size_bytes(value: str, *, default_unit: str = "") -> int | None:
+        match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)?", value, re.IGNORECASE)
+        if not match:
+            return None
+        number = float(match.group(1))
+        unit = (match.group(2) or default_unit or "B").casefold()
+        factors = {"b": 1, "kb": 1000, "kib": 1024, "mb": 1000**2, "mib": 1024**2,
+                   "gb": 1000**3, "gib": 1024**3, "tb": 1000**4, "tib": 1024**4}
+        factor = factors.get(unit)
+        return int(number * factor) if factor else None
 
     def install_plan(self, source: SourceSpec) -> CommandPlan:
         if source.kind == "flatpak":
