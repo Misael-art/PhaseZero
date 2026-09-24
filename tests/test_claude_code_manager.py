@@ -286,6 +286,23 @@ echo "bonsai:$*"
             with self.assertRaisesRegex(RuntimeError, "indisponível no npm"):
                 manager._ensure_bonsai(tx)
 
+    def test_bonsai_status_flags_runner_that_fakes_latest(self) -> None:
+        # AISR-006: a runner that answers npm "latest" with the installed version
+        # keeps Bonsai pinned forever; status must say so.
+        runner = self.home / "runner/bonsai-managed"
+        runner.parent.mkdir(parents=True)
+        runner.write_text(
+            "#!/usr/bin/env bash\nexport PZ_BONSAI_INSTALLED_VERSION=0.4.19\n"
+            "exec node --require latest-fail-open.cjs cli.js \"$@\"\n",
+            encoding="utf-8",
+        )
+        self.assertEqual("upstream", CC.Manager._bonsai_update_check(str(self.bonsai)))
+        shim = self.home / "shim/bonsai"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f"#!/usr/bin/env bash\nupstream={runner}\nexec \"$upstream\" \"$@\"\n", encoding="utf-8")
+        self.assertEqual("forged", CC.Manager._bonsai_update_check(str(shim)))
+        self.assertEqual("not-installed", CC.Manager._bonsai_update_check(None))
+
     def test_repair_removes_empty_hook_envelopes(self) -> None:
         settings = self.home / ".claude/settings.json"
         settings.parent.mkdir(parents=True)
