@@ -399,3 +399,37 @@ de consumidores em PXA-008. A regressão `test_accounts_page.py`,
 e `test_linux_native_ui.py` passou: 55 testes. Ledger corrompido mantém controles de
 consentimento indisponíveis. Gates de host, conta real e UX permanecem pendentes; nenhuma
 evidência fixture fecha esses gates.
+
+PXA-010 spike upstream (pesquisa isolada, 2026-09-24): release fixada para avaliação em
+`v6.0.0`, commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827` (tag anotada aponta
+para objeto `7e7e2bc5164d06448861bc443153d1834ae7e883`). SHA-256 publicado para o
+arquivo Linux x64 `715d4cf7b411788df525badb3ed46c25b384d513dd3ca8067f4a893edfe3edd0`
+e Windows x64 `94e51956173339ec7932e70939081003f372213c7ecc4d3084b86063c3718b44`.
+São hashes publicados, ainda não conferidos contra downloads; pacotes não assinados.
+README recomenda instaladores dinâmicos `/releases/latest`; integração PhaseZero deve
+fixar release e conferir manifesto, nunca executar o comando dinâmico. [Release v6.0.0]
+(https://github.com/miuuyy/codex-chatgpt-web/releases).
+
+Mapa upstream documentado: instalar/substituir launcher mantém configuração e perfil
+privado do browser; setup adiciona `openai_base_url` e rota Voice oficial à configuração
+Codex com journal/restauração no disconnect/removal; runtime inclui bridge, helper browser,
+MCP e pode iniciar túnel e daemon loopback, além de login item/autostart XDG opcional.
+Remoção pede Settings → Remove Codex integration, restart integral do Codex, quit e
+desinstalação normal; remover túnel, MCP e credencial de conta é passo separado. Modos
+observados: Browser-only sem tools; Zero Risk com envio manual e MCP separado; Full harness
+com tools via MCP. Approval inesperada falha fechada, mas flag explícita
+`--auto-approve-tool-calls` permite clicar Allow uma vez. CI não atesta conta ChatGPT,
+connector MCP ativo ou turno completo; checklist Windows 11 requer conta real. Fontes:
+[arquitetura](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/architecture.md),
+[segurança](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/security-model.md),
+[remoção](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/TROUBLESHOOTING.md),
+[validação de release](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/release-validation.md).
+
+Resultado do spike: sem integração/autoridade local existente para este produto, sem
+download, instalação ou execução upstream e sem mutação do host. Isolamento do Codex e
+preservação das aprovações não provados; opção explícita de auto-approval é incompatível
+com política PhaseZero. Arch e Windows descartáveis, crash/rollback/porta ocupada, conta
+real e ferramenta MCP continuam sem prova. PXA-010 permanece `in_progress`; gate de
+segurança falho para habilitação automática e nenhuma tela/rota deve oferecer ativação até
+provas independentes. Próximo passo seguro: spike hermético do contrato esperado e buscar
+execução em snapshots/conta autorizada; não adaptar setup upstream no host de trabalho.
