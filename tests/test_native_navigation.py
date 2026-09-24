@@ -143,6 +143,26 @@ def test_routing_page_registered_in_sidebar_and_builds(qapp):
         window.close()
 
 
+def test_ai_and_account_destinations_have_separate_sidebar_groups(qapp):
+    from linux.ui_native.catalog import SIDEBAR_GROUPS
+    from linux.ui_native.main_window import MainWindow
+
+    groups = {name: categories for name, categories in SIDEBAR_GROUPS}
+    assert groups["Desenvolvimento"] == ("Desenvolvimento",)
+    assert groups["Inteligência artificial"] == ("IA & Dev",)
+    assert groups["Contas e conexões"] == ("Contas e conexões",)
+    assert groups["IA · Conexões avançadas"] == ("Proxies IA", "Roteamento IA")
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        window.show_category("Roteamento IA")
+        assert "IA · Conexões avançadas" in window.breadcrumb.text
+        assert "Roteamento IA" in window.breadcrumb.text
+        window.close()
+
+
 def test_homelab_reachable_from_sidebar_and_registry(qapp):
     """CCS-013: Homelab é uma superfície alcançável — sidebar + registry."""
     from linux.ui_native.catalog import CATEGORIES, SIDEBAR_GROUPS

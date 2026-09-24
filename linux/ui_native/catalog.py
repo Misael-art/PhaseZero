@@ -41,7 +41,10 @@ SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Linux", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
-    ("Desenvolvimento", ("Desenvolvimento", "Contas e conexões", "IA & Dev", "Proxies IA", "Roteamento IA")),
+    ("Desenvolvimento", ("Desenvolvimento",)),
+    ("Inteligência artificial", ("IA & Dev",)),
+    ("Contas e conexões", ("Contas e conexões",)),
+    ("IA · Conexões avançadas", ("Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos", "Temas")),
     ("Histórico", ("Resultados",)),
 )

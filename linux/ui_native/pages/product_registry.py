@@ -446,7 +446,7 @@ class ProductRegistryPage(BasePage):
         terms = {
             "configure": {"configure", "setup"},
             "resolve": {"doctor", "repair", "start"},
-            "open": {"open", "launch"},
+            "open": {"open", "launch", "dashboard"},
         }.get(state, set())
         if state == "resolve":
             recovery_id = _RECOVERY_ACTION_BY_APP.get(self._selected_app_id, "")
