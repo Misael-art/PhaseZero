@@ -121,11 +121,14 @@ ERROR_WEIGHT = {401: 0.15, 403: 0.15, 429: 0.4, 400: 0.6}
 ERROR_ACTIVE_WINDOW = 6 * 3600  # seconds
 COOLDOWN_FIELDS = {"backoffLevel", "cooldownUntil", "cooldownEndsAt"}
 
+# Compared against key.lower(): keep every entry lowercase (camelCase entries
+# here never matched, so lastError/errorMessage leaked raw upstream bodies).
 REDACT_KEYS = {
     "apikey", "key", "secret", "token", "email", "password", "passwd",
-    "authorization", "headers", "lastError", "lastErrorAt", "errorMessage",
-    "apiKey", "accessKey", "refreshToken",
+    "authorization", "headers", "lasterror", "lasterrorat", "errormessage",
+    "accesskey", "refreshtoken",
 }
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 TASKS = ("code", "analysis", "plan")
 CLIENTS = ("claude", "opencode")
@@ -161,6 +164,9 @@ def _redact(value, depth: int = 0):
         return out
     if isinstance(value, list):
         return [_redact(v, depth + 1) for v in value]
+    if isinstance(value, str) and EMAIL_RE.search(value):
+        # Connection names are often the account e-mail.
+        value = EMAIL_RE.sub("<email>", value)
     if isinstance(value, str) and len(value) > 256:
         return value[:128] + "...<truncated>"
     return value
@@ -697,9 +703,26 @@ def build_inventory(client: R9Client, refresh_quota: bool = False) -> dict:
             for c in conns
         ],
         "availability": redact(availability),
+        "providerAvailability": provider_availability(statuses),
         "usage": {"totalRequests": usage.get("totalRequests"), "totalCost": usage.get("totalCost")},
         "secretsRedacted": True,
     }
+
+
+def provider_availability(statuses: dict) -> dict:
+    """`health` only says the gateway answers; this says whether anything
+    behind it can serve (it stayed true with 12 of 15 connections down)."""
+    states = [entry.get("state") for entry in statuses.values()]
+    total = len(states)
+    ready = sum(1 for state in states if state in ("ready", "cooldown"))
+    unavailable = sum(1 for state in states if state == "unavailable")
+    if total == 0 or ready == 0:
+        state = "down"
+    elif unavailable:
+        state = "degraded"
+    else:
+        state = "ok"
+    return {"state": state, "ready": ready, "unavailable": unavailable, "total": total}
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,19 @@ def _first(parsed: object, *keys: str, default=None):
     return node if node is not None else default
 
 
+
+def routing_status_text(parsed: dict) -> str:
+    """Gateway up is not enough: say how many providers can actually serve."""
+    if not parsed.get("health"):
+        return "Indisponível"
+    avail = parsed.get("providerAvailability")
+    if not isinstance(avail, dict):
+        return "Online"
+    ready, total = avail.get("ready", 0), avail.get("total", 0)
+    if avail.get("state") == "down":
+        return f"Online, sem provedor disponível (0 de {total})"
+    return f"Online, {ready} de {total} provedores disponíveis"
+
 class AiRoutingPage(BasePage):
     """Dedicated per-task routing page: recommendations, policies, quota,
     fallback chain editor, apply/rollback and an isolated Bonsai card."""
@@ -434,8 +447,7 @@ class AiRoutingPage(BasePage):
             return
         if action_id == "ai.routing-status":
             if self._status_value:
-                health = "Online" if parsed.get("health") else "Indisponível"
-                self._status_value.setText(health)
+                self._status_value.setText(routing_status_text(parsed))
         elif action_id == "ai.routing-inventory":
             if self._quota_label:
                 states = {}

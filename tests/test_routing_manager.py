@@ -811,3 +811,29 @@ def test_cli_status_cached_before_any_state(sandbox, fake):
     assert proc.returncode == 1
     data = json.loads(proc.stdout)
     assert data["cached"] is False
+
+
+def test_status_reports_provider_availability_and_redacts_errors(sandbox, fake):
+    # AISR-014: health stayed true with most providers down, and lastError /
+    # connectionName leaked upstream bodies and the account e-mail.
+    RM = rm
+
+    assert RM.provider_availability({}) == {"state": "down", "ready": 0, "unavailable": 0, "total": 0}
+    mixed = {"a": {"state": "ready"}, "b": {"state": "unavailable"}, "c": {"state": "unknown"}}
+    assert RM.provider_availability(mixed)["state"] == "degraded"
+    assert RM.provider_availability({"a": {"state": "unavailable"}})["state"] == "down"
+    assert RM.provider_availability({"a": {"state": "cooldown"}})["state"] == "ok"
+
+    redacted = RM.redact({"connectionName": "someone@example.com", "lastError": "[401]: raw body",
+                          "errorMessage": "raw", "nested": [{"apiKey": "sk-1"}]})
+    assert redacted["connectionName"] == "<email>"
+    assert redacted["lastError"] == "<redacted>"
+    assert redacted["errorMessage"] == "<redacted>"
+    assert redacted["nested"][0]["apiKey"] == "<redacted>"
+
+    proc = _run_cli(sandbox, fake, "status", "--json")
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["health"] is True
+    assert data["providerAvailability"]["state"] in ("ok", "degraded", "down")
+    assert data["providerAvailability"]["total"] == len(data["connections"])
