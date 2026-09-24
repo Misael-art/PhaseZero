@@ -57,6 +57,8 @@ class GrantLedger:
             raise GrantError("explicit user consent required")
         if not consumer_id or not connection.connection_id:
             raise GrantError("consumer and connection IDs required")
+        if not connection.enabled:
+            raise GrantError("connection is disabled")
         requested = tuple(sorted(set(scopes)))
         if not requested or any(not scope or not scope.strip() for scope in requested):
             raise GrantError("at least one valid scope required")

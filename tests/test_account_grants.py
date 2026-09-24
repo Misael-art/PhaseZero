@@ -30,6 +30,12 @@ def test_grants_require_compatibility_and_explicit_consent(tmp_path):
         ledger.grant(connection, "app.claude-code", ("cookies",),
                      support=support, consented=True)
 
+    disabled = Connection("disabled-connection", "opaque-account", "claude-auth",
+                          "local:claude", enabled=False)
+    with pytest.raises(GrantError, match="connection is disabled"):
+        ledger.grant(disabled, "app.claude-code", ("session",),
+                     support=support, consented=True)
+
 
 def test_grant_revoke_are_idempotent_and_scoped_to_consumer(tmp_path):
     path = tmp_path / "state" / "grants.json"
@@ -60,7 +66,7 @@ def test_grant_revoke_are_idempotent_and_scoped_to_consumer(tmp_path):
 
 def test_revoked_grant_requires_new_explicit_consent():
     ledger = GrantLedger()
-    connection = Connection("c", "a", "adapter", "instance")
+    connection = Connection("c", "a", "adapter", "instance", enabled=True)
     support = {"consumer": {"adapter": ("read",)}}
     first = ledger.grant(connection, "consumer", ("read",),
                          support=support, consented=True)

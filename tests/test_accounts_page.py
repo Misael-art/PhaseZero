@@ -124,6 +124,27 @@ def test_account_without_photo_uses_accessible_initials(qapp):
         host_patcher.stop()
 
 
+def test_disabled_connection_cannot_receive_a_new_consumer_grant(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        page._accounts = router_provider_accounts({
+            "connections": [
+                {"id": "disabled", "provider": "openai", "name": "Paused", "active": False},
+            ],
+        })
+        page._render_cards()
+        buttons = page.findChildren(QPushButton, "accountConsumerGrant")
+        assert len(buttons) == 2
+        assert all(not button.isEnabled() for button in buttons)
+        assert {button.text() for button in buttons} == {"Conexão desativada"}
+        assert all("Ative esta conexão" in button.toolTip() for button in buttons)
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
 def test_invalid_grant_ledger_disables_consent_controls(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     ledger_path = tmp_path / "phasezero" / "ai-accounts" / "grants.json"

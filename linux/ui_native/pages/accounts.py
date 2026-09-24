@@ -248,11 +248,15 @@ class AccountsPage(BasePage):
                     active = next((grant for grant in self.grant_ledger.for_consumer(consumer_id)
                                    if grant.connection_id == connection.connection_id), None)
                     action = QPushButton(
-                        f"Revogar uso em {_CONSUMER_LABELS[consumer_id]}" if active
-                        else f"Permitir uso em {_CONSUMER_LABELS[consumer_id]}"
+                        f"Revogar uso em {_CONSUMER_LABELS[consumer_id]}" if active else
+                        "Conexão desativada" if not connection.enabled else
+                        f"Permitir uso em {_CONSUMER_LABELS[consumer_id]}"
                     )
                     action.setObjectName("accountConsumerGrant")
                     action.setAccessibleName(action.text())
+                    action.setEnabled(bool(active) or connection.enabled)
+                    if not connection.enabled and not active:
+                        action.setToolTip("Ative esta conexão no 9Router antes de autorizar o uso.")
                     action.clicked.connect(
                         lambda _checked=False, conn=connection, cid=consumer_id:
                         self._toggle_grant(conn, cid)
