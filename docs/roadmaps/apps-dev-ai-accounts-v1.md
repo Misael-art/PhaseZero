@@ -383,5 +383,8 @@ pendente; login real e vault também pendentes.
 
 Próximo lote: continuar PXA-003 (rotas Abrir/recuperação e atalhos de páginas técnicas),
 fechar PXA-005 com cancelamento em QProcess/host G2, depois completar UI e wiring
-de consumidores em PXA-008. Gates de host, conta real e UX permanecem pendentes; nenhuma
+de consumidores em PXA-008. A regressão `test_accounts_page.py`,
+`test_account_grants.py`, `test_account_contract.py`, `test_native_navigation.py`
+e `test_linux_native_ui.py` passou: 55 testes. Ledger corrompido mantém controles de
+consentimento indisponíveis. Gates de host, conta real e UX permanecem pendentes; nenhuma
 evidência fixture fecha esses gates.
