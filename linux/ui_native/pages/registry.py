@@ -20,6 +20,7 @@ from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
 from .product_registry import ProductRegistryPage
+from .development import DevelopmentPage
 from .windows_vm import WindowsVmPage
 from .service_control import ServerPage, WaydroidPage
 from .themes import ThemesPage
@@ -58,6 +59,7 @@ class PageRegistry:
         "Proxies IA": AiProxiesPage,
         "Roteamento IA": AiRoutingPage,
         "Aplicativos": ProductRegistryPage,
+        "Desenvolvimento": DevelopmentPage,
         "Ajustes": TuningPage,
         "Temas": ThemesPage,
         "Resultados": ResultsPage,

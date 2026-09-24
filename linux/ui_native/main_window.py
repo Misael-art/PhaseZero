@@ -294,6 +294,9 @@ class MainWindow(QMainWindow):
             product_page.comparison_opened.connect(self._product_comparison_opened)
             product_page.back_requested.connect(self._product_back)
             product_page.desktop_entry_requested.connect(self._launch_product_desktop_entry)
+        development_page = self.registry.page_for("Desenvolvimento")
+        if development_page is not None and hasattr(development_page, "product_requested"):
+            development_page.product_requested.connect(self.open_product)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -957,10 +960,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.request_action(next_action))
         elif not result.ok:
             self._action_queue.clear()
-        if not result.preview:
-            page = self.registry.page_for(self.current_category)
-            if page is not None:
-                QTimer.singleShot(0, page.reload)
+        page = self.registry.page_for(self.current_category)
+        on_result = getattr(page, "on_operation_result", None)
+        if action is not None and callable(on_result) and not result.preview:
+            on_result(action, result)
+        if not result.preview and page is not None:
+            QTimer.singleShot(0, page.reload)
 
     def _bind_preview_result(self, action: ActionSpec, result: OperationResult) -> None:
         if not action.preview_bindings:

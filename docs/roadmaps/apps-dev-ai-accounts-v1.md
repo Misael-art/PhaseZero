@@ -294,8 +294,9 @@ posterior ao handoff de planejamento acima.
 |---|---|---|
 | PXA-001 | `verified` | `5b8ff98`, `d641f30`, `75f5d6d`, `e9dbce0`: manifesto atual com 580 ações estáticas, 101 produtos e zero órfãs; papéis canônico/atalho/legada; padrões de ações sintetizadas e roteamento. Verificação impede mais de uma autoridade por app/escopo e exige autoridade para cada rota de instalação/setup. `ai.ollama` é canônico; `server.llm` é atalho; ambos usam escopo host e autoridade `linux/ai/setup-ollama.sh`. Stubs provam as duas rotas sem chamar pacote/serviço real; CodexBar setup também aparece no mapa. |
 | PXA-002 | `verified` | `5b8ff98`, `70ebaca`: `ProductInstance` preserva origem/configuração/saúde; adaptadores de capability e status genérico geram instâncias distintas por host/escopo. Fixture prova instalação externa, duas instâncias do mesmo app e status unknown sem pronto falso. Falha de consulta ao gerenciador vira `unknown`, bloqueia apply/remoção e permanece desconhecida no Hub. `StatusLoader` aceita apenas ação read-only e descarta probe antigo ao trocar contexto. 128 testes direcionados passam em Qt offscreen. Navegação canônica permanece PXA-003. |
-| PXA-003 | `in_progress` | `6aedd03`, `e07f2ea` e alterações atuais: `Aplicativos` é registro pesquisável de 101 apps com detalhe reutilizado; seleção de atalhos/busca navega por `appId` e preserva retorno/escopo. Status começa unknown e detalhe consulta só ação read-only; CTA deriva Verificar/Preparar/Configurar/Resolver/Abrir do estado observado. Apps GUI abrem por desktop entry XDG validado e `gio launch`, sem shell. Comparação habilitada apenas para pares curados de editor, browser e mesh network; Ollama/9Router não entram como alternativas. Limites: nenhuma preferência antiga de favoritos da UI encontrada; rotas Abrir e recuperação simples incompletas para serviços/apps CLI; migração de algumas páginas técnicas pendente. O estado Resolver não escolhe silenciosamente uma ação de restore. |
+| PXA-003 | `in_progress` | `6aedd03`, `e07f2ea`, `260d522`: `Aplicativos` é registro pesquisável de 101 apps com detalhe reutilizado; seleção de atalhos/busca navega por `appId` e preserva retorno/escopo. Status começa unknown e detalhe consulta só ação read-only; CTA deriva Verificar/Preparar/Configurar/Resolver/Abrir do estado observado. Apps GUI abrem por desktop entry XDG validado e `gio launch`, sem shell. Comparação habilitada apenas para pares curados de editor, browser e mesh network; Ollama/9Router não entram como alternativas. Limites: nenhuma preferência antiga de favoritos da UI encontrada; rotas Abrir e recuperação simples incompletas para serviços/apps CLI; migração de algumas páginas técnicas pendente. O estado Resolver não escolhe silenciosamente uma ação de restore. |
 | PXA-004 | `in_progress` | `e9dbce0`: Planner expande dependências, rejeita conflitos selecionados e verifica conflito instalado; receitas `development-web-js` e `development-python` são opt-in e JS não seleciona Ollama, SSH, Docker ou serviços. Preview inclui tamanhos diretos de pacote quando disponíveis, espaço livre por filesystem de destino e estado `partial`; esses tamanhos são limite inferior (sem fechamento de dependências). Apply revalida limite conhecido e bloqueia quando ele já excede espaço livre. Repetir o mesmo plano não duplica pacote; remoção já bloqueia dependentes instalados. `profiles/dev-ai.json` permanece explicitamente rotulado como bundle legado opt-in. Limite: metadados ausentes para algumas fontes/gerenciadores; ainda não há resolução do custo total da transação. |
+| PXA-005 | `in_progress` | Nova página `Desenvolvimento`: objetivo Web JS/TS ou Python; editor VS Code/VSCodium é opcional e entra no mesmo plano. A ação reutiliza preview/apply das capabilities; botões Validar (status read-only) e Abrir ferramenta levam ao detalhe canônico. Copy Python confirma que Python do SO não muda. Fixture interrompe após Node e retoma sem reinstalar Node. Limites: cancelar QProcess enquanto gerenciador nativo está ativo e retomar/validar em host limpo ainda não provados; validação concreta da jornada depende do host G2. |
 | PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`, `11c22fa`, `ae814d7`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; deadline agregado e adaptadores read-only para Claude, sessões de proxy e provedores 9Router. Evidência de credencial, sessão, serviço e acesso permanece separada; 401, expiração, timeout e backend ausente têm estados distintos. Claude status agora diferencia probe falho de sessão ausente, preservando `loggedIn`/schema v1 como campo compatível. `lastVerifiedAt` não é inferido de leitura. Faltam sessão/cota real e operador; nenhum login executado. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
@@ -315,7 +316,7 @@ CI. Investigar escala/DPI na matriz PXA-014. CI remota, conta real, Arch limpo,
 Windows limpo e UX com participantes não executados. Nenhum pacote, serviço,
 modelo, login, porta, VM ou boot do host foi alterado.
 
-PXA-004: `tests/test_capabilities.py` (33 testes), `tests/linux-ai-desktop.sh`,
+PXA-004: `tests/test_capabilities.py` (34 testes), `tests/linux-ai-desktop.sh`,
 `tests/linux-admin-bridge.sh`, `tests/linux-agent-compat.sh` e
 `tests/linux-git-github.sh` passaram. Estes usam providers/fakes e scripts herméticos;
 nenhuma instalação de pacote ou serviço foi aplicada no host. `git diff --check`
@@ -332,6 +333,13 @@ fixture e navegação de Abrir via `gio launch` passaram junto com snapshot rege
 entry, CTA Abrir não habilita. Estado Resolver não autoescolhe a restauração Ollama.
 Favoritos antigos e recovery simples para serviços/CLI seguem sem prova/rota;
 PXA-003 aberto.
+
+PXA-005: `test_development_page.py` + `test_capabilities.py`: 36 testes passaram;
+validação da nova categoria contra navegação/Hub/UI nativa: 53 testes passaram.
+O plano opcional de editor contém receita + capability no mesmo preview; ações são
+herméticas em provider fake. Interrupção parcial simulada com exit 130 e retry preserva
+Node já concluído. O teste não substitui cancelamento real do QProcess/pacman nem host
+limpo. Arch/Windows descartáveis e G2 continuam pendentes.
 
 Próximo lote: continuar PXA-003 (rotas Abrir/recuperação e atalhos de páginas técnicas),
 depois fechar jornada PXA-005 sobre receitas. Adaptadores de conta permanecem read-only

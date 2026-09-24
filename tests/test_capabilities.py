@@ -280,6 +280,30 @@ def test_reapplying_same_plan_does_not_duplicate_install(private_state):
     assert second["installedByOperation"] == []
 
 
+def test_partial_profile_apply_can_resume_without_reinstalling_completed_steps(private_state):
+    class InterruptedPnpmProvider(FakeProvider):
+        interrupt_once = True
+
+        def execute(self, plan):
+            if plan.args[-1] == "pnpm" and self.interrupt_once:
+                self.executed.append(plan.command())
+                self.interrupt_once = False
+                return 130, "", "interrupted"
+            return super().execute(plan)
+
+    facts = host()
+    provider = InterruptedPnpmProvider(facts)
+    plan = create_plan(profile_ids=["development-web-js"], facts=facts, provider=provider)
+    first = apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert first["status"] == "failed"
+    assert provider.installed_names == {"nodejs"}
+
+    resumed = apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert resumed["status"] == "complete"
+    assert provider.installed_names == {"nodejs", "pnpm"}
+    assert sum(command[-1] == "nodejs" for command in provider.executed) == 1
+
+
 def test_apply_rechecks_space_after_preview(private_state, monkeypatch):
     facts = host()
     provider = FakeProvider(facts)
