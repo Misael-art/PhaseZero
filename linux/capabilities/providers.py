@@ -30,17 +30,32 @@ class Provider:
             return self.facts.flatpak and self.facts.flathub
         return source.kind == "package" and self.facts.package_family != "unknown"
 
-    def installed(self, source: SourceSpec) -> bool:
+    def installed(self, source: SourceSpec) -> bool | None:
+        """Return package presence, absence, or unknown on probe failure.
+
+        A failed package-manager query must never be treated as proof that an
+        app is absent: that can prompt a duplicate install or misleading CTA.
+        """
         command = self._query(source)
         if command is None:
-            return False
+            return None
         try:
-            return subprocess.run(
-                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            result = subprocess.run(
+                command, capture_output=True, text=True,
                 timeout=15, check=False,
-            ).returncode == 0
+            )
         except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode == 0:
+            return True
+        detail = f"{result.stdout or ''}\n{result.stderr or ''}".casefold()
+        absent_markers = (
+            "was not found", "is not installed", "not installed",
+            "no packages found", "no package found", "no packages were found",
+        )
+        if any(marker in detail for marker in absent_markers):
             return False
+        return None
 
     def available(self, source: SourceSpec) -> bool:
         if source.kind == "flatpak":
@@ -154,4 +169,3 @@ class Provider:
             f"XDG_DATA_HOME={home}/.local/share", f"XDG_CONFIG_HOME={home}/.config",
             *command,
         ]
-

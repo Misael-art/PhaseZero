@@ -151,7 +151,10 @@ class ProductInstance:
     details: str = ""
 
     def __post_init__(self) -> None:
-        if not self.instance_id or not self.app_id.startswith("app.") or not self.host_id:
+        if (
+            not self.instance_id or not self.app_id.startswith("app.")
+            or not self.host_id or not self.scope
+        ):
             raise ValueError("product instance needs stable ID, app ID and host ID")
         if self.installation not in {"present", "absent", "unknown"}:
             raise ValueError("invalid installation state")
@@ -181,6 +184,24 @@ class ProductInstance:
     @property
     def ready(self) -> bool:
         return self.next_action == "open"
+
+    def to_dict(self) -> dict[str, str | bool | int]:
+        return {
+            "schemaVersion": 1,
+            "instanceId": self.instance_id,
+            "appId": self.app_id,
+            "hostId": self.host_id,
+            "scope": self.scope,
+            "manager": self.manager,
+            "version": self.version,
+            "installation": self.installation,
+            "origin": self.origin,
+            "configuration": self.configuration,
+            "health": self.health,
+            "observedAt": self.observed_at,
+            "nextAction": self.next_action,
+            "ready": self.ready,
+        }
 
 
 @dataclass

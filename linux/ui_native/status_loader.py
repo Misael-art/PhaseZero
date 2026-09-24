@@ -5,7 +5,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from shiboken6 import isValid
 
-from .models import ActionSpec
+from .models import ActionSpec, ProductInstance
+from .product_inventory import instances_from_status_payload
 from .result_parser import parse_json_output
 
 _SECRET_PATTERNS = (
@@ -55,11 +56,13 @@ class StatusLoader(QObject):
 
     status_ready = Signal(str, str, object)  # (action_id, stdout, parsed_result)
     status_failed = Signal(str, str)          # (action_id, error_message)
+    product_instances_ready = Signal(str, object)  # (action_id, tuple[ProductInstance, ...])
 
     def __init__(self, root: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.root = root
         self._processes: dict[str, QProcess] = {}
+        self._product_contexts: dict[str, tuple[str, str, str, str]] = {}
 
     def _pz_path(self) -> Path:
         return self.root / "linux" / "pz"
@@ -98,7 +101,48 @@ class StatusLoader(QObject):
             return
         self.fetch(action.id, list(args))
 
+    def fetch_product_status(
+        self,
+        action: ActionSpec,
+        *,
+        app_id: str,
+        host_id: str,
+        scope: str,
+        instance_key: str = "default",
+    ) -> None:
+        """Fetch a read-only status action and publish normalized instance state."""
+        if action.mutable:
+            self.status_failed.emit(action.id, "product status requires a read-only action")
+            return
+        if not app_id.startswith("app.") or not host_id or not scope or not instance_key:
+            self.status_failed.emit(action.id, "invalid product status context")
+            return
+        args = action.status_args or action.args
+        if any(token.startswith("{") and token.endswith("}") for token in args):
+            self.status_failed.emit(action.id, "status requires parameters")
+            return
+        # Selection can change while a previous host/account probe is active.
+        # Cancel it before replacing context so late output cannot be relabeled.
+        if action.id in self._processes or action.id in self._product_contexts:
+            self.cancel(action.id)
+        self._product_contexts[action.id] = (app_id, host_id, scope, instance_key)
+        self.fetch(action.id, list(args))
+
+    def product_instances_from_result(
+        self, action_id: str, payload: object,
+    ) -> tuple[ProductInstance, ...]:
+        """Normalize one status response using context registered at fetch time."""
+        context = self._product_contexts.pop(action_id, None)
+        if context is None or not isinstance(payload, dict):
+            return ()
+        app_id, host_id, scope, instance_key = context
+        return instances_from_status_payload(
+            payload, app_id=app_id, host_id=host_id, scope=scope,
+            instance_key=instance_key,
+        )
+
     def cancel(self, action_id: str) -> None:
+        self._product_contexts.pop(action_id, None)
         process = self._processes.pop(action_id, None)
         if process is not None and isValid(process) and process.state() != QProcess.NotRunning:
             process.kill()
@@ -124,8 +168,12 @@ class StatusLoader(QObject):
         self._cleanup_process(action_id, process)
         outcome, parsed, message = report_outcome(stdout, stderr, exit_code)
         if outcome == "ready":
+            instances = self.product_instances_from_result(action_id, parsed)
+            if instances:
+                self.product_instances_ready.emit(action_id, instances)
             self.status_ready.emit(action_id, stdout, parsed)
         else:
+            self._product_contexts.pop(action_id, None)
             self.status_failed.emit(action_id, message)
 
     def _on_error(self, action_id: str, error: QProcess.ProcessError, process: QProcess) -> None:
@@ -133,6 +181,7 @@ class StatusLoader(QObject):
             return
         if error == QProcess.FailedToStart:
             self._cleanup_process(action_id, process)
+            self._product_contexts.pop(action_id, None)
             self.status_failed.emit(action_id, "failed to start")
 
     def _on_timeout(self, action_id: str, process: QProcess) -> None:
@@ -142,6 +191,7 @@ class StatusLoader(QObject):
             process.kill()
             process.waitForFinished(1000)
         self._cleanup_process(action_id, process)
+        self._product_contexts.pop(action_id, None)
         self.status_failed.emit(action_id, "timed out")
 
     def _cleanup_process(self, action_id: str, process: QProcess | None) -> None:

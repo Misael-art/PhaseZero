@@ -293,19 +293,21 @@ posterior ao handoff de planejamento acima.
 | Item | Estado | Evidência e limite |
 |---|---|---|
 | PXA-001 | `in_progress` | `5b8ff98`, `d641f30`: manifesto gerado de 576 ações estáticas e 99 produtos; padrões para ações sintetizadas do Hub e roteamento; teste quebra se catálogo e snapshot divergirem. `ai.ollama` e `server.llm` compartilham `app.ollama`; Hermes idem. Instaladores antigos ainda existem nos dois contextos; falta autoridade única antes do aceite. |
-| PXA-002 | `in_progress` | `5b8ff98`: `ProductInstance` distingue presença, origem externa/gerenciada/desconhecida, configuração e saúde; adaptador de capabilities preserva desconhecido quando catálogo não sondou host. Falta adaptar outros backends e ligar detalhe único. |
+| PXA-002 | `in_progress` | `5b8ff98` + ciclo atual: `ProductInstance` preserva origem/configuração/saúde; adaptadores de capability e status genérico geram instâncias distintas por host/escopo. Falha de consulta ao gerenciador agora vira `unknown`, bloqueia apply/remoção e permanece desconhecida no Hub. `StatusLoader` aceita apenas ação read-only e descarta probe antigo ao trocar contexto. 125 testes direcionados passam em Qt offscreen. Falta ligar detalhe único após autoridade PXA-001. |
 | PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`, `11c22fa`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; timeout agregado no coletor assíncrono; probes do resumo v1 limitados a 8s e falha separada de ausência via `probes`/estado unknown. `lastVerifiedAt` não é preenchido com hora da mera leitura. UI/summary evita mostrar zero contas quando consulta falha; doctor usa aviso para status essencial não verificável. Faltam adaptadores por conta e evidência real de sessão/cota; nenhum login executado. |
 
-Provas: 48 testes Python (`test_product_inventory.py`, `test_account_contract.py`,
-`test_linux_hub.py`, `test_ai_session_ui.py`) verdes antes do ajuste de UI;
-31 testes afetados repetidos e verdes após o ajuste; `tests/linux-ai.sh` verde em
-HOME/XDG temporários; `bash -n linux/ai/auth-registry.sh` e `git diff --check`
-verdes. CI remota, conta real, Arch limpo, Windows limpo e UX com participantes
-não executados. Nenhum pacote, serviço, modelo, login, porta, VM ou boot do host
-foi alterado. O teste de IA escreveu somente no HOME temporário definido nele.
+Provas: 49 testes focados passaram na base inicial `d9f144f`. Após este ciclo,
+125 testes direcionados (`test_capabilities.py`, inventário/status de produto,
+Hub, contas/IA e regressão Windows VM) passaram com `QT_QPA_PLATFORM=offscreen`.
+`git diff --check` passou. Sem chamadas reais de pacote, serviço ou login nos
+novos testes. A reflow UI de Windows VM falha em 1280 px no QPA da sessão desktop
+e reproduz igual em `main` limpo; passa no Qt offscreen usado pelo CI. Investigar
+escala/DPI na matriz PXA-014. CI remota, conta real, Arch limpo, Windows limpo e
+UX com participantes não executados. Nenhum pacote, serviço, modelo, login, porta,
+VM ou boot do host foi alterado.
 
-Próximo lote: concluir PXA-001/002 com autoridade única de instalação e
-adaptadores por instância; depois conectar contratos PXA-006 aos provedores,
-sem inferir sessão válida pela presença de credencial. Só então iniciar página
-canônica de apps e permissões por consumidor. Não marcar `verified` até gates
-herméticos e reais correspondentes.
+Próximo lote: concluir autoridade única de instalação PXA-001; manter PXA-002
+`in_progress` até essa autoridade integrar os adaptadores de instância. Depois
+conectar contratos PXA-006 aos provedores, sem inferir sessão válida pela presença
+de credencial. Só então iniciar página canônica de apps e permissões por consumidor.
+Não marcar `verified` até gates herméticos e reais correspondentes.

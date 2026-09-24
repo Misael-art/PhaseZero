@@ -83,11 +83,16 @@ def _select_source(
     provider: Provider,
     *,
     require_available: bool,
-) -> tuple[SourceSpec | None, bool]:
+) -> tuple[SourceSpec | None, bool | None]:
     candidates = sources_for(capability, facts)
     for source in candidates:
-        if provider.installed(source):
+        present = provider.installed(source)
+        if present is True:
             return source, True
+        if present is None:
+            # Stop on uncertainty. Trying another source could lead to a
+            # duplicate install when the first package is already present.
+            return source, None
     if require_available:
         for source in candidates:
             if provider.available(source):
@@ -101,9 +106,10 @@ def catalog_payload(
     *,
     group: str = "",
     include_status: bool = False,
+    provider: Provider | None = None,
 ) -> dict:
     host = facts or detect()
-    provider = Provider(host)
+    package_provider = provider or Provider(host)
     items: list[dict] = []
     for capability in CAPABILITIES:
         if group and capability.group != group:
@@ -111,7 +117,7 @@ def catalog_payload(
         applicable, reason = compatibility(capability, host)
         if applicable and include_status:
             source, installed = _select_source(
-                capability, host, provider, require_available=False,
+                capability, host, package_provider, require_available=False,
             )
         elif applicable:
             source, installed = source_for(capability, host), False
@@ -129,7 +135,12 @@ def catalog_payload(
             "groupTitle": GROUPS[capability.group],
             "applicable": applicable and source is not None,
             "reason": reason,
-            "installed": installed,
+            "installed": installed if include_status else False,
+            "installationState": (
+                "unknown" if include_status and installed is None else
+                "present" if include_status and installed else
+                "absent" if include_status else "unknown"
+            ),
             "source": _source_dict(source),
             "requires": list(capability.requires),
             "conflicts": list(capability.conflicts),
@@ -288,13 +299,19 @@ def create_plan(
             capability, host, package_provider, require_available=True,
         ) if applicable else (None, False)
         available = source is not None
-        status = "installed" if installed and recipe_active else "configure" if installed else "install"
+        status = (
+            "installed" if installed is True and recipe_active else
+            "configure" if installed is True else "install"
+        )
         command = None
         if not applicable:
             status = "blocked"
         elif source is None:
             status = "blocked"
             reason = "nenhuma fonte confiável disponível para este host"
+        elif installed is None:
+            status = "blocked"
+            reason = "estado da instalação não pôde ser verificado; tente novamente"
         elif not available:
             status = "blocked"
             reason = f"fonte não encontrada no repositório: {source.name}"
@@ -353,7 +370,9 @@ def create_plan(
     return record
 
 
-def _revalidate_action(action: dict, host: HostFacts, provider: Provider) -> tuple[CapabilitySpec, SourceSpec]:
+def _revalidate_action(
+    action: dict, host: HostFacts, provider: Provider,
+) -> tuple[CapabilitySpec, SourceSpec, bool]:
     capability_id = str(action.get("capabilityId", ""))
     capability = BY_ID.get(capability_id)
     if capability is None:
@@ -364,9 +383,12 @@ def _revalidate_action(action: dict, host: HostFacts, provider: Provider) -> tup
     expected = _source_from_dict(action.get("source") or {})
     if expected not in sources_for(capability, host) or not provider.supports(expected):
         raise CapabilityError(f"fonte mudou desde o preview: {capability.title}")
-    if not provider.installed(expected) and not provider.available(expected):
+    installed = provider.installed(expected)
+    if installed is None:
+        raise CapabilityError(f"não foi possível verificar se {capability.title} já está instalado")
+    if not installed and not provider.available(expected):
         raise CapabilityError(f"fonte deixou de estar disponível: {capability.title}")
-    return capability, expected
+    return capability, expected, installed
 
 
 def apply_plan(
@@ -396,11 +418,11 @@ def apply_plan(
         if action.get("status") == "installed":
             results.append({"capabilityId": action["capabilityId"], "status": "preexisting"})
             continue
-        capability, source = _revalidate_action(action, host, package_provider)
+        capability, source, installed = _revalidate_action(action, host, package_provider)
         command = package_provider.install_plan(source)
         recipe = recipe_for(capability.id)
         recipe_command = recipe.apply_plan() if recipe and not recipe.active() else None
-        needs_install = action.get("status") == "install" and not package_provider.installed(source)
+        needs_install = action.get("status") == "install" and not installed
         if not needs_install and recipe_command is None:
             results.append({"capabilityId": capability.id, "status": "preexisting"})
             continue
@@ -611,15 +633,20 @@ def _install_history(capability_id: str) -> tuple[dict | None, bool]:
     return source_payload, recipe_activated
 
 
-def _installed_dependents(capability_id: str, provider: Provider, host: HostFacts) -> list[str]:
-    dependents = []
+def _installed_dependents(
+    capability_id: str, provider: Provider, host: HostFacts,
+) -> tuple[list[str], list[str]]:
+    dependents: list[str] = []
+    unknown: list[str] = []
     for capability in CAPABILITIES:
         if capability_id not in capability.requires:
             continue
         source, installed = _select_source(capability, host, provider, require_available=False)
-        if source is not None and installed:
+        if source is not None and installed is True:
             dependents.append(capability.title)
-    return dependents
+        elif source is not None and installed is None:
+            unknown.append(capability.title)
+    return dependents, unknown
 
 
 def create_removal_plan(
@@ -646,13 +673,26 @@ def create_removal_plan(
             )
             continue
         source = _source_from_dict(source_payload) if source_payload else None
-        if source is not None and not package_provider.installed(source):
-            blockers.append(f"{capability.title}: já não está instalado")
-            continue
-        dependents = _installed_dependents(capability_id, package_provider, host)
+        if source is not None:
+            present = package_provider.installed(source)
+            if present is None:
+                blockers.append(f"{capability.title}: estado da instalação não pôde ser verificado")
+                continue
+            if not present:
+                blockers.append(f"{capability.title}: já não está instalado")
+                continue
+        dependents, unknown_dependents = _installed_dependents(
+            capability_id, package_provider, host,
+        )
         if dependents:
             blockers.append(
                 f"{capability.title}: ainda é requisito de {', '.join(dependents)}"
+            )
+            continue
+        if unknown_dependents:
+            blockers.append(
+                f"{capability.title}: não foi possível verificar dependentes: "
+                f"{', '.join(unknown_dependents)}"
             )
             continue
         actions.append({
@@ -777,7 +817,10 @@ def verify_removal(
         )
         checks.append({
             "capabilityId": capability_id,
-            "removed": not (source is not None and installed),
+            "removed": not (source is not None and installed is not False),
+            "installationState": (
+                "unknown" if installed is None else "present" if installed else "absent"
+            ),
         })
     return {
         "schema": SCHEMA,

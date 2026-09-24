@@ -10,7 +10,8 @@ sys.path.insert(0, str(ROOT))
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import (
-    instances_from_capability_status, inventory, inventory_manifest, target_for,
+    instances_from_capability_status, instances_from_status_payload,
+    inventory, inventory_manifest, target_for,
 )
 
 
@@ -78,3 +79,31 @@ def test_capability_catalog_does_not_fake_absence_or_ownership():
     assert found[0].origin == "unknown"
     assert found[0].health == "unknown"
     assert not found[0].ready
+
+
+def test_status_adapter_keeps_scope_and_unknown_dimensions_separate():
+    local = instances_from_status_payload(
+        {"hasStatus": True, "installed": True, "serviceActive": False,
+         "origin": "external", "version": "0.4.2"},
+        app_id="app.ollama", host_id="host-a", scope="local",
+    )[0]
+    remote = instances_from_status_payload(
+        {"hasStatus": False, "installed": False, "configured": True},
+        app_id="app.ollama", host_id="host-b", scope="service",
+    )[0]
+    assert local.app_id == remote.app_id == "app.ollama"
+    assert local.instance_id != remote.instance_id
+    assert (local.installation, local.origin, local.health) == ("present", "external", "offline")
+    assert (remote.installation, remote.configuration, remote.health) == ("unknown", "ready", "unknown")
+    assert not remote.ready
+    assert local.to_dict()["instanceId"] == local.instance_id
+
+
+def test_status_adapter_ignores_malformed_state_fields():
+    instance = instances_from_status_payload(
+        {"hasStatus": True, "installationState": [], "origin": {},
+         "configurationState": [], "health": {}, "error": "provider timeout"},
+        app_id="app.hermes", host_id="local", scope="user",
+    )[0]
+    assert instance.installation == "unknown"
+    assert instance.origin == instance.configuration == instance.health == "unknown"

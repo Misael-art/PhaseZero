@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -23,6 +25,7 @@ from linux.capabilities.engine import (
     rollback_operation,
     verify_operation,
 )
+from linux.capabilities.models import SourceSpec
 from linux.capabilities.platform import HostFacts
 from linux.capabilities.providers import Provider
 from linux.capabilities.catalog import source_for
@@ -94,6 +97,36 @@ def test_catalog_is_valid_unique_and_uses_only_trusted_provider_kinds():
             assert source.sha256
             if source.kind == "flatpak":
                 assert source.remote == "flathub"
+
+
+def test_installation_probe_distinguishes_absent_from_unverifiable():
+    provider = Provider(host())
+    source = SourceSpec("package", "ollama")
+    with patch("linux.capabilities.providers.subprocess.run", return_value=SimpleNamespace(
+        returncode=1, stdout="", stderr="error: package 'ollama' was not found",
+    )):
+        assert provider.installed(source) is False
+    with patch("linux.capabilities.providers.subprocess.run", return_value=SimpleNamespace(
+        returncode=1, stdout="", stderr="error: could not lock database",
+    )):
+        assert provider.installed(source) is None
+    with patch("linux.capabilities.providers.subprocess.run", side_effect=FileNotFoundError):
+        assert provider.installed(source) is None
+
+
+def test_plan_blocks_when_existing_installation_cannot_be_probed(private_state):
+    facts = host()
+    class UnknownProvider(FakeProvider):
+        def installed(self, source):
+            return None
+
+    plan = create_plan(
+        capability_ids=["gaming.gamemode"], facts=facts,
+        provider=UnknownProvider(facts),
+    )
+    assert plan["status"] == "blocked"
+    assert "estado da instalação não pôde ser verificado" in " ".join(plan["blockers"])
+    assert plan["actions"][0]["command"] is None
 
 
 def test_compatibility_blocks_non_linux_container_immutable_and_wrong_gpu():

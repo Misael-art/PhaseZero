@@ -196,7 +196,9 @@ def inventory_manifest(root: Path) -> dict[str, object]:
     }
 
 
-def instances_from_capability_status(payload: object, *, host_id: str) -> tuple[ProductInstance, ...]:
+def instances_from_capability_status(
+    payload: object, *, host_id: str,
+) -> tuple[ProductInstance, ...]:
     """Read-only bridge from capability status; never infers owner or health.
 
     ``catalog`` payloads have ``hasStatus=false`` and therefore yield unknown
@@ -218,12 +220,98 @@ def instances_from_capability_status(payload: object, *, host_id: str) -> tuple[
         installation = "unknown" if not probed or not isinstance(raw.get("installed"), bool) else (
             "present" if raw["installed"] else "absent"
         )
+        origin = str(raw.get("origin", "unknown"))
+        if origin not in {"phasezero", "external", "unknown"}:
+            origin = "unknown"
+        configuration = str(raw.get("configuration", "unknown"))
+        if configuration not in {"ready", "needed", "unknown"}:
+            configuration = "unknown"
+        health = str(raw.get("health", "unknown"))
+        if health not in {"online", "offline", "failed", "unknown"}:
+            health = "unknown"
+        instance_host = str(raw.get("hostId") or host_id)
+        instance_scope = str(raw.get("scope") or "host")
         result.append(ProductInstance(
-            instance_id=f"{host_id}:capability:{capability_id}",
+            instance_id=str(
+                raw.get("instanceId")
+                or f"{instance_host}:{instance_scope}:{_capability_target(capability_id)}"
+            ),
             app_id=_capability_target(capability_id),
-            host_id=host_id,
-            scope="host",
+            host_id=instance_host,
+            scope=instance_scope,
             manager=str(source.get("kind") or "unknown"),
             installation=installation,
+            origin=origin,
+            configuration=configuration,
+            health=health,
+            version=str(raw.get("version") or ""),
+            observed_at=str(raw.get("observedAt") or ""),
         ))
     return tuple(result)
+
+
+def instances_from_status_payload(
+    payload: object,
+    *,
+    app_id: str,
+    host_id: str,
+    scope: str,
+    instance_key: str = "default",
+) -> tuple[ProductInstance, ...]:
+    """Normalize one read-only app status without converting missing data to false."""
+    if not isinstance(payload, dict) or not app_id.startswith("app."):
+        return ()
+    probe_failed = bool(payload.get("error")) or payload.get("status") in {
+        "unavailable", "unknown", "timeout", "error",
+    }
+    probed = (
+        payload.get("hasStatus") is True
+        if "hasStatus" in payload else not probe_failed
+    )
+    raw_state = payload.get("installationState")
+    if isinstance(raw_state, str) and raw_state in {"present", "absent", "unknown"}:
+        installation = raw_state if probed else "unknown"
+    else:
+        installed = payload.get("installed")
+        installation = (
+            ("present" if installed else "absent")
+            if probed and isinstance(installed, bool) else "unknown"
+        )
+    raw_origin = payload.get("origin", "unknown")
+    origin = (
+        raw_origin
+        if isinstance(raw_origin, str) and raw_origin in {"phasezero", "external", "unknown"}
+        else "unknown"
+    )
+    raw_configuration = payload.get("configurationState")
+    if (
+        not isinstance(raw_configuration, str)
+        or raw_configuration not in {"ready", "needed", "unknown"}
+    ):
+        configured = payload.get("configured")
+        raw_configuration = (
+            "ready" if configured is True else
+            "needed" if configured is False else "unknown"
+        )
+    raw_health = payload.get("health")
+    if (
+        not isinstance(raw_health, str)
+        or raw_health not in {"online", "offline", "failed", "unknown"}
+    ):
+        active = payload.get("serviceActive", payload.get("active"))
+        raw_health = "online" if active is True else "offline" if active is False else "unknown"
+    version = payload.get("version", "")
+    instance_id = f"{host_id}:{scope}:{app_id}:{instance_key}"
+    return (ProductInstance(
+        instance_id=instance_id,
+        app_id=app_id,
+        host_id=host_id,
+        scope=scope,
+        manager=str(payload.get("manager") or payload.get("managerKind") or "unknown"),
+        version=version if isinstance(version, str) else "",
+        installation=installation,
+        origin=origin,
+        configuration=raw_configuration,
+        health=raw_health,
+        observed_at=str(payload.get("observedAt") or ""),
+    ),)
