@@ -11,10 +11,45 @@
 | Item | Valor |
 |---|---|
 | PR | https://github.com/Misael-art/PhaseZero/pull/102 (`fix/ai-stack-remediation` → `main`) |
-| Base | `origin/main` `720b7d5` (v1.21.1) |
-| Checkout do operador | `/mnt/sdcard/Projects/PhaseZero` (cartão SD; branch `fix/deck-controller-session-binding` com mudanças **não commitadas** de outro trabalho — não tocar) |
+| Base original do PR | `origin/main` `720b7d5` (v1.21.1); merge atual `7606772` |
+| Checkout do operador | `/mnt/sdcard/Projects/PhaseZero` (cartão SD; limpo em `codex/ai-host-deploy-102`, SHA de `origin/main`) |
 | Worktree usado | `/mnt/sdcard/Projects/pz-ai-review` |
 | Host | `misael-jupiter`, Manjaro, btrfs, systemd user units |
+
+### Atualização operacional — 2026-09-24, após merge
+
+- PR #102 mergeado em `main` como `7606772`; CI do SHA `683e457` verde.
+- Checkout canônico `/mnt/sdcard/Projects/PhaseZero` agora está limpo na
+  branch local `codex/ai-host-deploy-102`, exatamente no SHA de `origin/main`.
+  `main` já estava associado a outro worktree, por isso não foi selecionada.
+- WIP anterior preservado na branch original
+  `fix/deck-controller-session-binding`, agora no worktree
+  `/mnt/sdcard/Projects/pz-deck-wip-preserved-20260924`. Os 5.620 itens,
+  seus hashes e o `git status` foram conferidos com a cópia em
+  `/mnt/sdcard/Projects/pz-wip-preserved-20260924-pr102`.
+- Passos 2.1 a 2.3 e 2.5 executados. `drift status` retorna `in-sync`/rc 0
+  para `hermes-router` e `9router-hermes-provider`; ambas as cópias fixam
+  `PZ_ROOT=/mnt/sdcard/Projects/PhaseZero`. Timer ativo; execução manual do
+  auto-heal terminou `Result=success`, `ExecMainStatus=0`.
+- Backup Hermes `.pz-bak.keep`: 3263 bytes, modo 0600. Config ativa restaurada,
+  não vazia. Cópias de runtime, unit, timer e config pré-sync salvas em
+  `~/.local/state/phasezero/backups/ai-pr102-runtime-20260924/` (diretório
+  0700). O mesmo diretório guarda `.mcp.json.pre-cleanup`: só a entrada
+  Bonsai-Rx foi removida, mantendo o outro servidor.
+- Qwen reparado pelo `proxies restart qwenproxy`: shim aponta ao Node 24
+  isolado; serviço ativo, `NRestarts=0` após observação. Chat real e login
+  não foram testados. `hermes status`: config/auth/MCP/gateway positivos,
+  `ready=false` porque `hermes doctor` encontra 2 vulnerabilidades npm em
+  `agent-browser` e 6 no workspace web. Não aplicar `doctor --fix` às cegas.
+- `routing status` reporta disponibilidade degradada (1 pronto, 13
+  indisponíveis, 16 totais). `claude status` mantém
+  `bonsai.updateCheck="forged"` até AISR-010. Nenhuma unit PhaseZero falha.
+- `.mcp.json` mora em volume `fuseblk` e apresenta modo 777 mesmo após
+  `chmod`; a inspeção por nomes de campos não encontrou segredos. O backup
+  desse arquivo está no HOME, em diretório 0700 e modo 0600.
+
+As instruções da seção 2 documentam a implantação realizada e seu rollback;
+não repeti-las sem novo drift. Trabalho pendente segue na seção 3.
 
 ### Feito neste PR (com teste que falha no código anterior)
 
