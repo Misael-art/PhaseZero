@@ -76,6 +76,8 @@ _PRODUCT_SEARCH_TERMS = {
     "app.ollama": ("chat local", "modelos locais", "LLM local"),
     "app.vscode": ("programar", "editor de código", "desenvolver software"),
     "app.vscodium": ("programar", "editor de código", "desenvolver software"),
+    "app.claude-code": ("agente de código", "assistente de código", "programar com IA"),
+    "app.opencode": ("agente de código", "agente de programação", "programar com IA"),
 }
 
 

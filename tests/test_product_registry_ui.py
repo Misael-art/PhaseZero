@@ -115,6 +115,11 @@ def test_product_search_indexes_purpose_synonyms(qapp):
         assert not page._cards["app.ollama"].isHidden()
         assert page._cards["app.vscode"].isHidden()
 
+        page._filter_products("agente de código")
+        assert not page._cards["app.claude-code"].isHidden()
+        assert not page._cards["app.opencode"].isHidden()
+        assert page._cards["app.ollama"].isHidden()
+
         page._filter_products("programar")
         assert not page._cards["app.vscode"].isHidden()
         assert not page._cards["app.vscodium"].isHidden()
