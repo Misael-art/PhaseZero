@@ -292,12 +292,13 @@ posterior ao handoff de planejamento acima.
 
 | Item | Estado | Evidência e limite |
 |---|---|---|
-| PXA-001 | `in_progress` | `5b8ff98`: manifesto gerado de 576 ações estáticas e 99 produtos; padrões para ações sintetizadas do Hub e roteamento; teste quebra se catálogo e snapshot divergirem. `ai.ollama` e `server.llm` compartilham `app.ollama`; Hermes idem. Instaladores antigos ainda existem nos dois contextos; falta autoridade única antes do aceite. |
+| PXA-001 | `in_progress` | `5b8ff98`, `d641f30`: manifesto gerado de 576 ações estáticas e 99 produtos; padrões para ações sintetizadas do Hub e roteamento; teste quebra se catálogo e snapshot divergirem. `ai.ollama` e `server.llm` compartilham `app.ollama`; Hermes idem. Instaladores antigos ainda existem nos dois contextos; falta autoridade única antes do aceite. |
 | PXA-002 | `in_progress` | `5b8ff98`: `ProductInstance` distingue presença, origem externa/gerenciada/desconhecida, configuração e saúde; adaptador de capabilities preserva desconhecido quando catálogo não sondou host. Falta adaptar outros backends e ligar detalhe único. |
-| PXA-006 | `in_progress` | `3e39ac0`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; timeout agregado no coletor assíncrono; probes do resumo v1 limitados a 8s e falha separada de ausência via `probes`/estado unknown. `lastVerifiedAt` não é preenchido com hora da mera leitura. Faltam adaptadores por conta e evidência real de sessão/cota; nenhum login executado. |
+| PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; timeout agregado no coletor assíncrono; probes do resumo v1 limitados a 8s e falha separada de ausência via `probes`/estado unknown. `lastVerifiedAt` não é preenchido com hora da mera leitura. UI/summary evita mostrar zero contas quando consulta falha. Faltam adaptadores por conta e evidência real de sessão/cota; nenhum login executado. |
 
 Provas: 48 testes Python (`test_product_inventory.py`, `test_account_contract.py`,
-`test_linux_hub.py`, `test_ai_session_ui.py`) verdes; `tests/linux-ai.sh` verde em
+`test_linux_hub.py`, `test_ai_session_ui.py`) verdes antes do ajuste de UI;
+31 testes afetados repetidos e verdes após o ajuste; `tests/linux-ai.sh` verde em
 HOME/XDG temporários; `bash -n linux/ai/auth-registry.sh` e `git diff --check`
 verdes. CI remota, conta real, Arch limpo, Windows limpo e UX com participantes
 não executados. Nenhum pacote, serviço, modelo, login, porta, VM ou boot do host
