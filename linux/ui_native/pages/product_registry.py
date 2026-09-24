@@ -456,7 +456,11 @@ class ProductRegistryPage(BasePage):
                 "installationAuthorityId") in authority_ids and action.mutable), None)
         terms = {
             "configure": {"configure", "setup"},
-            "resolve": {"doctor", "repair", "start"},
+            # Resolver may run a read-only diagnostic automatically. Mutable
+            # repair/start actions require an app-specific, ownership-checked
+            # recovery route above; matching command arguments here can start
+            # an unrelated managed service for an externally observed app.
+            "resolve": {"doctor"},
             "open": {"open", "launch", "dashboard"},
         }.get(state, set())
         if state == "resolve":
@@ -473,7 +477,7 @@ class ProductRegistryPage(BasePage):
                         recovery,
                         impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),
                     )
-        return next((action for action in actions if any(
+        return next((action for action in actions if (state != "resolve" or not action.mutable) and any(
             term in action.id.casefold().replace("-", ".").split(".")
             or term in action.args for term in terms
         ) and action.id != self._status_action_id), None)

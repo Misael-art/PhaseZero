@@ -470,3 +470,14 @@ real e ferramenta MCP continuam sem prova. PXA-010 permanece `in_progress`; gate
 segurança falho para habilitação automática e nenhuma tela/rota deve oferecer ativação até
 provas independentes. Próximo passo seguro: spike hermético do contrato esperado e buscar
 execução em snapshots/conta autorizada; não adaptar setup upstream no host de trabalho.
+
+PXA-003 recuperação: auditoria encontrou fallback perigoso em `Resolver`: procurar `start`
+em argumentos podia escolher `ai.proxies-start-qwen` para instância externa offline, apesar
+de não haver autoridade de instalação declarada. Agora o CTA só aceita diagnóstico
+read-only (`doctor`) ou recuperação explícita já mapeada com autoridade/origem verificada;
+proxy sem rota segura mantém CTA desabilitado. Testes públicos cobrem 9Router externo
+failed → `ai.9router-doctor` read-only e Qwen externo offline → nenhuma ação de start.
+`tests/test_product_registry_ui.py` + `tests/test_product_inventory.py`: 29 passaram;
+`git diff --check` passou. Nenhum serviço, pacote, conta ou processo real foi iniciado.
+PXA-003 segue `in_progress`: recuperação segura para demais serviços e migração de páginas
+técnicas não concluídas; CTA desabilitado ainda não equivale a recuperação funcional.

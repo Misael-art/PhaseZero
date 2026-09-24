@@ -259,6 +259,37 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         status_patcher.stop()
 
 
+def test_resolve_uses_read_only_diagnostic_and_never_starts_external_proxy(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.9router")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "external:local:app.9router", "app.9router", "local", "local",
+            installation="present", origin="external", configuration="ready", health="failed",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == "ai.9router-doctor"
+        assert not page._primary_action.mutable
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.9router-doctor"
+
+        page.open_product("app.qwen-proxy")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "external:local:app.qwen-proxy", "app.qwen-proxy", "local", "local",
+            installation="present", origin="external", configuration="ready", health="offline",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_recovery_state_does_not_auto_select_restore(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
