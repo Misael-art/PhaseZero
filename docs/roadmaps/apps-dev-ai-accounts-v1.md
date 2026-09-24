@@ -354,12 +354,9 @@ serviço CLI não cobertas por esta mudança.
 
 PXA-003 OpenCode recovery: fixture de instância managed offline seleciona
 `ai.opencode-install` com preview e copy de impacto; origem external não habilita
-mutação. `test_product_registry_ui.py -k offline_managed_opencode`: 1 passou;
-`test_product_inventory.py`: 11 passaram. Sem execução de setup, CLI ou login.
-
-PXA-003 Odysseus open: `test_product_registry_ui.py -k ready_odysseus`: 1 passou.
-CTA usa `ai.odysseus-open` só para instância observada saudável; runner fixture
-recebe execução simples sem preview.
+mutação. A suíte completa `test_product_registry_ui.py`: 15 testes passaram,
+incluindo recovery OpenCode, CLI/browser open Odysseus, 9Router dashboard e desktop
+entry. `test_product_inventory.py`: 11 passaram. Sem execução de setup, CLI ou login.
 
 PXA-005: `test_development_page.py` + `test_capabilities.py` +
 `test_development_cancel.py`: 37 testes passaram; validação da nova categoria contra
