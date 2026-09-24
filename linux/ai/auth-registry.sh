@@ -201,7 +201,9 @@ jq -cn --argjson registry "$registry" '
     schemaVersion:1,registry:$registry,
     issues:([
       $entries[] |
-      if (.required == true and .ready != true) then
+      if (.required == true and .status == "unknown") then
+        {severity:"warning",component:.id,message:(.label + " não pôde ser verificado"),nextAction:.nextAction}
+      elif (.required == true and .ready != true) then
         {severity:"error",component:.id,message:(.label + " essencial não está pronto"),nextAction:.nextAction}
       elif (.required != true and .installed == true and .ready != true) then
         {severity:"warning",component:.id,message:(.label + " precisa de atenção"),nextAction:.nextAction}
