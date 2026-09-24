@@ -84,3 +84,37 @@ def test_development_python_recipe_preserves_os_runtime_copy(qapp):
         window.close()
         host_patcher.stop()
         status_patcher.stop()
+
+
+@pytest.mark.parametrize(
+    ("objective_index", "profile_id", "app_id"),
+    (
+        (2, "development-java", "app.maven"),
+        (3, "development-dotnet", "app.dotnet"),
+    ),
+)
+def test_development_objectives_create_profile_plan_and_open_canonical_detail(
+    qapp, objective_index, profile_id, app_id,
+):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.show_category("Desenvolvimento")
+        page = window.registry.page_for("Desenvolvimento")
+        objective = page.findChild(QComboBox, "developmentObjective")
+        objective.setCurrentIndex(objective_index)
+
+        with patch.object(window.runner, "start") as start:
+            page.findChild(QPushButton, "prepareDevelopment").click()
+        action = start.call_args.args[0]
+        assert action.resolved_args(preview=True) == [
+            "capabilities", "plan", "--profile", profile_id,
+        ]
+        assert start.call_args.kwargs["preview"] is True
+
+        page.findChild(QPushButton, "openDevelopmentTool").click()
+        assert window.stack.currentWidget() is window.registry.page_for("Aplicativos")
+        assert window.registry.page_for("Aplicativos").selected_app_id == app_id
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()

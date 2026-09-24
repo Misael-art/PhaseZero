@@ -174,6 +174,8 @@ BY_ID = {capability.id: capability for capability in CAPABILITIES}
 PROFILES: dict[str, tuple[str, ...]] = {
     "development-web-js": ("development.nodejs", "development.pnpm"),
     "development-python": ("development.pyenv",),
+    "development-java": ("development.maven",),
+    "development-dotnet": ("development.dotnet",),
     "gaming-core": ("gaming.gamescope", "gaming.gamemode", "gaming.mangohud", "gaming.goverlay", "gaming.protonplus", "gaming.protontricks"),
     "game-streaming": ("gaming.sunshine", "gaming.moonlight", "gaming.gpu-recorder"),
     "hardware-tools": ("hardware.openrgb", "hardware.piper", "hardware.solaar", "hardware.lact", "hardware.cpu-x", "hardware.qdiskinfo", "hardware.f3"),
@@ -198,7 +200,8 @@ PROFILES["full-workstation"] = tuple(
 # ("creative", "administration", "education", "full-workstation") ficam de fora:
 # pertencer a eles não é recomendação, é só existir no catálogo.
 CURATED_PROFILES = (
-    "development-web-js", "development-python",
+    "development-web-js", "development-python", "development-java",
+    "development-dotnet",
     "gaming-core", "game-streaming", "hardware-tools",
     "system-health", "developer", "security", "backup",
 )

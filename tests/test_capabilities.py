@@ -225,6 +225,31 @@ def test_web_js_recipe_has_no_ai_or_remote_service_dependencies(private_state):
     assert plan["space"]["availableBytes"] >= 0
 
 
+@pytest.mark.parametrize(
+    ("profile_id", "expected_packages"),
+    (
+        ("development-java", {"jdk-openjdk", "maven"}),
+        ("development-dotnet", {"dotnet-sdk"}),
+    ),
+)
+def test_language_development_profiles_prepare_only_the_selected_stack(
+    private_state, profile_id, expected_packages,
+):
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(profile_ids=[profile_id], facts=facts, provider=provider)
+    assert plan["status"] == "ready"
+    assert {item["source"]["name"] for item in plan["actions"]} == expected_packages
+    ids = {item["capabilityId"] for item in plan["actions"]}
+    assert not any("ollama" in item or "ssh" in item for item in ids)
+
+    operation = apply_plan(
+        plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider,
+    )
+    assert operation["status"] == "complete"
+    assert provider.installed_names == expected_packages
+
+
 def test_conflicting_capabilities_are_rejected_before_apply():
     facts = host()
     with pytest.raises(CapabilityError, match="conflitos na seleção"):

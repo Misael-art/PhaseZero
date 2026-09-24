@@ -20,6 +20,10 @@ _OBJECTIVES = (
      "Node.js e pnpm. Não inclui IA local, Docker ou acesso remoto."),
     ("Python e dados", "development-python", "app.pyenv",
      "Instala pyenv para versões isoladas; não altera o Python do sistema."),
+    ("Java e JVM", "development-java", "app.maven",
+     "Instala Maven e seu requisito OpenJDK. Não altera configuração de projetos existentes."),
+    (".NET", "development-dotnet", "app.dotnet",
+     "Instala o SDK .NET pelo gerenciador de pacotes do sistema."),
 )
 _EDITORS = (
     ("Escolher depois", ""),
