@@ -294,12 +294,16 @@ posterior ao handoff de planejamento acima.
 |---|---|---|
 | PXA-001 | `verified` | `5b8ff98`, `d641f30`, `75f5d6d`: manifesto gerado com 576 ações estáticas, 99 produtos e zero órfãs; papéis canônico/atalho/legada; padrões de ações sintetizadas e roteamento. Verificação impede mais de uma autoridade por app/escopo e exige autoridade para cada rota de instalação/setup. `ai.ollama` é canônico; `server.llm` é atalho; ambos usam escopo host e autoridade `linux/ai/setup-ollama.sh`. Stubs provam as duas rotas sem chamar pacote/serviço real; CodexBar setup também aparece no mapa. |
 | PXA-002 | `verified` | `5b8ff98`, `70ebaca`: `ProductInstance` preserva origem/configuração/saúde; adaptadores de capability e status genérico geram instâncias distintas por host/escopo. Fixture prova instalação externa, duas instâncias do mesmo app e status unknown sem pronto falso. Falha de consulta ao gerenciador vira `unknown`, bloqueia apply/remoção e permanece desconhecida no Hub. `StatusLoader` aceita apenas ação read-only e descarta probe antigo ao trocar contexto. 128 testes direcionados passam em Qt offscreen. Navegação canônica permanece PXA-003. |
+| PXA-003 | `in_progress` | `6aedd03`, `e07f2ea`: `Aplicativos` é registro pesquisável de 99 apps com detalhe reutilizado; seleção de atalhos/busca navega por `appId` e preserva retorno/escopo. Status começa unknown e detalhe consulta só ação read-only; CTA deriva Verificar/Preparar/Configurar/Resolver/Abrir do estado observado e rota existente. Comparação habilitada apenas para pares curados de editor, browser e mesh network; Ollama/9Router não entram como alternativas. Limites: nenhuma preferência antiga de favoritos da UI encontrada (favoritos atuais pertencem ao menu desktop/jogos); alguns apps não têm rota abrir no catálogo e páginas técnicas aguardam migração. |
 | PXA-006 | `in_progress` | `3e39ac0`, `7b7f8ee`, `11c22fa`, `ae814d7`: contrato de `Account`, `Connection`, `Grant`, `Evidence`, `Quota` e exportação redigida; deadline agregado e adaptadores read-only para Claude, sessões de proxy e provedores 9Router. Evidência de credencial, sessão, serviço e acesso permanece separada; 401, expiração, timeout e backend ausente têm estados distintos. Claude status agora diferencia probe falho de sessão ausente, preservando `loggedIn`/schema v1 como campo compatível. `lastVerifiedAt` não é inferido de leitura. Faltam sessão/cota real e operador; nenhum login executado. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
 autoridades de instalação, Hub, contratos/adaptadores de conta e regressão Windows
-VM) passaram com `QT_QPA_PLATFORM=offscreen`. `git diff --check` passou. Ollama CLI routes usam
+VM) passaram com `QT_QPA_PLATFORM=offscreen`. PXA-003: 87 testes de navegação,
+Hub, IA e UI nativa passaram; após ajuste de layout, 6 testes do registro/detail
+passaram. Após CTA dependente de estado, 46 testes focados de catálogo/status/UI
+passaram. `git diff --check` passou. Ollama CLI routes usam
 stubs em HOME temporário; prova não chama gerenciador de pacotes, sudo ou serviço
 real. Handoff anterior dizia haver instaladores Ollama separados; inspeção atual
 mostrou que ambos já delegam pacote a `linux/ai/setup-ollama.sh`, enquanto rota
