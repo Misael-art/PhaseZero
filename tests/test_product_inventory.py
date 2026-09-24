@@ -50,6 +50,7 @@ def test_generated_hub_actions_resolve_same_app_as_static_capability():
         row = target_for(replace(action, id=f"hub.capability.{operation}.development.vscode"))
         assert row.target_id == "app.vscode"
         assert row.instance_scope == "host"
+    assert target_for(replace(action, id="hub.capabilities.status")).target_id == "journey.capabilities"
 
 
 def test_two_instances_share_one_product_without_merging_host_or_owner():

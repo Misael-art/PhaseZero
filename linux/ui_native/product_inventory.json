@@ -3,7 +3,7 @@
   "source": "linux.ui_native.catalog.build_catalog",
   "platform": "linux",
   "actionCount": 576,
-  "dynamicActionPatterns": ["hub.capability.install.<capabilityId>","hub.capability.remove.<capabilityId>","hub.tuning.apply.<tuningId>","hub.tuning.revert.<tuningId>","routing.<operation>.<task>.<policy>"],
+  "dynamicActionPatterns": ["hub.capabilities.status","hub.capability.install.<capabilityId>","hub.capability.remove.<capabilityId>","hub.tuning.apply.<tuningId>","hub.tuning.revert.<tuningId>","routing.<operation>.<task>.<policy>"],
   "products": [
     {"appId":"app.gamescope","name":"Gamescope","capabilityId":"gaming.gamescope","sources":[{"kind":"package","name":"gamescope"},{"kind":"package","name":"gamescope"},{"kind":"package","name":"gamescope"},{"kind":"package","name":"gamescope"}]},
     {"appId":"app.gamemode","name":"GameMode","capabilityId":"gaming.gamemode","sources":[{"kind":"package","name":"gamemode"},{"kind":"package","name":"gamemode"},{"kind":"package","name":"gamemode"},{"kind":"package","name":"gamemode"}]},

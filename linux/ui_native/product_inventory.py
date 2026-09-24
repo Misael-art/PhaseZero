@@ -89,6 +89,8 @@ def target_for(action: ActionSpec) -> ProductTarget:
                              "shortcut", category, "host")
     if aid.startswith("hub.tuning."):
         return ProductTarget(aid, "system.tune", "system", "Sistema", "shortcut", category, "host")
+    if aid == "hub.capabilities.status":
+        return ProductTarget(aid, "journey.capabilities", "journey", "Aplicativos", "shortcut", category, "host")
     if aid.startswith("routing."):
         return ProductTarget(aid, "journey.ai-routing", "journey", "Inteligência artificial",
                              "shortcut", category, "account")
@@ -176,6 +178,7 @@ def inventory_manifest(root: Path) -> dict[str, object]:
         "platform": "linux",
         "actionCount": len(rows),
         "dynamicActionPatterns": [
+            "hub.capabilities.status",
             "hub.capability.install.<capabilityId>",
             "hub.capability.remove.<capabilityId>",
             "hub.tuning.apply.<tuningId>",
