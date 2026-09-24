@@ -64,6 +64,14 @@ _INSTALL_AUTHORITY_BY_ACTION = {
     "ai.ollama": "linux/ai/setup-ollama.sh",
     "server.llm": "linux/ai/setup-ollama.sh",
 }
+_COMPARISON_CATEGORY_BY_APP = {
+    "app.brave": "web-browser",
+    "app.librewolf": "web-browser",
+    "app.vscode": "code-editor",
+    "app.vscodium": "code-editor",
+    "app.tailscale": "mesh-network",
+    "app.zerotier": "mesh-network",
+}
 
 
 def _capability_target(capability_id: str) -> str:
@@ -224,14 +232,32 @@ def inventory_manifest(root: Path) -> dict[str, object]:
     ]
     products = [
         {"appId": _capability_target(item.id), "name": item.title,
-         "capabilityId": item.id, "sources": [
+         "capabilityId": item.id, "description": item.description,
+         "group": item.group, "requires": list(item.requires),
+         "conflicts": list(item.conflicts), "risk": item.risk,
+         "license": item.license,
+         "compatibility": {
+             "distros": list(item.compatibility.distros),
+             "gpu": list(item.compatibility.gpu),
+             "desktops": list(item.compatibility.desktops),
+             "sessions": list(item.compatibility.sessions),
+             "init": list(item.compatibility.init),
+             "immutable": item.compatibility.immutable,
+             "container": item.compatibility.container,
+         },
+         "sources": [
              {"kind": source.kind, "name": source.name} for source in item.sources
          ]}
         for item in CAPABILITIES
     ]
     capability_apps = {item["appId"] for item in products}
     products.extend(
-        {"appId": f"app.{key}", "name": name, "capabilityId": None, "sources": []}
+        {"appId": f"app.{key}", "name": name, "capabilityId": None,
+         "description": "", "group": "Inteligência artificial",
+         "requires": [], "conflicts": [], "risk": "normal", "license": "unknown",
+         "compatibility": {"distros": [], "gpu": [], "desktops": [],
+                           "sessions": [], "init": [], "immutable": "unknown",
+                           "container": "unknown"}, "sources": []}
         for key, name in sorted(_EXTRA_APPS.items())
         if f"app.{key}" not in capability_apps
     )
@@ -244,6 +270,10 @@ def inventory_manifest(root: Path) -> dict[str, object]:
     for product in products:
         app_id = str(product["appId"])
         product["actionIds"] = sorted(action_ids_by_app.get(app_id, ()))
+        if not product.get("description") and product["actionIds"]:
+            primary_id = canonical_by_app.get(app_id) or product["actionIds"][0]
+            product["description"] = action_by_id[primary_id].description
+        product["comparisonCategory"] = _COMPARISON_CATEGORY_BY_APP.get(app_id)
         product["canonicalActionId"] = canonical_by_app.get(app_id)
         product["installationAuthorityIds"] = sorted({
             authority_by_action[action_id]
@@ -265,6 +295,13 @@ def inventory_manifest(root: Path) -> dict[str, object]:
         ],
         "products": products,
         "installationAuthorities": installation_authorities,
+        "comparisonCategories": [
+            {"id": category, "appIds": sorted(
+                app_id for app_id, app_category in _COMPARISON_CATEGORY_BY_APP.items()
+                if app_category == category
+            )}
+            for category in sorted(set(_COMPARISON_CATEGORY_BY_APP.values()))
+        ],
         "dynamicInstallationAuthorities": [
             {"pattern": "hub.capability.install.<capabilityId>",
              "authorityId": "linux/capabilities/engine.py"},

@@ -1,0 +1,469 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..command_runner import CommandRunner
+from ..models import ActionSpec, ProductInstance
+from ..product_inventory import inventory_manifest, target_for
+from ..widgets import ActionListRow, AdvancedActionsPanel, SectionHeader
+from .base import BasePage
+
+
+class ProductRegistryPage(BasePage):
+    """One searchable app list and one reusable detail for every app context."""
+
+    product_opened = Signal(str, str)
+    comparison_opened = Signal(str)
+    back_requested = Signal()
+
+    def __init__(
+        self,
+        root: Path,
+        runner: CommandRunner,
+        actions: list[ActionSpec],
+        by_id: dict[str, ActionSpec] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(root, runner, actions, by_id, parent)
+        self.manifest = inventory_manifest(root)
+        self.products = [row for row in self.manifest["products"] if isinstance(row, dict)]
+        self._product_by_id = {str(row["appId"]): row for row in self.products}
+        self._targets = {
+            row.action_id: row for row in (target_for(action) for action in self.by_id.values())
+        }
+        self._cards: dict[str, QFrame] = {}
+        self._compare_checks: dict[str, QCheckBox] = {}
+        self._compare_selected: set[str] = set()
+        self._instances: dict[str, ProductInstance] = {}
+        self._selected_app_id = ""
+        self._context_action_id = ""
+        self._status_action_id = ""
+        self._list_page: QWidget | None = None
+        self._detail_page: QWidget | None = None
+        self._comparison_page: QWidget | None = None
+        self._stack: QStackedWidget | None = None
+        self._search: QLineEdit | None = None
+        self._detail_layout: QVBoxLayout | None = None
+        self._detail_actions_start = 0
+        self._status_label: QLabel | None = None
+        self._product_summary: QLabel | None = None
+        self._product_facts: QLabel | None = None
+        self._context_label: QLabel | None = None
+        self.status_loader.product_instances_ready.connect(self._instances_ready)
+        self.status_loader.status_failed.connect(self._status_failed)
+
+    @property
+    def selected_app_id(self) -> str:
+        return self._selected_app_id
+
+    @property
+    def context_action_id(self) -> str:
+        return self._context_action_id
+
+    def product_name(self, app_id: str) -> str:
+        product = self._product_by_id.get(app_id, {})
+        return str(product.get("name") or app_id)
+
+    @property
+    def instances(self) -> tuple[ProductInstance, ...]:
+        return tuple(self._instances.values())
+
+    def build(self) -> None:
+        self._stack = QStackedWidget()
+        self._list_page = self._build_list()
+        self._detail_page = self._build_detail()
+        self._comparison_page = self._build_comparison()
+        self._stack.addWidget(self._list_page)
+        self._stack.addWidget(self._detail_page)
+        self._stack.addWidget(self._comparison_page)
+        self._stack.setCurrentWidget(self._list_page)
+        self._layout.addWidget(self._stack, 1)
+        for action in self.actions:
+            target = self._targets.get(action.id)
+            if target is not None and target.target_kind == "app":
+                self.mark_represented(action)
+
+    def _build_list(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(SectionHeader("Aplicativos", "Busque um produto. Atalhos antigos levam ao mesmo detalhe."))
+        self._search = QLineEdit()
+        self._search.setObjectName("productSearch")
+        self._search.setPlaceholderText("Buscar app pelo nome ou recurso…")
+        self._search.setClearButtonEnabled(True)
+        self._search.setAccessibleName("Buscar aplicativos")
+        self._search.textChanged.connect(self._filter_products)
+        layout.addWidget(self._search)
+        self._compare_button = QPushButton("Comparar selecionados (0/2)")
+        self._compare_button.setObjectName("compareProducts")
+        self._compare_button.setEnabled(False)
+        self._compare_button.clicked.connect(self._compare_products)
+        layout.addWidget(self._compare_button)
+        scroll = QScrollArea()
+        scroll.setObjectName("productCatalogScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        self._cards_layout = QVBoxLayout(content)
+        self._cards_layout.setContentsMargins(2, 2, 8, 12)
+        self._cards_layout.setSpacing(8)
+        for product in sorted(self.products, key=lambda row: str(row.get("name", "")).casefold()):
+            app_id = str(product["appId"])
+            card = QFrame()
+            card.setObjectName("productCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            title_row = QHBoxLayout()
+            open_button = QPushButton(str(product.get("name") or app_id))
+            open_button.setObjectName("productOpenButton")
+            open_button.setAccessibleDescription(f"Abrir detalhe de {product.get('name') or app_id}")
+            open_button.clicked.connect(lambda _checked=False, key=app_id: self.open_product(key))
+            title_row.addWidget(open_button, 1)
+            compare_category = product.get("comparisonCategory")
+            if isinstance(compare_category, str) and compare_category:
+                compare = QCheckBox("Comparar")
+                compare.setObjectName("compareProductToggle")
+                compare.setAccessibleName(f"Selecionar {product.get('name') or app_id} para comparação")
+                compare.toggled.connect(lambda checked, key=app_id: self._toggle_comparison(key, checked))
+                self._compare_checks[app_id] = compare
+                title_row.addWidget(compare)
+            card_layout.addLayout(title_row)
+            info = QLabel(f"{app_id} · Estado não verificado")
+            info.setObjectName("productCardSummary")
+            info.setWordWrap(True)
+            card_layout.addWidget(info)
+            self._cards[app_id] = card
+            self._cards_layout.addWidget(card)
+        non_product_actions = [
+            action for action in self.actions
+            if self._targets.get(action.id) is None or self._targets[action.id].target_kind != "app"
+        ]
+        if non_product_actions:
+            self._cards_layout.addWidget(SectionHeader(
+                "Outras operações do desktop",
+                "Atalhos de sistema e jornadas antigas continuam disponíveis.",
+            ))
+            for action in non_product_actions:
+                self.mark_represented(action)
+                row = ActionListRow(action)
+                row.selected.connect(self.action_selected.emit)
+                self._cards_layout.addWidget(row)
+        self._cards_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_detail(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        back = QPushButton("‹  Todos os aplicativos")
+        back.setObjectName("productDetailBack")
+        back.clicked.connect(self.close_detail)
+        layout.addWidget(back)
+        self._detail_layout = layout
+        self._context_label = QLabel("")
+        self._context_label.setObjectName("productContext")
+        self._context_label.setWordWrap(True)
+        layout.addWidget(self._context_label)
+        self._product_summary = QLabel("")
+        self._product_summary.setObjectName("productDescription")
+        self._product_summary.setWordWrap(True)
+        layout.addWidget(self._product_summary)
+        self._product_facts = QLabel("")
+        self._product_facts.setObjectName("productFacts")
+        self._product_facts.setWordWrap(True)
+        layout.addWidget(self._product_facts)
+        self._status_label = QLabel("Instalação, configuração e saúde: desconhecidas")
+        self._status_label.setObjectName("productStatus")
+        self._status_label.setWordWrap(True)
+        layout.addWidget(self._status_label)
+        layout.addWidget(SectionHeader("Ações disponíveis", "Ações atuais convergem neste produto e mantêm a confirmação existente."))
+        self._detail_actions_start = layout.count()
+        return page
+
+    def _build_comparison(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        back = QPushButton("‹  Voltar aos aplicativos")
+        back.setObjectName("comparisonBack")
+        back.clicked.connect(self._close_comparison)
+        layout.addWidget(back)
+        self._comparison_layout = layout
+        self._comparison_content_start = layout.count()
+        return page
+
+    def _filter_products(self, text: str) -> None:
+        query = text.strip().casefold()
+        for app_id, product in self._product_by_id.items():
+            fields = [str(product.get("name", "")), app_id]
+            fields.extend(
+                self.by_id[action_id].searchable_text
+                for action_id in product.get("actionIds", [])
+                if action_id in self.by_id
+            )
+            self._cards[app_id].setVisible(not query or any(query in value.casefold() for value in fields))
+
+    def _toggle_comparison(self, app_id: str, checked: bool) -> None:
+        if checked:
+            if len(self._compare_selected) >= 2:
+                checkbox = self._compare_checks[app_id]
+                checkbox.blockSignals(True)
+                checkbox.setChecked(False)
+                checkbox.blockSignals(False)
+                return
+            self._compare_selected.add(app_id)
+        else:
+            self._compare_selected.discard(app_id)
+        for key, checkbox in self._compare_checks.items():
+            checkbox.setEnabled(key in self._compare_selected or len(self._compare_selected) < 2)
+        count = len(self._compare_selected)
+        self._compare_button.setText(f"Comparar selecionados ({count}/2)")
+        self._compare_button.setEnabled(count == 2)
+
+    def _compare_products(self) -> None:
+        if len(self._compare_selected) != 2 or self._stack is None:
+            return
+        first_id, second_id = sorted(self._compare_selected)
+        first = self._product_by_id[first_id]
+        second = self._product_by_id[second_id]
+        category = first.get("comparisonCategory")
+        if not category or category != second.get("comparisonCategory"):
+            return
+        self._clear_comparison_rows()
+        names = f"{first.get('name', first_id)} e {second.get('name', second_id)}"
+        self._comparison_layout.addWidget(SectionHeader(
+            f"Comparar {names}", f"Mesma função catalogada: {category}. Sem recomendação de substituição automática.",
+        ))
+        fields = (
+            ("Descrição", "description"),
+            ("Grupo", "group"),
+            ("Fontes de instalação", "sources"),
+            ("Requisitos", "requires"),
+            ("Conflitos", "conflicts"),
+            ("Compatibilidade", "compatibility"),
+            ("Risco declarado", "risk"),
+            ("Licença", "license"),
+        )
+        for label, key in fields:
+            self._comparison_layout.addWidget(self._comparison_row(
+                label, self._display_value(first.get(key)), self._display_value(second.get(key)),
+            ))
+        self._comparison_layout.addStretch()
+        self._stack.setCurrentWidget(self._comparison_page)
+        self.comparison_opened.emit(str(category))
+
+    def _comparison_row(self, label: str, first: str, second: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("comparisonRow")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(12, 8, 12, 8)
+        key = QLabel(label)
+        key.setObjectName("comparisonKey")
+        key.setWordWrap(True)
+        left = QLabel(first)
+        right = QLabel(second)
+        left.setWordWrap(True)
+        right.setWordWrap(True)
+        row.addWidget(key, 1)
+        row.addWidget(left, 2)
+        row.addWidget(right, 2)
+        return frame
+
+    @staticmethod
+    def _display_value(value: object) -> str:
+        if isinstance(value, list):
+            return ", ".join(str(item.get("name") or item.get("kind")) if isinstance(item, dict) else str(item)
+                             for item in value) or "Não informado"
+        if isinstance(value, dict):
+            values = [f"{key}: {ProductRegistryPage._display_value(item)}" for key, item in value.items()]
+            return " · ".join(values) or "Não informado"
+        if value is None or value == "":
+            return "Não informado"
+        return str(value)
+
+    def _clear_comparison_rows(self) -> None:
+        while self._comparison_layout.count() > self._comparison_content_start:
+            item = self._comparison_layout.takeAt(self._comparison_content_start)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _close_comparison(self) -> None:
+        if self._stack is not None and self._list_page is not None:
+            self._stack.setCurrentWidget(self._list_page)
+            self._compare_selected.clear()
+            for checkbox in self._compare_checks.values():
+                checkbox.blockSignals(True)
+                checkbox.setChecked(False)
+                checkbox.setEnabled(True)
+                checkbox.blockSignals(False)
+            self._toggle_comparison_count()
+            self.back_requested.emit()
+
+    def _toggle_comparison_count(self) -> None:
+        self._compare_button.setText(f"Comparar selecionados ({len(self._compare_selected)}/2)")
+        self._compare_button.setEnabled(len(self._compare_selected) == 2)
+
+    def open_product(self, app_id: str, context_action_id: str = "") -> None:
+        product = self._product_by_id.get(app_id)
+        if product is None or self._stack is None or self._detail_layout is None:
+            return
+        self.status_loader.cancel_all()
+        self._selected_app_id = app_id
+        self._context_action_id = context_action_id
+        self._instances.clear()
+        self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
+        self._product_summary.setText(self._display_value(product.get("description")))
+        facts = (
+            ("Grupo", product.get("group")),
+            ("Fontes", product.get("sources")),
+            ("Requisitos", product.get("requires")),
+            ("Conflitos", product.get("conflicts")),
+            ("Compatibilidade", product.get("compatibility")),
+            ("Risco", product.get("risk")),
+            ("Licença", product.get("license")),
+        )
+        self._product_facts.setText("\n".join(
+            f"{label}: {self._display_value(value)}" for label, value in facts
+        ))
+        if context_action_id and context_action_id in self.by_id:
+            action = self.by_id[context_action_id]
+            target = self._targets.get(context_action_id)
+            scope = target.instance_scope if target is not None else "selected"
+            self._context_label.setText(f"Atalho de origem: {action.category} · {action.title} · escopo {scope}")
+        else:
+            self._context_label.setText("Catálogo de aplicativos")
+        self._clear_detail_actions()
+        action_ids = [item for item in product.get("actionIds", []) if item in self.by_id]
+        action_ids.sort(key=lambda action_id: (
+            action_id != product.get("canonicalActionId"),
+            not bool(self._manifest_action(action_id).get("installationAuthorityId")),
+            self.by_id[action_id].title.casefold(),
+        ))
+        standard: list[ActionSpec] = []
+        advanced: list[ActionSpec] = []
+        for action_id in action_ids:
+            action = self.by_id[action_id]
+            (advanced if action.visibility == "advanced" or action.risk in {"elevated", "high"} else standard).append(action)
+        for action in standard:
+            row = ActionListRow(action)
+            row.selected.connect(self.action_requested.emit)
+            self._detail_layout.addWidget(row)
+        if advanced:
+            panel = AdvancedActionsPanel(advanced)
+            panel.requested.connect(self.action_requested.emit)
+            panel.setVisible(self._advanced_mode)
+            self._advanced_panels.append(panel)
+            self._detail_layout.addWidget(panel)
+        self._detail_layout.addStretch()
+        self._stack.setCurrentWidget(self._detail_page)
+        self.product_opened.emit(app_id, context_action_id)
+        status_action = self._status_action(product)
+        self._status_action_id = status_action.id if status_action is not None else ""
+        if status_action is not None:
+            target = self._targets[status_action.id]
+            self.status_loader.fetch_product_status(
+                status_action, app_id=app_id, host_id="local", scope=target.instance_scope,
+            )
+
+    def _manifest_action(self, action_id: str) -> dict[str, object]:
+        return next((row for row in self.manifest["actions"] if row.get("actionId") == action_id), {})
+
+    def _status_action(self, product: dict[str, object]) -> ActionSpec | None:
+        candidates = []
+        for action_id in product.get("actionIds", []):
+            action = self.by_id.get(action_id)
+            target = self._targets.get(action_id)
+            if (
+                action is not None and target is not None and not action.mutable
+                and (action.id.endswith("status") or ".status." in action.id)
+                and action.status_args
+            ):
+                candidates.append((target.instance_scope != "host", action.id, action))
+        return min(candidates, default=(False, "", None))[2]
+
+    def _instances_ready(self, action_id: str, instances: object) -> None:
+        if action_id != self._status_action_id:
+            # StatusLoader discards replaced contexts; keep this guard for same-app refreshes.
+            return
+        rows = tuple(item for item in instances if isinstance(item, ProductInstance)) if isinstance(instances, tuple) else ()
+        self._instances = {item.instance_id: item for item in rows}
+        self._render_status()
+
+    def _status_failed(self, action_id: str, _message: str) -> None:
+        if action_id == self._status_action_id:
+            self._instances.clear()
+            self._status_label.setText("Status indisponível · instalação, configuração e saúde desconhecidas")
+
+    def _render_status(self) -> None:
+        if not self._instances:
+            self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
+            return
+        instance = next(iter(self._instances.values()))
+        self._status_label.setText(
+            f"Instalação: {instance.installation} · Origem: {instance.origin} · "
+            f"Configuração: {instance.configuration} · Saúde: {instance.health} · "
+            f"Ação: {instance.next_action}"
+        )
+
+    def _clear_detail_actions(self) -> None:
+        if self._detail_layout is None:
+            return
+        while self._detail_layout.count() > self._detail_actions_start:
+            item = self._detail_layout.takeAt(self._detail_actions_start)
+            widget = item.widget()
+            if widget is not None:
+                if widget in self._advanced_panels:
+                    self._advanced_panels.remove(widget)
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def close_detail(self) -> None:
+        if self._stack is not None and self._list_page is not None:
+            self.status_loader.cancel_all()
+            self._selected_app_id = ""
+            self._context_action_id = ""
+            self._status_action_id = ""
+            self._stack.setCurrentWidget(self._list_page)
+            self.back_requested.emit()
+
+    def show_catalog(self) -> None:
+        if self._stack is not None and self._list_page is not None:
+            self.status_loader.cancel_all()
+            self._selected_app_id = ""
+            self._context_action_id = ""
+            self._status_action_id = ""
+            self._stack.setCurrentWidget(self._list_page)
+
+    def reload(self) -> None:
+        if self._selected_app_id:
+            self.open_product(self._selected_app_id, self._context_action_id)
+
+    def block_while_running(self, running: bool) -> None:
+        for card in self._cards.values():
+            card.setEnabled(not running)
+        if self._detail_page is not None:
+            self._detail_page.setEnabled(not running)
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        super().set_advanced_mode(enabled)

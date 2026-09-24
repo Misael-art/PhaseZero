@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
+from .product_inventory import target_for
 from .provision_player import ProvisionPlayerWindow
 from .windows_install_dialog import WindowsInstallDialog
 from .preferences import UiPreferences
@@ -65,6 +66,7 @@ class MainWindow(QMainWindow):
         self.cat_meta = {row[0]: row for row in (DASHBOARD, *CATEGORIES)}
         self.runner = CommandRunner(root, self)
         self.current_category = initial_category or DASHBOARD[0]
+        self._product_origin_state = None
         self.pending_action: ActionSpec | None = None
         self.pending_value = ""
         self.pending_values: dict[str, str] = {}
@@ -286,6 +288,11 @@ class MainWindow(QMainWindow):
             page.actions_requested.connect(self.request_actions)
             page.action_selected.connect(self.inspect_action)
             page.category_requested.connect(self.show_journey)
+        product_page = self.registry.page_for("Aplicativos")
+        if product_page is not None and hasattr(product_page, "product_opened"):
+            product_page.product_opened.connect(self._product_opened)
+            product_page.comparison_opened.connect(self._product_comparison_opened)
+            product_page.back_requested.connect(self._product_back)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -457,6 +464,11 @@ class MainWindow(QMainWindow):
     def show_category(self, category: str) -> None:
         if self.registry.page_for(category) is None:
             category = DASHBOARD[0]
+        if self.current_category != "Aplicativos" or category != "Aplicativos":
+            product_page = self.registry.page_for("Aplicativos")
+            if product_page is not None and hasattr(product_page, "show_catalog"):
+                product_page.show_catalog()
+            self._product_origin_state = None
         self.current_category = category
         self.inspector.clear_action()
         self.inspector.hide()
@@ -553,9 +565,75 @@ class MainWindow(QMainWindow):
             page.focus_journey(focus)
 
     def inspect_action(self, action: ActionSpec) -> None:
+        try:
+            target = target_for(action)
+        except ValueError:
+            target = None
+        if target is not None and target.target_kind == "app":
+            self.open_product(target.target_id, action.id)
+            return
         self.inspector.set_action(action)
         self.inspector.show()
         self.global_state.setText(f"Selecionado: {action.title}")
+
+    def open_product(self, app_id: str, context_action_id: str = "") -> None:
+        page = self.registry.page_for("Aplicativos")
+        if page is None or not hasattr(page, "open_product"):
+            return
+        current_page = self.stack.currentWidget()
+        if current_page is not page:
+            section, page_name = "Navegação", "Busca"
+            if self.stack.currentIndex() != self._search_page_idx:
+                page_name = self.current_category
+                section = next(
+                    (title for title, categories in SIDEBAR_GROUPS if self.current_category in categories),
+                    "Navegação",
+                )
+            self._product_origin_state = (
+                current_page, self.current_category, section, page_name,
+                self.page_title.text(), self.page_subtitle.text(), self.global_state.text(),
+            )
+            self.current_category = "Aplicativos"
+            for name, button in self.sidebar_buttons.items():
+                button.setChecked(name == "Aplicativos")
+            self.stack.setCurrentWidget(page)
+        self.inspector.clear_action()
+        self.inspector.hide()
+        page.open_product(app_id, context_action_id)
+
+    def _product_opened(self, app_id: str, _context_action_id: str) -> None:
+        page = self.registry.page_for("Aplicativos")
+        name_getter = getattr(page, "product_name", None)
+        name = name_getter(app_id) if callable(name_getter) else app_id
+        self.page_title.setText(name)
+        self.page_subtitle.setText(f"{app_id} · detalhe do produto")
+        self.breadcrumb.set_path("Aplicativos", name)
+        self.global_state.setText(f"Produto: {name}")
+
+    def _product_comparison_opened(self, category: str) -> None:
+        self.page_title.setText("Comparação de aplicativos")
+        self.page_subtitle.setText(f"Função: {category}")
+        self.breadcrumb.set_path("Aplicativos", "Comparação")
+        self.global_state.setText("Comparação de produtos")
+
+    def _product_back(self) -> None:
+        origin = self._product_origin_state
+        self._product_origin_state = None
+        if origin is not None:
+            page, category, section, page_name, title, subtitle, state = origin
+            self.stack.setCurrentWidget(page)
+            self.current_category = category
+            self.page_title.setText(title)
+            self.page_subtitle.setText(subtitle)
+            self.global_state.setText(state)
+            self.breadcrumb.set_path(section, page_name)
+            for name, button in self.sidebar_buttons.items():
+                button.setChecked(name == category)
+            return
+        self.page_title.setText("Aplicativos")
+        self.page_subtitle.setText(self.cat_meta["Aplicativos"][2])
+        self.breadcrumb.set_path("Desktop", "Aplicativos")
+        self.global_state.setText("Página: Aplicativos")
 
     def on_search(self, text: str) -> None:
         if text.strip():

@@ -74,6 +74,19 @@ def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
     assert authority["actionIds"] == ["ai.ollama", "server.llm"]
 
 
+def test_comparison_groups_only_include_curated_same_function_apps():
+    payload = inventory_manifest(ROOT)
+    groups = {item["id"]: item["appIds"] for item in payload["comparisonCategories"]}
+    assert groups == {
+        "code-editor": ["app.vscode", "app.vscodium"],
+        "mesh-network": ["app.tailscale", "app.zerotier"],
+        "web-browser": ["app.brave", "app.librewolf"],
+    }
+    categories = {item["appId"]: item["comparisonCategory"] for item in payload["products"]}
+    assert categories["app.ollama"] is None
+    assert categories["app.9router"] is None
+
+
 def test_unclassified_action_fails_closed():
     from dataclasses import replace
 
