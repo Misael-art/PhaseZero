@@ -49,10 +49,14 @@ class ProxyState:
         return self.service == "active"
 
     @property
+    def crash_looping(self) -> bool:
+        return self.service == "crash-loop"
+
+    @property
     def service_label(self) -> str:
         if not self.installed:
             return "não instalado"
-        return {"active": "rodando", "inactive": "parado", "failed": "falhou"}.get(
+        return {"active": "rodando", "inactive": "parado", "failed": "falhou", "crash-loop": "reiniciando sem parar"}.get(
             self.service, self.service or "desconhecido"
         )
 

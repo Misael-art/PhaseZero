@@ -464,3 +464,15 @@ def test_preview_dialog_uses_ensure_summary(qapp):
     labels = [child.text() for child in dialog.findChildren(QLabel) if child.text()]
     assert any("Vai instalar o Qwen" in text for text in labels)
     assert dialog.technical.isHidden()
+
+
+def test_crash_looping_proxy_is_not_shown_as_running():
+    # AISR-002: a unit restarting forever is "active" for systemd between crashes.
+    from linux.ui_native.pages.ai_proxies import _friendly_proxy_copy
+
+    state = ProxyState(id="qwenproxy", installed=True, service="crash-loop", auth_status="session-present")
+    assert not state.running
+    assert state.service_label == "reiniciando sem parar"
+    headline, _detail, severity = _friendly_proxy_copy(state)
+    assert headline == "Falhando ao iniciar"
+    assert severity == "error"
