@@ -665,8 +665,11 @@ class AiProxiesPage(BasePage):
         ready = int(summary.get("ready") or 0)
         total = int(summary.get("total") or len(entries))
         attention = int(summary.get("attention") or 0)
-        accounts = int(summary.get("accounts") or 0)
+        accounts = summary.get("accounts")
+        account_label = f"{int(accounts)} contas catalogadas" if isinstance(accounts, int) else "contas não informadas"
         missing_essential = int(summary.get("missingEssential") or 0)
+        probes = parsed.get("probes") if isinstance(parsed.get("probes"), dict) else {}
+        partial = any(state != "ok" for state in probes.values())
         if missing_essential:
             self.auth_summary.setText(
                 f"{missing_essential} integração essencial pendente · {ready}/{total} prontas"
@@ -674,12 +677,14 @@ class AiProxiesPage(BasePage):
             _set_state(self.auth_summary, "error")
         elif attention:
             self.auth_summary.setText(
-                f"{ready}/{total} prontas · {attention} pedem atenção · {accounts} contas catalogadas"
+                f"{ready}/{total} prontas · {attention} pedem atenção · {account_label}"
             )
             _set_state(self.auth_summary, "warning")
         else:
-            self.auth_summary.setText(f"{ready}/{total} prontas · {accounts} contas catalogadas")
-            _set_state(self.auth_summary, "success")
+            self.auth_summary.setText(f"{ready}/{total} prontas · {account_label}")
+            _set_state(self.auth_summary, "warning" if partial else "success")
+        if partial:
+            self.auth_summary.setText("Verificação parcial · " + self.auth_summary.text())
 
         groups = {
             "core": [entry for entry in entries if entry.get("id") in {"gateway:9router", "client:opencode", "client:claude", "client:bonsai"}],
@@ -690,6 +695,15 @@ class AiProxiesPage(BasePage):
         for group_id, rows in groups.items():
             label = self._auth_group_labels.get(group_id)
             if label is None:
+                continue
+            group_probes = {
+                "core": ("router", "opencode", "claude"),
+                "providers": ("providers",),
+                "proxies": ("proxies",),
+                "workspaces": ("hermes", "odysseus"),
+            }[group_id]
+            if any(probes.get(name, "ok") != "ok" for name in group_probes):
+                label.setText("Status indisponível · tente atualizar")
                 continue
             group_ready = sum(1 for row in rows if row.get("ready") is True)
             pending = [str(row.get("label") or row.get("id")) for row in rows if row.get("ready") is not True]

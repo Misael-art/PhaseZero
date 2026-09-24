@@ -249,6 +249,21 @@ def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_
     assert "@" not in rendered and "token" not in rendered.casefold()
 
 
+def test_auth_probe_failure_does_not_render_zero_accounts(proxies_page):
+    page, _actions = proxies_page
+    page._proxy_status_ready("ai.auth-registry", "", {
+        "summary": {"total": 1, "ready": 0, "attention": 0,
+                    "missingEssential": 0, "accounts": None},
+        "entries": [{"id": "gateway:9router", "label": "9Router", "ready": None,
+                     "status": "unknown"}],
+        "probes": {"router": "timeout", "providers": "backend-unavailable"},
+        "secretsRedacted": True,
+    })
+    assert "Verificação parcial" in page.auth_summary.text()
+    assert "contas não informadas" in page.auth_summary.text()
+    assert "Status indisponível" in page._auth_group_labels["providers"].text()
+
+
 def test_mimo_credentials_continue_to_opencode_automatically(
     proxies_page, monkeypatch,
 ):

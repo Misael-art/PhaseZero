@@ -181,8 +181,10 @@ registry="$(jq -cn \
     summary:{
       total:($entries|length),ready:([$entries[]|select(.ready == true)]|length),
       attention:([$entries[]|select(.installed == true and .ready != true)]|length),
-      missingEssential:([$entries[]|select(.required == true and .ready != true)]|length),
-      providers:($providerEntries|length),accounts:([$providerEntries[].accountCount // 0]|add // 0)
+      missingEssential:([$entries[]|select(.required == true and .ready != true and .status != "unknown")]|length),
+      unknownEssential:([$entries[]|select(.required == true and .status == "unknown")]|length),
+      providers:(if $providersProbe == "ok" then ($providerEntries|length) else null end),
+      accounts:(if $providersProbe == "ok" then ([$providerEntries[].accountCount // 0]|add // 0) else null end)
     },
     secretsRedacted:true
   }
