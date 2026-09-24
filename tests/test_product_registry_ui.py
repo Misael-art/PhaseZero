@@ -95,7 +95,7 @@ def test_registry_has_all_manifest_products_and_unknown_is_not_absent(qapp):
     try:
         page = window.registry.page_for("Aplicativos")
         assert page.__class__.__name__ == "ProductRegistryPage"
-        assert len(page.products) == 99
+        assert len(page.products) == 101
         assert page._product_by_id["app.ollama"]["canonicalActionId"] == "ai.ollama"
         window.open_product("app.ollama", "server.llm")
         assert not page.instances
@@ -149,3 +149,53 @@ def test_primary_action_waits_for_observed_state_then_prepares_absent_app(qapp):
         window.close()
         host_patcher.stop()
         status_patcher.stop()
+
+
+def test_primary_open_uses_installed_desktop_entry_without_shell(qapp, tmp_path, monkeypatch):
+    from linux.ui_native.main_window import QProcess
+
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        apps = tmp_path / "applications"
+        apps.mkdir()
+        entry = apps / "com.visualstudio.code.desktop"
+        entry.write_text("[Desktop Entry]\nType=Application\nName=VS Code\n", encoding="utf-8")
+        monkeypatch.setattr("linux.ui_native.pages.product_registry.desktop_dirs", lambda: (apps,))
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.vscode")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "host:app.vscode", "app.vscode", "local", "host",
+            installation="present", origin="external", configuration="ready", health="online",
+        ),))
+        assert page._primary_button.text() == "Abrir"
+        assert page._primary_button.isEnabled()
+        with patch.object(QProcess, "startDetached", return_value=(True, 42)) as start:
+            page._primary_button.click()
+        start.assert_called_once_with("gio", ["launch", str(entry)])
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_recovery_state_does_not_auto_select_restore(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.ollama", "server.llm")
+        assert page._action_for_state("resolve") is None
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_desktop_launcher_rejects_entry_symlink_outside_xdg_root(tmp_path):
+    from linux.ui_native.icons import find_desktop_entry
+
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    outside = tmp_path / "outside.desktop"
+    outside.write_text("[Desktop Entry]\nType=Application\n", encoding="utf-8")
+    (apps / "com.visualstudio.code.desktop").symlink_to(outside)
+    assert find_desktop_entry("flatpak", "com.visualstudio.code", (apps,)) is None

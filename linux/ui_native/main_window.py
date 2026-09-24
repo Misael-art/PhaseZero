@@ -293,6 +293,7 @@ class MainWindow(QMainWindow):
             product_page.product_opened.connect(self._product_opened)
             product_page.comparison_opened.connect(self._product_comparison_opened)
             product_page.back_requested.connect(self._product_back)
+            product_page.desktop_entry_requested.connect(self._launch_product_desktop_entry)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -609,6 +610,11 @@ class MainWindow(QMainWindow):
         self.page_subtitle.setText(f"{app_id} · detalhe do produto")
         self.breadcrumb.set_path("Aplicativos", name)
         self.global_state.setText(f"Produto: {name}")
+
+    def _launch_product_desktop_entry(self, desktop_entry: str) -> None:
+        started, _process_id = QProcess.startDetached("gio", ["launch", desktop_entry])
+        if not started:
+            self._toast("Não foi possível abrir este aplicativo pelo atalho instalado.", "error")
 
     def _product_comparison_opened(self, category: str) -> None:
         self.page_title.setText("Comparação de aplicativos")

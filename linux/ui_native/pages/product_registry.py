@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..command_runner import CommandRunner
+from ..icons import desktop_dirs, find_desktop_entry
 from ..models import ActionSpec, ProductInstance
 from ..product_inventory import inventory_manifest, target_for
 from ..widgets import ActionListRow, AdvancedActionsPanel, SectionHeader
@@ -29,6 +30,7 @@ class ProductRegistryPage(BasePage):
     product_opened = Signal(str, str)
     comparison_opened = Signal(str)
     back_requested = Signal()
+    desktop_entry_requested = Signal(str)
 
     def __init__(
         self,
@@ -62,6 +64,7 @@ class ProductRegistryPage(BasePage):
         self._status_label: QLabel | None = None
         self._primary_button: QPushButton | None = None
         self._primary_action: ActionSpec | None = None
+        self._primary_desktop_entry = ""
         self._product_summary: QLabel | None = None
         self._product_facts: QLabel | None = None
         self._context_label: QLabel | None = None
@@ -430,7 +433,7 @@ class ProductRegistryPage(BasePage):
                 "installationAuthorityId") in authority_ids and action.mutable), None)
         terms = {
             "configure": {"configure", "setup"},
-            "resolve": {"repair", "doctor", "restore", "start"},
+            "resolve": {"doctor", "repair", "start"},
             "open": {"open", "launch"},
         }.get(state, set())
         return next((action for action in actions if any(
@@ -438,21 +441,46 @@ class ProductRegistryPage(BasePage):
             or term in action.args for term in terms
         ) and action.id != self._status_action_id), None)
 
+    def _desktop_entry_for_product(self, product: dict[str, object]) -> str:
+        sources = product.get("sources", [])
+        if not isinstance(sources, list):
+            return ""
+        roots = desktop_dirs()
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            entry = find_desktop_entry(
+                str(source.get("kind") or ""), str(source.get("name") or ""), roots,
+            )
+            if entry is not None:
+                return str(entry)
+        return ""
+
     def _render_primary_action(self) -> None:
         if self._primary_button is None:
             return
         instance = next(iter(self._instances.values()), None)
         state = instance.next_action if instance is not None else "verify"
+        product = self._product_by_id[self._selected_app_id]
         labels = {"prepare": "Preparar", "configure": "Configurar",
                   "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
         self._primary_button.setText(labels.get(state, "Verificar"))
         self._primary_action = self._action_for_state(state) if state != "verify" else None
-        self._primary_button.setEnabled(bool(self._status_action_id) if state == "verify" else self._primary_action is not None)
+        self._primary_desktop_entry = (
+            self._desktop_entry_for_product(product)
+            if state == "open" and self._primary_action is None else ""
+        )
+        enabled = (
+            bool(self._status_action_id) if state == "verify" else
+            self._primary_action is not None or bool(self._primary_desktop_entry)
+        )
+        self._primary_button.setEnabled(enabled)
         if state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
         else:
             self._primary_button.setToolTip(
                 self._primary_action.description if self._primary_action is not None
+                else "Abre pelo atalho de aplicativo instalado." if self._primary_desktop_entry
                 else "Ação principal indisponível para este estado observado."
             )
 
@@ -461,6 +489,9 @@ class ProductRegistryPage(BasePage):
             return
         if self._primary_action is not None:
             self.action_requested.emit(self._primary_action)
+            return
+        if self._primary_desktop_entry:
+            self.desktop_entry_requested.emit(self._primary_desktop_entry)
             return
         product = self._product_by_id[self._selected_app_id]
         status_action = self._status_action(product)
