@@ -568,3 +568,69 @@ def test_removal_refuses_while_another_installed_capability_requires_it(private_
     blocked = create_removal_plan(["gaming.mangohud"], facts=facts, provider=provider)
     assert blocked["status"] == "blocked"
     assert "requisito de" in blocked["blockers"][0]
+
+
+def test_removal_preserves_shared_dependency_until_last_dependent_is_removed(
+    private_state, monkeypatch,
+):
+    from linux.capabilities.engine import apply_removal, create_removal_plan
+    from linux.capabilities.recipes import ServiceRecipe
+
+    # Keep service checks and changes inside the fake provider.
+    monkeypatch.setattr(ServiceRecipe, "active", lambda self: False)
+    facts = host()
+    provider = FakeProvider(facts)
+    install = create_plan(
+        capability_ids=["development.docker-compose", "development.kind"],
+        facts=facts, provider=provider,
+    )
+    assert [item["capabilityId"] for item in install["actions"]] == [
+        "development.docker", "development.docker-compose", "development.kind",
+    ]
+    operation = apply_plan(
+        install["id"], confirmation=install["confirmToken"],
+        facts=facts, provider=provider,
+    )
+    assert operation["status"] == "complete"
+    assert sum(command[-1] == "docker" for command in provider.executed) == 1
+
+    remove_compose = create_removal_plan(
+        ["development.docker-compose"], facts=facts, provider=provider,
+    )
+    assert remove_compose["status"] == "ready"
+    apply_removal(
+        remove_compose["id"], confirmation=remove_compose["confirmToken"],
+        facts=facts, provider=provider,
+    )
+    assert "docker-compose" not in provider.installed_names
+    assert {"docker", "kind"} <= provider.installed_names
+
+    blocked = create_removal_plan(
+        ["development.docker"], facts=facts, provider=provider,
+    )
+    assert blocked["status"] == "blocked"
+    assert any("Kind" in blocker for blocker in blocked["blockers"])
+    before_blocked_apply = list(provider.executed)
+    with pytest.raises(CapabilityError, match="bloqueios"):
+        apply_removal(blocked["id"], confirmation=blocked["confirmToken"], facts=facts, provider=provider)
+    assert provider.executed == before_blocked_apply
+
+    remove_kind = create_removal_plan(
+        ["development.kind"], facts=facts, provider=provider,
+    )
+    assert remove_kind["status"] == "ready"
+    apply_removal(
+        remove_kind["id"], confirmation=remove_kind["confirmToken"],
+        facts=facts, provider=provider,
+    )
+    assert "docker" in provider.installed_names
+
+    remove_docker = create_removal_plan(
+        ["development.docker"], facts=facts, provider=provider,
+    )
+    assert remove_docker["status"] == "ready"
+    apply_removal(
+        remove_docker["id"], confirmation=remove_docker["confirmToken"],
+        facts=facts, provider=provider,
+    )
+    assert "docker" not in provider.installed_names
