@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QRadioButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton,
+    QScrollArea, QVBoxLayout, QWidget,
 )
 
 from linux.ai.account_adapters import adapt_account_sources
 from linux.ai.account_contract import Account, Connection, Evidence, public_account, redacted_summary
+from linux.ai.grants import GrantError, GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
@@ -25,6 +27,15 @@ _SOURCE_LABELS = {
     "router-providers": "Provedores 9Router",
     "router-status": "Saúde 9Router",
 }
+_CONSUMER_LABELS = {
+    "app.claude-code": "Claude Code",
+    "app.opencode": "OpenCode",
+}
+
+
+def _grant_ledger_path() -> Path:
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return data_home / "phasezero" / "ai-accounts" / "grants.json"
 
 
 class AccountsPage(BasePage):
@@ -45,6 +56,12 @@ class AccountsPage(BasePage):
         self._cards_layout: QVBoxLayout | None = None
         self.summary: QLabel | None = None
         self._probe_ids: dict[str, tuple[int, str]] = {}
+        self._grant_load_error = False
+        try:
+            self.grant_ledger = GrantLedger(_grant_ledger_path())
+        except (OSError, ValueError, TypeError):
+            self.grant_ledger = GrantLedger()
+            self._grant_load_error = True
 
     @property
     def redacted_export(self) -> dict[str, object]:
@@ -209,6 +226,67 @@ class AccountsPage(BasePage):
             self._radios_by_provider.setdefault(account.provider, []).append((account.account_id, select))
             row.addWidget(select)
             self._cards_layout.addWidget(card)
+            compatible_consumers = [
+                consumer for consumer, adapters in SUPPORTED_CONSUMER_ADAPTERS.items()
+                if connection.adapter_id in adapters
+            ]
+            if compatible_consumers:
+                if self._grant_load_error:
+                    unavailable = QLabel("Autorizações indisponíveis · ledger local inválido")
+                    unavailable.setObjectName("accountGrantUnavailable")
+                    unavailable.setWordWrap(True)
+                    self._cards_layout.addWidget(unavailable)
+                    continue
+                access_note = QLabel(
+                    "Registra consentimento de inferência por app. Sessões ainda não aplicam "
+                    "este grant; custos e limites seguem o provedor desta conexão."
+                )
+                access_note.setObjectName("accountGrantScopeNote")
+                access_note.setWordWrap(True)
+                self._cards_layout.addWidget(access_note)
+                for consumer_id in compatible_consumers:
+                    active = next((grant for grant in self.grant_ledger.for_consumer(consumer_id)
+                                   if grant.connection_id == connection.connection_id), None)
+                    action = QPushButton(
+                        f"Revogar uso em {_CONSUMER_LABELS[consumer_id]}" if active
+                        else f"Permitir uso em {_CONSUMER_LABELS[consumer_id]}"
+                    )
+                    action.setObjectName("accountConsumerGrant")
+                    action.setAccessibleName(action.text())
+                    action.clicked.connect(
+                        lambda _checked=False, conn=connection, cid=consumer_id:
+                        self._toggle_grant(conn, cid)
+                    )
+                    self._cards_layout.addWidget(action)
+
+    def _toggle_grant(self, connection: Connection, consumer_id: str) -> None:
+        current = next((grant for grant in self.grant_ledger.for_consumer(consumer_id)
+                        if grant.connection_id == connection.connection_id), None)
+        if current is not None:
+            self.grant_ledger.revoke(current.grant_id)
+            self._render_cards()
+            return
+        if not self._confirm_grant(consumer_id):
+            return
+        try:
+            self.grant_ledger.grant(
+                connection, consumer_id, ("inference",),
+                support=SUPPORTED_CONSUMER_ADAPTERS, consented=True,
+            )
+        except GrantError as exc:
+            QMessageBox.warning(self, "Conexão incompatível", str(exc))
+            return
+        self._render_cards()
+
+    def _confirm_grant(self, consumer_id: str) -> bool:
+        label = _CONSUMER_LABELS[consumer_id]
+        answer = QMessageBox.question(
+            self, "Permitir uso da conexão?",
+            f"{label} poderá enviar solicitações de inferência por esta conexão. "
+            "O provedor pode cobrar ou aplicar limites da conta.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
 
     def _select_account(self, provider: str, account_id: str, checked: bool) -> None:
         if checked:

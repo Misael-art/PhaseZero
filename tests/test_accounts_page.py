@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton, QRadioButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QRadioButton
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +25,10 @@ def _window(qapp):
     return MainWindow(ROOT), host_patcher
 
 
-def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_probe(qapp):
+def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_probe(
+    qapp, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     window, host_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Contas e conexões")
@@ -73,6 +76,19 @@ def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_p
             account.account_id for account, _connection in page._accounts
             if account.provider == "openai" and account.nickname == "Account Two"
         )
+
+        grant_buttons = page.findChildren(QPushButton, "accountConsumerGrant")
+        assert len(grant_buttons) == 4
+        assert "Sessões ainda não aplicam" in page.findChild(QLabel, "accountGrantScopeNote").text()
+        with patch.object(page, "_confirm_grant", return_value=True):
+            grant_buttons[0].click()
+        granted = page.grant_ledger.for_consumer("app.claude-code")
+        assert len(granted) == 1
+        assert granted[0].connection_id == page._accounts[1][1].connection_id
+        revoke = next(button for button in page.findChildren(QPushButton, "accountConsumerGrant")
+                      if button.text().startswith("Revogar uso"))
+        revoke.click()
+        assert page.grant_ledger.for_consumer("app.claude-code") == ()
 
         summary = page.redacted_export
         assert summary == {
