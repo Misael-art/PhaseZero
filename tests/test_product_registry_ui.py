@@ -201,6 +201,36 @@ def test_primary_open_uses_installed_desktop_entry_without_shell(qapp, tmp_path,
         status_patcher.stop()
 
 
+def test_open_webui_status_gates_its_local_dashboard_action(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.open-webui")
+        assert page._status_action_id == "ai.webui-status"
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:default:app.open-webui", "app.open-webui", "local", "default",
+            installation="present", origin="unknown", configuration="ready", health="online",
+        ),))
+        assert page._primary_button.text() == "Abrir"
+        assert page._primary_action is not None
+        assert page._primary_action.id == "ai.webui-open"
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.webui-open"
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:default:app.open-webui", "app.open-webui", "local", "default",
+            installation="present", origin="unknown", configuration="ready", health="offline",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert not page._primary_button.isEnabled()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_recovery_state_does_not_auto_select_restore(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:

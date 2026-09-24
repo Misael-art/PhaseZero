@@ -557,7 +557,7 @@ cmd_server() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp|policy|ollama) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp|policy|ollama|webui) ..."; return 1; }
     case "$sub" in
         policy)
             shift
@@ -566,6 +566,10 @@ cmd_ai() {
         ollama)
             shift
             bash "$PZ_ROOT/linux/ai/setup-ollama.sh" "$@"
+            ;;
+        webui)
+            shift
+            bash "$PZ_ROOT/linux/ai/open-webui-manager.sh" "${1:-status}"
             ;;
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"

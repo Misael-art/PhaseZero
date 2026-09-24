@@ -621,6 +621,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("memory", "Instalar ai-memory", "Memória persistente de agentes.", ("ai", "setup", "memory"), ("ai", "status")),
         ("ollama", "Instalar Ollama", "Runtime local de modelos.", ("ai", "setup", "ollama"), ("ai", "status")),
         ("webui", "Instalar Open WebUI", "Interface local de modelos.", ("ai", "setup", "webui"), ("ai", "status")),
+        ("webui-status", "Status Open WebUI", "Container e resposta HTTP local, sem alterar o serviço.", ("ai", "webui", "status"), None),
+        ("webui-open", "Abrir Open WebUI", "Abre a interface local observada como saudável.", ("ai", "webui", "open"), None),
         ("usagebar", "Instalar UsageBar", "Uso de provedores no painel.", ("ai", "setup", "usagebar"), ("ai", "status")),
         ("codexbar-status", "Status CodexBar", "CLI, configuração, autenticação e widget opcional.", ("ai", "codexbar", "status"), None),
         ("codexbar-health", "Saúde CodexBar", "Valida integridade e uso dos providers sem alterar o KDE.", ("ai", "codexbar", "health"), None),
