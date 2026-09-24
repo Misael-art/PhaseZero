@@ -8,6 +8,7 @@ The existing redacted auth registry remains a separate v1 summary.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Awaitable, Callable
@@ -76,8 +77,13 @@ class Account:
     def __post_init__(self) -> None:
         if not self.account_id or not self.provider or not self.nickname:
             raise ValueError("account requires opaque ID, provider and nickname")
-        if any(marker in self.secret_ref.lower() for marker in ("token=", "password=", "sk-")):
-            raise ValueError("secret_ref must be a store reference, not a secret")
+        if self.secret_ref:
+            scheme, separator, reference = self.secret_ref.partition(":")
+            if (
+                not separator or scheme not in {"keyring", "secret-service", "wincred", "provider-store"}
+                or not re.fullmatch(r"[A-Za-z0-9._/-]{1,160}", reference)
+            ):
+                raise ValueError("secret_ref must be an opaque secure-store reference")
 
 
 @dataclass(frozen=True)

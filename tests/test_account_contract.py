@@ -43,6 +43,14 @@ def test_private_identity_stays_out_of_redacted_export():
     assert "keyring" not in str(summary)
 
 
+def test_credential_reference_accepts_only_opaque_store_handles():
+    assert Account("opaque-2", "example", "Work",
+                   secret_ref="secret-service:phasezero/openai/workspace-1").secret_ref
+    for value in ("Bearer live-secret", "sk-example", "keyring:", "secret:token=live"):
+        with pytest.raises(ValueError, match="opaque secure-store reference"):
+            Account("opaque-2", "example", "Work", secret_ref=value)
+
+
 def test_global_deadline_keeps_partial_result_and_cancels_late_probe():
     cancelled = False
 
