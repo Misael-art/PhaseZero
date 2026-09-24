@@ -89,8 +89,9 @@ def test_development_python_recipe_preserves_os_runtime_copy(qapp):
 @pytest.mark.parametrize(
     ("objective_index", "profile_id", "app_id"),
     (
-        (2, "development-java", "app.maven"),
-        (3, "development-dotnet", "app.dotnet"),
+        (2, "development-rust", "app.rust"),
+        (3, "development-java", "app.maven"),
+        (4, "development-dotnet", "app.dotnet"),
     ),
 )
 def test_development_objectives_create_profile_plan_and_open_canonical_detail(

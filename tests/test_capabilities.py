@@ -228,6 +228,7 @@ def test_web_js_recipe_has_no_ai_or_remote_service_dependencies(private_state):
 @pytest.mark.parametrize(
     ("profile_id", "expected_packages"),
     (
+        ("development-rust", {"rust"}),
         ("development-java", {"jdk-openjdk", "maven"}),
         ("development-dotnet", {"dotnet-sdk"}),
     ),

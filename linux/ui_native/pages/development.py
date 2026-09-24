@@ -20,6 +20,8 @@ _OBJECTIVES = (
      "Node.js e pnpm. Não inclui IA local, Docker ou acesso remoto."),
     ("Python e dados", "development-python", "app.pyenv",
      "Instala pyenv para versões isoladas; não altera o Python do sistema."),
+    ("Rust", "development-rust", "app.rust",
+     "Instala Rust e Cargo pelo gerenciador de pacotes do sistema."),
     ("Java e JVM", "development-java", "app.maven",
      "Instala Maven e seu requisito OpenJDK. Não altera configuração de projetos existentes."),
     (".NET", "development-dotnet", "app.dotnet",
