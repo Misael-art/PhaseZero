@@ -73,6 +73,7 @@ for script in 9router-hermes-provider.sh setup-hermes.sh; do
 done
 
 # The routing default survives the restore.
+# shellcheck disable=SC2016 # Match literal shell source.
 grep -q 'default_source="$HERMES_CONFIG.pz-bak"' "$ROOT/linux/ai/hermes-router.sh"
 
 echo "PASS: Hermes config writers are durable and restore empty configs"

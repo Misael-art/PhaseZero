@@ -20,7 +20,7 @@ rc=0
 out="$("$ROOT/linux/ai/setup-agent-compat.sh" rules 2>"$WORK/err")" || rc=$?
 [ "$rc" -eq 2 ] || { echo "FAIL: rules without project exited $rc" >&2; cat "$WORK/err" >&2; exit 1; }
 jq -e '.mode == "needs-project" and (.next | test("ai init"))' <<< "$out" >/dev/null
-! grep -q "/AGENTS.md" "$WORK/err"
+if grep -q "/AGENTS.md" "$WORK/err"; then exit 1; fi
 
 # Defense in depth: apply_rules itself refuses empty, / and $HOME.
 for bad in "" / "$HOME"; do

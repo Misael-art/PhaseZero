@@ -31,7 +31,7 @@ jq -e '
 
 plan="$("$ROOT/linux/pz" ai drift sync --dry-run)"
 grep -qx 'would refresh 9router-hermes-provider: bash linux/ai/9router-hermes-provider.sh install' <<< "$plan"
-! grep -q 'hermes-router:' <<< "$plan"
+if grep -q 'hermes-router:' <<< "$plan"; then exit 1; fi
 
 # Back in sync: exit 0.
 sed "s|^PZ_ROOT=\"\"\$|PZ_ROOT=\"/x\"|" "$ROOT/linux/ai/9router-hermes-provider.sh" > "$RUNTIME/9router-hermes-provider.sh"

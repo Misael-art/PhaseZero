@@ -14,6 +14,7 @@ export PZ_LOCAL_BIN="$WORK/bin"
 mkdir -p "$HOME/.hermes" "$XDG_CONFIG_HOME/phasezero" "$PZ_LOCAL_BIN"
 
 # Stub hermes: every subcommand succeeds, like upstream `config check` on an empty file.
+# shellcheck disable=SC2016 # Emit literal $1 into the stub.
 printf '#!/bin/sh\n[ "$1" = --version ] && echo "Hermes Agent v0.0.0"\nexit 0\n' > "$PZ_LOCAL_BIN/hermes"
 chmod +x "$PZ_LOCAL_BIN/hermes"
 export PATH="$PZ_LOCAL_BIN:$PATH"

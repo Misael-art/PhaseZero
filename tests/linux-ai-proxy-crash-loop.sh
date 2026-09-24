@@ -44,7 +44,9 @@ for _ in $(seq 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
 check active active 81 "$(cat "$WORK/port")"
 kill "$listener" 2>/dev/null || true
 
+# shellcheck disable=SC2016 # Match literal shell source.
 grep -c 'service="$(unit_service_state "$id" "$port")"' "$ROOT/linux/ai/proxy-suite.sh" | grep -qx 3
-! grep -q 'service="$(systemctl --user is-active' "$ROOT/linux/ai/proxy-suite.sh"
+# shellcheck disable=SC2016 # Match literal shell source.
+if grep -q 'service="$(systemctl --user is-active' "$ROOT/linux/ai/proxy-suite.sh"; then exit 1; fi
 
 echo "PASS: crash-looping proxy reported as crash-loop"

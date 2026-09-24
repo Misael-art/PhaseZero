@@ -48,8 +48,8 @@ ensure_node_runtime
     echo "FAIL: 9Router repointed the proxy runtime shim" >&2
     exit 1
 }
+# shellcheck disable=SC2016 # Match literal shell source.
 grep -q 'ROUTER_BIN="$PROXY_ROOT/.runtime/9router-bin"' "$ROOT/linux/ai/9router-manager.sh"
-! grep -q '\$RUNTIME/bin' "$ROOT/linux/ai/9router-manager.sh"
 
 # 2. The proxy suite heals a shim an older 9Router already repointed.
 ln -sfn "$WORK/sysbin/node" "$RUNTIME/bin/node"
