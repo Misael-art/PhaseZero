@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton, QWidget
 
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
@@ -143,10 +143,10 @@ def test_proxies_page_usar_is_one_click_ensure(proxies_page):
     use = qwen["use"]
     assert isinstance(use, QPushButton)
     assert use.text() == "Usar"
-    spy = []
-    page.action_requested.connect(lambda action: spy.append(action.id))
+    selected = []
+    page.action_selected.connect(lambda action: selected.append(action.id))
     use.click()
-    assert spy == ["ai.proxies-ensure-qwen"]
+    assert selected == ["ai.proxies-ensure-qwen"]
 
 
 def test_proxies_page_hides_ports_in_simple_mode(proxies_page):
@@ -174,10 +174,10 @@ def test_ready_qwen_button_opens_opencode(proxies_page):
     mimo_use = page._cards["mimo-ai-proxy"]["use"]
     assert qwen_use.text() == "Abrir no OpenCode"
     assert mimo_use.text() == "Conectar conta"
-    spy = []
-    page.action_requested.connect(lambda action: spy.append(action.id))
+    selected = []
+    page.action_selected.connect(lambda action: selected.append(action.id))
     qwen_use.click()
-    assert spy == ["ai.proxies-open-qwen"]
+    assert selected == ["ai.proxies-open-qwen"]
 
 
 def test_proxies_page_translates_status_into_human_copy(proxies_page):
@@ -308,6 +308,26 @@ def test_interrupted_operation_can_retry_only_through_confirmation_flow(
 def test_ai_dev_page_covers_all_catalog_actions(ai_dev_page):
     page, actions = ai_dev_page
     assert page.represented_action_ids == {action.id for action in actions}
+
+
+def test_ai_dev_app_shortcut_opens_canonical_detail_instead_of_running_directly(ai_dev_page):
+    page, _actions = ai_dev_page
+    selected = []
+    requested = []
+    page.action_selected.connect(lambda action: selected.append(action.id))
+    page.action_requested.connect(lambda action: requested.append(action.id))
+
+    opencode_card = next(
+        card for card in page.findChildren(QWidget)
+        if card.property("cliKey") == "opencode"
+    )
+    configure = next(
+        button for button in opencode_card.findChildren(QPushButton)
+        if button.text() == "Configurar"
+    )
+    configure.click()
+    assert selected == ["ai.opencode-install"]
+    assert requested == []
 
 
 def test_ai_dev_page_hero_uses_status_payload(ai_dev_page):

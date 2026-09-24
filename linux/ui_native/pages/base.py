@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushBut
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
+from ..product_inventory import target_for
 from ..status_loader import StatusLoader
 from ..result_parser import guidance, severity_for
 from ..widgets import AdvancedActionsPanel, SkeletonCard, SkeletonTile, stop_shimmer
@@ -125,6 +126,17 @@ class BasePage(QWidget):
         self.clear_skeletons()
 
     def request_action(self, action: ActionSpec) -> None:
+        try:
+            target = target_for(action)
+        except ValueError:
+            target = None
+        if target is not None and target.target_kind == "app":
+            # Legacy/custom-page app buttons are shortcuts. Route them through
+            # the canonical product detail so its observed state chooses the
+            # next action; the detail page emits its own action_requested only
+            # after the operator chooses Prepare/Configure/Resolve.
+            self.action_selected.emit(action)
+            return
         self.action_requested.emit(action)
 
     def request_category(self, category: str, focus: str = "") -> None:
