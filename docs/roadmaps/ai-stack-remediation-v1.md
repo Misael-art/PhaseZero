@@ -31,6 +31,42 @@
 | AISR-003 | AICR-003 | `setup-codex.sh`: se `codex` existente ≥ mínimo suportado, não reinstala nem troca symlink; pin vira mínimo (`PZ_CODEX_MIN_VERSION`); adiciona `status` e `--dry-run` | Teste: codex fake 0.156.1 no PATH → nenhuma chamada `npm install`, symlink intacto |
 | AISR-004 | AICR-004 | `setup-agent-compat.sh rules` sem workspace → recusa com `needs-project` exit 2 (mesmo guarda de `init`: vazio, `/`, `$HOME`) | Teste: `rules` sem `PZ_WORKSPACE_ROOT` e sem registro → exit 2, zero arquivo criado; `linux-admin-bridge.sh` sem WARN |
 
+### Bonsai (pedido do operador, 2026-09-24)
+
+Diagnóstico:
+
+- `@bonsai-ai/cli` retorna **404** no registry npm (`npm view` e
+  `registry.npmjs.org/@bonsai-ai%2fcli`): instalação nova impossível pelo
+  caminho atual de `_ensure_bonsai`; instalação existente segue funcionando.
+- No host do operador, `~/.local/bin/bonsai` aponta para
+  `~/.local/share/cc-installer/tools/bonsai-runner/bonsai-managed` (criado
+  manualmente em 2026-08-21, **fora do repositório**), que fixa
+  `PZ_BONSAI_INSTALLED_VERSION=0.4.19` e, via `latest-fail-open.cjs`, forja a
+  resposta `/@bonsai-ai/cli/latest` com a versão instalada quando o registry
+  falha. Com o registry em 404, a CLI se acha sempre atualizada: preso em 0.4.19.
+- Erro conceitual 1: Bonsai só existe como *launcher* de Claude Code. OpenCode
+  recusa (`opencode_9router_manager.py`, `BONSAI_ROUTE=direct is unsupported`)
+  e 9Router trata Bonsai como erro (`routing_manager.py`, `bonsai-in-router`).
+  Upstream é um endpoint Anthropic Messages (`https://go.trybons.ai`, Bearer),
+  consumível por qualquer harness.
+- Erro conceitual 2: o MCP `bonsai` apontava para `mcp.bonsai-rx.org` —
+  Bonsai-Rx, produto sem relação (programação reativa visual). Host nem
+  resolve DNS; foi o MCP que falhou ao conectar nesta sessão. Windows repete a
+  confusão no manifesto de segredos (`bootstrap-tools.ps1`: provider `bonsai`
+  com `signupUrl`/`docsUrl` em bonsai-rx.org e baseUrl MCP bonsai-rx).
+
+Decisões do operador: credencial para a API vem do login da CLI (`bonsai
+login`), sem chave extra; exposição é **opt-in explícito**, fora de combos
+`phasezero-*` e de fallback automático (Bonsai registra prompts para benchmark).
+
+| ID | Entrega | Prova | Estado |
+|---|---|---|---|
+| AISR-005 | Remover MCP `bonsai` (bonsai-rx) do catálogo Linux e do `.mcp.example.json`; `_ensure_bonsai` com erro acionável quando o npm dá 404 | `test_bonsai_unpublished_from_npm_gives_actionable_error` | **done** |
+| AISR-006 | Status Bonsai honesto: `registry` (`published`/`unpublished`), `updateCheck` (`valid`/`forged` quando o runner injeta `latest-fail-open`), próxima ação. Não mexer no runner do host sem aceite | teste com runner fixture | pending |
+| AISR-007 | Gateway loopback `bonsai-gateway` (127.0.0.1:3014, unit user): Anthropic Messages → `go.trybons.ai`, Bearer lido do store da CLI a cada requisição (relogin vale na hora; chave nunca copiada para outro arquivo), token local 0600 para clientes, `/health` sem segredo | teste com store fixture cifrado no mesmo formato | **bloqueado**: o classificador de segurança do agente negou acesso à credencial da CLI; precisa de liberação explícita do operador |
+| AISR-008 | `pz ai bonsai api enable|disable|status|test`: provider `bonsai` no OpenCode (`@ai-sdk/anthropic`, baseURL do gateway) com backup/rollback; `bonsai start` intocado; 9Router continua sem Bonsai em combos automáticos | teste de merge/rollback do `opencode.json` | depende de AISR-007 |
+| AISR-009 | Windows: separar provider Bonsai (trybons.ai) de Bonsai-Rx no manifesto de segredos e no catálogo MCP | Pester `bootstrap-mcp-repair`, `resilience` | pending |
+
 ## Execução
 
 | ID | Commit | Teste |

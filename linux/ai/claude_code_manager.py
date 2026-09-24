@@ -1060,6 +1060,15 @@ function probeHttp() {
         env["PATH"] = f"{Path(node).parent}:{env.get('PATH', '')}"
         rc, metadata_out, err = run_capture([npm, "view", "@bonsai-ai/cli", "version", "dist.integrity", "--json"], timeout=30, env=env)
         if rc != 0:
+            if "E404" in err or "404" in err:
+                # @bonsai-ai/cli was unpublished from npm (registry 404 since
+                # 2026-09). An existing install keeps working; only a fresh one
+                # has no verifiable source.
+                raise RuntimeError(
+                    "Bonsai CLI indisponível no npm (@bonsai-ai/cli retorna 404). "
+                    "Instale pelo canal oficial em https://www.trybons.ai e rode de novo; "
+                    "uma instalação existente continua sendo reutilizada."
+                )
             raise RuntimeError(f"Bonsai registry metadata failed: {err.strip()}")
         metadata = json.loads(metadata_out)
         version = metadata.get("version")

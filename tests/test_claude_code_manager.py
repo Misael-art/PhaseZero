@@ -275,6 +275,17 @@ echo "bonsai:$*"
         self.assertIsNone(info["authenticated"])
         self.assertTrue(CC.Manager().claude_info()["auth"]["loggedIn"])
 
+    def test_bonsai_unpublished_from_npm_gives_actionable_error(self) -> None:
+        # @bonsai-ai/cli returns 404 on the npm registry since 2026-09.
+        self.bonsai.unlink()
+        manager = CC.Manager()
+        tx = mock.MagicMock()
+        with mock.patch.object(manager, "_bonsai_upstream", return_value=None), mock.patch.object(
+            manager, "node_info", return_value={"npm": "/usr/bin/npm", "node": "/usr/bin/node", "major": 24}
+        ), mock.patch.object(CC, "run_capture", return_value=(1, "", "npm error code E404\nnpm error 404 Not Found")):
+            with self.assertRaisesRegex(RuntimeError, "indisponível no npm"):
+                manager._ensure_bonsai(tx)
+
     def test_repair_removes_empty_hook_envelopes(self) -> None:
         settings = self.home / ".claude/settings.json"
         settings.parent.mkdir(parents=True)
