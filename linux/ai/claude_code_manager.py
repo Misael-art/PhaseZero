@@ -599,18 +599,33 @@ function probeHttp() {
     def claude_info(self) -> dict[str, Any]:
         path = command_path("claude")
         version = ""
-        auth: dict[str, Any] = {"loggedIn": False, "authMethod": None, "apiProvider": None}
+        auth: dict[str, Any] = {
+            "loggedIn": None, "authMethod": None, "apiProvider": None,
+            "probeStatus": "backend-unavailable",
+        }
         if path:
             rc, out, _ = run_capture([path, "--version"], timeout=8)
             if rc == 0:
                 version = out.strip().splitlines()[0] if out.strip() else ""
-            raw = json_capture([path, "auth", "status", "--json"], timeout=12)
-            if raw:
-                auth = {
-                    "loggedIn": bool(raw.get("loggedIn")),
-                    "authMethod": raw.get("authMethod"),
-                    "apiProvider": raw.get("apiProvider"),
-                }
+            auth_rc, auth_out, _ = run_capture([path, "auth", "status", "--json"], timeout=12)
+            if auth_rc == 124:
+                auth["probeStatus"] = "timeout"
+            elif auth_rc != 0:
+                auth["probeStatus"] = "backend-unavailable"
+            else:
+                try:
+                    raw = json.loads(auth_out)
+                except json.JSONDecodeError:
+                    raw = None
+                if isinstance(raw, dict):
+                    auth = {
+                        "loggedIn": raw.get("loggedIn") if isinstance(raw.get("loggedIn"), bool) else None,
+                        "authMethod": raw.get("authMethod"),
+                        "apiProvider": raw.get("apiProvider"),
+                        "probeStatus": "ok",
+                    }
+                else:
+                    auth["probeStatus"] = "backend-unavailable"
         return {
             "installed": bool(path),
             "path": path,

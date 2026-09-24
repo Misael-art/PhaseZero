@@ -112,6 +112,7 @@ echo "bonsai:$*"
         rendered = json.dumps(state)
         self.assertNotIn("super-secret-must-not-leak", rendered)
         self.assertTrue(state["claude"]["auth"]["loggedIn"])
+        self.assertEqual("ok", state["claude"]["auth"]["probeStatus"])
         self.assertEqual("subscription", state["selectedAuth"])
         self.assertIn("installations", state)
         self.assertIn("authentications", state)
@@ -124,6 +125,20 @@ echo "bonsai:$*"
         self.assertTrue(state["routeCapabilities"]["bonsai"]["upstreamDirectCommandMayWarn"])
         self.assertTrue(state["routeCapabilities"]["bonsai"]["phaseZeroLauncherSuppressesWarning"])
         self.assertEqual(1, sum(item["state"] == "orphan" for item in state["configuration"]["hooks"]))
+
+    def test_missing_claude_backend_is_not_reported_as_logged_out(self) -> None:
+        os.environ["PZ_CLAUDE_COMMAND"] = str(self.bin / "missing-claude")
+        auth = CC.Manager().claude_info()["auth"]
+        self.assertIsNone(auth["loggedIn"])
+        self.assertEqual("backend-unavailable", auth["probeStatus"])
+
+    def test_timed_out_claude_auth_probe_stays_unknown(self) -> None:
+        with mock.patch.object(CC, "run_capture", side_effect=[
+            (0, "2.1.220 (Claude Code)", ""), (124, "", "timed out"),
+        ]):
+            auth = CC.Manager().claude_info()["auth"]
+        self.assertIsNone(auth["loggedIn"])
+        self.assertEqual("timeout", auth["probeStatus"])
 
     def test_dry_run_leaves_no_trace(self) -> None:
         self._settings()
