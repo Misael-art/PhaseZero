@@ -481,3 +481,15 @@ failed → `ai.9router-doctor` read-only e Qwen externo offline → nenhuma aç�
 `git diff --check` passou. Nenhum serviço, pacote, conta ou processo real foi iniciado.
 PXA-003 segue `in_progress`: recuperação segura para demais serviços e migração de páginas
 técnicas não concluídas; CTA desabilitado ainda não equivale a recuperação funcional.
+
+PXA-003 instâncias: detalhe agora oferece seleção explícita por host/escopo quando status
+retorna mais de uma instância; não escolhe a primeira silenciosamente. Filtra ações pelo
+escopo registrado, reconsulta usando instância selecionada e deixa ações indisponíveis para
+host remoto ou IDs ambíguos no mesmo host/escopo, pois executor ainda não endereça esses
+casos. Fixtures cobrem seleção local/remota, escopo duplicado e reconsulta no escopo
+selecionado. `tests/test_product_registry_ui.py` + `tests/test_product_inventory.py`:
+32 passaram; `tests/test_native_navigation.py` + `tests/test_product_status_loader.py`:
+15 passaram; `compileall` e `git diff --check` passaram. Ruff/Black/Flake8 não estão
+instalados no runtime. Sem acesso remoto, pacote ou serviço real. PXA-003 permanece aberto
+para host remoto acionável, IDs múltiplos no mesmo escopo, recuperação restante e migração
+de páginas técnicas.

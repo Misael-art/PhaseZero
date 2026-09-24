@@ -4,8 +4,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
 from linux.ui_native.models import ProductInstance
+from linux.ui_native.product_inventory import target_for
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +27,15 @@ def _window(qapp):
     status_patcher.start()
     window = MainWindow(ROOT)
     return window, patcher, status_patcher
+
+
+def _detail_action_rows(page):
+    rows = []
+    for index in range(page._detail_actions_start, page._detail_layout.count()):
+        widget = page._detail_layout.itemAt(index).widget()
+        if isinstance(widget, ActionListRow):
+            rows.append(widget)
+    return rows
 
 
 @pytest.mark.parametrize("action_id", ["ai.ollama", "server.llm"])
@@ -236,7 +246,7 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         page.open_product("app.open-webui")
         assert page._status_action_id == "ai.webui-status"
         page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:default:app.open-webui", "app.open-webui", "local", "default",
+            "local:local:app.open-webui", "app.open-webui", "local", "local",
             installation="present", origin="unknown", configuration="ready", health="online",
         ),))
         assert page._primary_button.text() == "Abrir"
@@ -248,7 +258,7 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         assert start.call_args.args[0].id == "ai.webui-open"
 
         page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:default:app.open-webui", "app.open-webui", "local", "default",
+            "local:local:app.open-webui", "app.open-webui", "local", "local",
             installation="present", origin="unknown", configuration="ready", health="offline",
         ),))
         assert page._primary_button.text() == "Resolver"
@@ -284,6 +294,123 @@ def test_resolve_uses_read_only_diagnostic_and_never_starts_external_proxy(qapp)
         assert page._primary_button.text() == "Resolver"
         assert page._primary_action is None
         assert not page._primary_button.isEnabled()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_multiple_instances_require_explicit_local_scope_selection(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.vscode")
+        page._instances_ready(page._status_action_id, (
+            ProductInstance(
+                "local:host:app.vscode", "app.vscode", "local", "host",
+                installation="absent",
+            ),
+            ProductInstance(
+                "homelab:host:app.vscode", "app.vscode", "homelab", "host",
+                installation="present", origin="phasezero", configuration="ready", health="online",
+            ),
+        ))
+        selector = page.findChild(QComboBox, "productInstanceSelector")
+        assert selector is not None and selector.count() == 3
+        assert page._status_label.text().startswith("2 instâncias observadas")
+        assert page._primary_button.text() == "Selecionar instância"
+        assert not page._primary_button.isEnabled()
+        assert not _detail_action_rows(page)
+
+        local_index = next(
+            index for index in range(1, selector.count())
+            if selector.itemData(index) == "local:host:app.vscode"
+        )
+        selector.setCurrentIndex(local_index)
+        assert "Instância: local · escopo host" in page._status_label.text()
+        assert page._primary_button.text() == "Preparar"
+        assert page._primary_button.isEnabled()
+        assert page._primary_action.id == "capability.plan.development.vscode"
+        rows = _detail_action_rows(page)
+        assert rows
+        assert all(target_for(row.action).instance_scope == "host" for row in rows)
+
+        remote_index = next(
+            index for index in range(1, selector.count())
+            if selector.itemData(index) == "homelab:host:app.vscode"
+        )
+        selector.setCurrentIndex(remote_index)
+        assert page._primary_button.text() == "Abrir"
+        assert not page._primary_button.isEnabled()
+        assert not _detail_action_rows(page)
+        notice = page.findChild(QLabel, "productInstanceActionNotice")
+        assert notice is not None and "remotas" in notice.text()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_duplicate_instances_in_same_scope_block_unscoped_actions(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.vscode")
+        page._instances_ready(page._status_action_id, (
+            ProductInstance(
+                "local:first:app.vscode", "app.vscode", "local", "host",
+                installation="absent",
+            ),
+            ProductInstance(
+                "local:second:app.vscode", "app.vscode", "local", "host",
+                installation="present", origin="phasezero", configuration="ready", health="online",
+            ),
+        ))
+        selector = page.findChild(QComboBox, "productInstanceSelector")
+        index = next(
+            index for index in range(1, selector.count())
+            if selector.itemData(index) == "local:first:app.vscode"
+        )
+        selector.setCurrentIndex(index)
+        assert page._primary_button.text() == "Preparar"
+        assert not page._primary_button.isEnabled()
+        notice = page.findChild(QLabel, "productInstanceActionNotice")
+        assert notice is not None and "várias instâncias neste escopo" in notice.text()
+        assert not _detail_action_rows(page)
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_verify_uses_selected_instance_scope(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.vscode")
+        page._instances_ready(page._status_action_id, (
+            ProductInstance(
+                "local:host:app.vscode", "app.vscode", "local", "host",
+                installation="unknown",
+            ),
+            ProductInstance(
+                "local:project:app.vscode", "app.vscode", "local", "project",
+                installation="unknown",
+            ),
+        ))
+        selector = page.findChild(QComboBox, "productInstanceSelector")
+        index = next(
+            index for index in range(1, selector.count())
+            if selector.itemData(index) == "local:project:app.vscode"
+        )
+        selector.setCurrentIndex(index)
+        assert page._primary_button.text() == "Verificar"
+        with patch.object(page.status_loader, "fetch_product_status") as fetch:
+            page._primary_button.click()
+        fetch.assert_called_once()
+        assert fetch.call_args.kwargs["host_id"] == "local"
+        assert fetch.call_args.kwargs["scope"] == "project"
+        assert fetch.call_args.kwargs["instance_key"] == "local:project:app.vscode"
     finally:
         window.close()
         host_patcher.stop()
@@ -372,7 +499,7 @@ def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.9router")
         page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:host:app.9router", "app.9router", "local", "host",
+            "local:local:app.9router", "app.9router", "local", "local",
             installation="present", origin="phasezero", configuration="ready", health="online",
         ),))
         assert page._primary_button.text() == "Abrir"
@@ -394,7 +521,7 @@ def test_ready_odysseus_uses_registered_open_route(qapp):
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.odysseus")
         page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:host:app.odysseus", "app.odysseus", "local", "host",
+            "local:local:app.odysseus", "app.odysseus", "local", "local",
             installation="present", origin="phasezero", configuration="ready", health="online",
         ),))
         assert page._primary_button.text() == "Abrir"

@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -82,6 +83,7 @@ class ProductRegistryPage(BasePage):
         self._detail_layout: QVBoxLayout | None = None
         self._detail_actions_start = 0
         self._status_label: QLabel | None = None
+        self._instance_selector: QComboBox | None = None
         self._primary_button: QPushButton | None = None
         self._primary_action: ActionSpec | None = None
         self._primary_desktop_entry = ""
@@ -216,6 +218,12 @@ class ProductRegistryPage(BasePage):
         self._product_facts.setObjectName("productFacts")
         self._product_facts.setWordWrap(True)
         layout.addWidget(self._product_facts)
+        self._instance_selector = QComboBox()
+        self._instance_selector.setObjectName("productInstanceSelector")
+        self._instance_selector.setAccessibleName("Instância do aplicativo")
+        self._instance_selector.currentIndexChanged.connect(self._selected_instance_changed)
+        self._instance_selector.hide()
+        layout.addWidget(self._instance_selector)
         self._status_label = QLabel("Instalação, configuração e saúde: desconhecidas")
         self._status_label.setObjectName("productStatus")
         self._status_label.setWordWrap(True)
@@ -365,6 +373,7 @@ class ProductRegistryPage(BasePage):
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
         self._instances.clear()
+        self._populate_instance_selector()
         self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
         self._product_summary.setText(self._display_value(product.get("description")))
         facts = (
@@ -387,27 +396,7 @@ class ProductRegistryPage(BasePage):
         else:
             self._context_label.setText("Catálogo de aplicativos")
         self._clear_detail_actions()
-        action_ids = [item for item in product.get("actionIds", []) if item in self.by_id]
-        action_ids.sort(key=lambda action_id: (
-            action_id != product.get("canonicalActionId"),
-            not bool(self._manifest_action(action_id).get("installationAuthorityId")),
-            self.by_id[action_id].title.casefold(),
-        ))
-        standard: list[ActionSpec] = []
-        advanced: list[ActionSpec] = []
-        for action_id in action_ids:
-            action = self.by_id[action_id]
-            (advanced if action.visibility == "advanced" or action.risk in {"elevated", "high"} else standard).append(action)
-        for action in standard:
-            row = ActionListRow(action)
-            row.selected.connect(self.action_requested.emit)
-            self._detail_layout.addWidget(row)
-        if advanced:
-            panel = AdvancedActionsPanel(advanced)
-            panel.requested.connect(self.action_requested.emit)
-            panel.setVisible(self._advanced_mode)
-            self._advanced_panels.append(panel)
-            self._detail_layout.addWidget(panel)
+        self._render_detail_actions()
         self._detail_layout.addStretch()
         self._stack.setCurrentWidget(self._detail_page)
         self.product_opened.emit(app_id, context_action_id)
@@ -420,6 +409,123 @@ class ProductRegistryPage(BasePage):
             self.status_loader.fetch_product_status(
                 status_action, app_id=app_id, host_id="local", scope=self._status_scope,
             )
+
+    def _render_detail_actions(self) -> None:
+        self._clear_detail_actions()
+        product = self._product_by_id.get(self._selected_app_id, {})
+        all_actions = [self.by_id[item] for item in product.get("actionIds", []) if item in self.by_id]
+        actions = all_actions
+        context_message = ""
+        if self._instances:
+            instance = self._selected_instance()
+            if instance is None:
+                actions = []
+                context_message = "Selecione uma instância para ver ações aplicáveis."
+            elif instance.host_id != "local":
+                actions = []
+                context_message = "Ações remotas ainda não estão disponíveis neste detalhe."
+            elif self._same_scope_instance_count(instance) > 1:
+                actions = []
+                context_message = "Há várias instâncias neste escopo; ações não conseguem distingui-las ainda."
+            else:
+                actions = [
+                    action for action in all_actions
+                    if (target := self._targets.get(action.id)) is not None
+                    and target.instance_scope == instance.scope
+                ]
+                if not actions:
+                    context_message = "Nenhuma ação disponível para este escopo."
+        if context_message:
+            notice = QLabel(context_message)
+            notice.setObjectName("productInstanceActionNotice")
+            notice.setWordWrap(True)
+            self._detail_layout.addWidget(notice)
+            return
+        action_ids = [item for item in product.get("actionIds", []) if item in self.by_id]
+        action_ids.sort(key=lambda action_id: (
+            action_id != product.get("canonicalActionId"),
+            not bool(self._manifest_action(action_id).get("installationAuthorityId")),
+            self.by_id[action_id].title.casefold(),
+        ))
+        standard: list[ActionSpec] = []
+        advanced: list[ActionSpec] = []
+        for action_id in action_ids:
+            action = self.by_id[action_id]
+            if action not in actions:
+                continue
+            (advanced if action.visibility == "advanced" or action.risk in {"elevated", "high"} else standard).append(action)
+        for action in standard:
+            row = ActionListRow(action)
+            row.selected.connect(self.action_requested.emit)
+            self._detail_layout.addWidget(row)
+        if advanced:
+            panel = AdvancedActionsPanel(advanced)
+            panel.requested.connect(self.action_requested.emit)
+            panel.setVisible(self._advanced_mode)
+            self._advanced_panels.append(panel)
+            self._detail_layout.addWidget(panel)
+
+    def _selected_instance(self) -> ProductInstance | None:
+        if not self._instances:
+            return None
+        if len(self._instances) == 1:
+            return next(iter(self._instances.values()))
+        if self._instance_selector is None:
+            return None
+        instance_id = self._instance_selector.currentData()
+        return self._instances.get(str(instance_id)) if instance_id else None
+
+    def _same_scope_instance_count(self, instance: ProductInstance) -> int:
+        return sum(
+            other.host_id == instance.host_id and other.scope == instance.scope
+            for other in self._instances.values()
+        )
+
+    def _populate_instance_selector(self) -> None:
+        selector = self._instance_selector
+        if selector is None:
+            return
+        selector.blockSignals(True)
+        selector.clear()
+        if len(self._instances) > 1:
+            selector.addItem("Selecione uma instância…", "")
+            for instance in sorted(
+                self._instances.values(), key=lambda item: (item.host_id, item.scope, item.instance_id),
+            ):
+                label = f"{instance.host_id} · {instance.scope}"
+                if self._same_scope_instance_count(instance) > 1:
+                    label += f" · {instance.instance_id}"
+                selector.addItem(label, instance.instance_id)
+            selector.setCurrentIndex(0)
+            selector.show()
+        else:
+            selector.hide()
+        selector.blockSignals(False)
+
+    def _selected_instance_changed(self, _index: int) -> None:
+        self._render_status()
+        self._render_detail_actions()
+
+    def _selected_context_is_actionable(self) -> bool:
+        if not self._instances:
+            return True
+        instance = self._selected_instance()
+        return bool(
+            instance is not None
+            and instance.host_id == "local"
+            and self._same_scope_instance_count(instance) == 1
+        )
+
+    def _action_matches_selected_instance(self, action: ActionSpec) -> bool:
+        if not self._instances:
+            return True
+        instance = self._selected_instance()
+        target = self._targets.get(action.id)
+        return bool(
+            self._selected_context_is_actionable()
+            and instance is not None and target is not None
+            and target.instance_scope == instance.scope
+        )
 
     def _manifest_action(self, action_id: str) -> dict[str, object]:
         return next((row for row in self.manifest["actions"] if row.get("actionId") == action_id), {})
@@ -452,8 +558,9 @@ class ProductRegistryPage(BasePage):
         actions = [self.by_id[item] for item in product.get("actionIds", []) if item in self.by_id]
         if state == "prepare":
             authority_ids = set(product.get("installationAuthorityIds", []))
-            return next((action for action in actions if self._manifest_action(action.id).get(
-                "installationAuthorityId") in authority_ids and action.mutable), None)
+            return next((action for action in actions if self._action_matches_selected_instance(action)
+                         and self._manifest_action(action.id).get(
+                             "installationAuthorityId") in authority_ids and action.mutable), None)
         terms = {
             "configure": {"configure", "setup"},
             # Resolver may run a read-only diagnostic automatically. Mutable
@@ -466,9 +573,10 @@ class ProductRegistryPage(BasePage):
         if state == "resolve":
             recovery_id = _RECOVERY_ACTION_BY_APP.get(self._selected_app_id, "")
             recovery = self.by_id.get(recovery_id)
-            instance = next(iter(self._instances.values()), None)
+            instance = self._selected_instance()
             if (
                 recovery is not None and recovery_id in product.get("actionIds", [])
+                and self._action_matches_selected_instance(recovery)
                 and instance is not None and instance.origin == "phasezero"
             ):
                 authority_id = self._manifest_action(recovery_id).get("installationAuthorityId")
@@ -477,7 +585,8 @@ class ProductRegistryPage(BasePage):
                         recovery,
                         impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),
                     )
-        return next((action for action in actions if (state != "resolve" or not action.mutable) and any(
+        return next((action for action in actions if self._action_matches_selected_instance(action)
+                     and (state != "resolve" or not action.mutable) and any(
             term in action.id.casefold().replace("-", ".").split(".")
             or term in action.args for term in terms
         ) and action.id != self._status_action_id), None)
@@ -500,7 +609,14 @@ class ProductRegistryPage(BasePage):
     def _render_primary_action(self) -> None:
         if self._primary_button is None:
             return
-        instance = next(iter(self._instances.values()), None)
+        instance = self._selected_instance()
+        if len(self._instances) > 1 and instance is None:
+            self._primary_button.setText("Selecionar instância")
+            self._primary_action = None
+            self._primary_desktop_entry = ""
+            self._primary_button.setEnabled(False)
+            self._primary_button.setToolTip("Escolha qual instância do aplicativo este detalhe representa.")
+            return
         state = instance.next_action if instance is not None else "verify"
         product = self._product_by_id[self._selected_app_id]
         labels = {"prepare": "Preparar", "configure": "Configurar",
@@ -509,12 +625,14 @@ class ProductRegistryPage(BasePage):
         self._primary_action = self._action_for_state(state) if state != "verify" else None
         self._primary_desktop_entry = (
             self._desktop_entry_for_product(product)
-            if state == "open" and self._primary_action is None else ""
+            if state == "open" and self._primary_action is None
+            and self._selected_context_is_actionable() else ""
         )
         enabled = (
             bool(self._status_action_id) if state == "verify" else
             self._primary_action is not None or bool(self._primary_desktop_entry)
         )
+        enabled = enabled and self._selected_context_is_actionable()
         self._primary_button.setEnabled(enabled)
         if state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
@@ -528,6 +646,8 @@ class ProductRegistryPage(BasePage):
     def _primary_clicked(self) -> None:
         if not self._selected_app_id:
             return
+        if not self._selected_context_is_actionable():
+            return
         if self._primary_action is not None:
             self.action_requested.emit(self._primary_action)
             return
@@ -537,11 +657,14 @@ class ProductRegistryPage(BasePage):
         product = self._product_by_id[self._selected_app_id]
         status_action = self._status_action(product)
         if status_action is not None:
-            self._status_action_id = status_action.id
+            instance = self._selected_instance()
+            selected_scope = instance.scope if instance is not None else self._status_scope
+            selected_host = instance.host_id if instance is not None else "local"
             target = self._targets.get(status_action.id)
-            self._status_scope = target.instance_scope if target is not None else "host"
+            self._status_scope = selected_scope or (target.instance_scope if target is not None else "host")
             self.status_loader.fetch_product_status(
-                status_action, app_id=self._selected_app_id, host_id="local", scope=self._status_scope,
+                status_action, app_id=self._selected_app_id, host_id=selected_host, scope=self._status_scope,
+                instance_key=instance.instance_id if instance is not None else "default",
             )
 
     def _instances_ready(self, action_id: str, instances: object) -> None:
@@ -550,21 +673,32 @@ class ProductRegistryPage(BasePage):
             return
         rows = tuple(item for item in instances if isinstance(item, ProductInstance)) if isinstance(instances, tuple) else ()
         self._instances = {item.instance_id: item for item in rows}
+        self._populate_instance_selector()
         self._render_status()
+        self._render_detail_actions()
 
     def _status_failed(self, action_id: str, _message: str) -> None:
         if action_id == self._status_action_id:
             self._instances.clear()
+            self._populate_instance_selector()
             self._status_label.setText("Status indisponível · instalação, configuração e saúde desconhecidas")
             self._render_primary_action()
+            self._render_detail_actions()
 
     def _render_status(self) -> None:
         if not self._instances:
             self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
             self._render_primary_action()
             return
-        instance = next(iter(self._instances.values()))
+        instance = self._selected_instance()
+        if instance is None:
+            self._status_label.setText(
+                f"{len(self._instances)} instâncias observadas · selecione uma para ver estado e ações."
+            )
+            self._render_primary_action()
+            return
         self._status_label.setText(
+            f"Instância: {instance.host_id} · escopo {instance.scope} · "
             f"Instalação: {instance.installation} · Origem: {instance.origin} · "
             f"Configuração: {instance.configuration} · Saúde: {instance.health} · "
             f"Ação: {instance.next_action}"
