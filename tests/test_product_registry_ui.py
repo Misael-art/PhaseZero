@@ -107,6 +107,24 @@ def test_registry_has_all_manifest_products_and_unknown_is_not_absent(qapp):
         status_patcher.stop()
 
 
+def test_product_search_indexes_purpose_synonyms(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page._filter_products("chat local")
+        assert not page._cards["app.ollama"].isHidden()
+        assert page._cards["app.vscode"].isHidden()
+
+        page._filter_products("programar")
+        assert not page._cards["app.vscode"].isHidden()
+        assert not page._cards["app.vscodium"].isHidden()
+        assert page._cards["app.ollama"].isHidden()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_comparison_only_enables_curated_functional_alternatives(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
@@ -184,6 +202,39 @@ def test_recovery_state_does_not_auto_select_restore(qapp):
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.ollama", "server.llm")
         assert page._action_for_state("resolve") is None
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_offline_ollama_uses_canonical_setup_as_confirmed_recovery(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.ollama")
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:host:app.ollama", "app.ollama", "local", "host",
+            installation="present", origin="phasezero", configuration="ready", health="offline",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == "ai.ollama"
+        assert page._primary_action.impact
+        assert "Nenhum modelo é baixado" in page._primary_action.impact
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.ollama"
+        assert start.call_args.kwargs["preview"] is True
+        assert page._primary_action.id != "server.llm.restore"
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "external:host:app.ollama", "app.ollama", "local", "host",
+            installation="present", origin="external", configuration="ready", health="offline",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
     finally:
         window.close()
         host_patcher.stop()

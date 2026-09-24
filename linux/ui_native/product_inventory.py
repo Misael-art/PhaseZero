@@ -72,6 +72,11 @@ _COMPARISON_CATEGORY_BY_APP = {
     "app.tailscale": "mesh-network",
     "app.zerotier": "mesh-network",
 }
+_PRODUCT_SEARCH_TERMS = {
+    "app.ollama": ("chat local", "modelos locais", "LLM local"),
+    "app.vscode": ("programar", "editor de código", "desenvolver software"),
+    "app.vscodium": ("programar", "editor de código", "desenvolver software"),
+}
 
 
 def _capability_target(capability_id: str) -> str:
@@ -274,6 +279,7 @@ def inventory_manifest(root: Path) -> dict[str, object]:
             primary_id = canonical_by_app.get(app_id) or product["actionIds"][0]
             product["description"] = action_by_id[primary_id].description
         product["comparisonCategory"] = _COMPARISON_CATEGORY_BY_APP.get(app_id)
+        product["searchTerms"] = list(_PRODUCT_SEARCH_TERMS.get(app_id, ()))
         product["canonicalActionId"] = canonical_by_app.get(app_id)
         product["installationAuthorityIds"] = sorted({
             authority_by_action[action_id]

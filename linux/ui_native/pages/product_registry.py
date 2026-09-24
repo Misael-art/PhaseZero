@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -22,6 +23,14 @@ from ..models import ActionSpec, ProductInstance
 from ..product_inventory import inventory_manifest, target_for
 from ..widgets import ActionListRow, AdvancedActionsPanel, SectionHeader
 from .base import BasePage
+
+
+_RECOVERY_ACTION_BY_APP = {
+    # The canonical setup route is idempotent and previews through AI status;
+    # the legacy server restore route changes exposure defaults and is unsafe
+    # as an implicit recovery action.
+    "app.ollama": "ai.ollama",
+}
 
 
 class ProductRegistryPage(BasePage):
@@ -224,7 +233,10 @@ class ProductRegistryPage(BasePage):
     def _filter_products(self, text: str) -> None:
         query = text.strip().casefold()
         for app_id, product in self._product_by_id.items():
+            aliases = product.get("searchTerms", [])
             fields = [str(product.get("name", "")), app_id]
+            if isinstance(aliases, list):
+                fields.extend(str(alias) for alias in aliases)
             fields.extend(
                 self.by_id[action_id].searchable_text
                 for action_id in product.get("actionIds", [])
@@ -436,6 +448,23 @@ class ProductRegistryPage(BasePage):
             "resolve": {"doctor", "repair", "start"},
             "open": {"open", "launch"},
         }.get(state, set())
+        if state == "resolve":
+            recovery_id = _RECOVERY_ACTION_BY_APP.get(self._selected_app_id, "")
+            recovery = self.by_id.get(recovery_id)
+            instance = next(iter(self._instances.values()), None)
+            if (
+                recovery is not None and recovery_id in product.get("actionIds", [])
+                and instance is not None and instance.origin == "phasezero"
+            ):
+                authority_id = self._manifest_action(recovery_id).get("installationAuthorityId")
+                if recovery.mutable and authority_id in product.get("installationAuthorityIds", []):
+                    return replace(
+                        recovery,
+                        impact=(
+                            "Ativa ou inicia o serviço Ollama gerenciado; se o pacote estiver ausente, "
+                            "a rotina também pode instalá-lo. Nenhum modelo é baixado."
+                        ),
+                    )
         return next((action for action in actions if any(
             term in action.id.casefold().replace("-", ".").split(".")
             or term in action.args for term in terms
