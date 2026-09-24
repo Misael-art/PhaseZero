@@ -129,6 +129,60 @@ class ActionSpec:
         return "info"
 
 
+@dataclass(frozen=True)
+class ProductInstance:
+    """One observed installation or service, never an installation instruction.
+
+    ``origin=unknown`` is required for package probes that cannot distinguish
+    PhaseZero-owned files from software installed outside PhaseZero.
+    """
+
+    instance_id: str
+    app_id: str
+    host_id: str
+    scope: str
+    manager: str = "unknown"
+    version: str = ""
+    installation: str = "unknown"  # present | absent | unknown
+    origin: str = "unknown"  # phasezero | external | unknown
+    configuration: str = "unknown"  # ready | needed | unknown
+    health: str = "unknown"  # online | offline | failed | unknown
+    observed_at: str = ""
+    details: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.instance_id or not self.app_id.startswith("app.") or not self.host_id:
+            raise ValueError("product instance needs stable ID, app ID and host ID")
+        if self.installation not in {"present", "absent", "unknown"}:
+            raise ValueError("invalid installation state")
+        if self.origin not in {"phasezero", "external", "unknown"}:
+            raise ValueError("invalid installation origin")
+        if self.configuration not in {"ready", "needed", "unknown"}:
+            raise ValueError("invalid configuration state")
+        if self.health not in {"online", "offline", "failed", "unknown"}:
+            raise ValueError("invalid health state")
+        if self.origin == "external" and self.installation != "present":
+            raise ValueError("external installation must be present")
+
+    @property
+    def next_action(self) -> str:
+        if self.installation == "absent":
+            return "prepare"
+        if self.installation == "unknown":
+            return "verify"
+        if self.configuration == "needed":
+            return "configure"
+        if self.configuration == "unknown" or self.health == "unknown":
+            return "verify"
+        if self.health in {"offline", "failed"}:
+            return "resolve"
+        return "open"
+
+    @property
+    def ready(self) -> bool:
+        return self.next_action == "open"
+
+
 @dataclass
 class OperationResult:
     action_id: str
