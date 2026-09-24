@@ -90,8 +90,9 @@ def test_development_python_recipe_preserves_os_runtime_copy(qapp):
     ("objective_index", "profile_id", "app_id"),
     (
         (2, "development-rust", "app.rust"),
-        (3, "development-java", "app.maven"),
-        (4, "development-dotnet", "app.dotnet"),
+        (3, "development-c-cpp", "app.cpp"),
+        (4, "development-java", "app.maven"),
+        (5, "development-dotnet", "app.dotnet"),
     ),
 )
 def test_development_objectives_create_profile_plan_and_open_canonical_detail(

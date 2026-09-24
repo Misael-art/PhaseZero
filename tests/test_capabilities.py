@@ -161,6 +161,23 @@ def test_native_source_selection_is_multi_distro(family, distro, expected):
     assert source.name == expected
 
 
+@pytest.mark.parametrize(
+    ("family", "distro", "expected"),
+    (
+        ("arch", "arch", "gcc"),
+        ("debian", "debian", "g++"),
+        ("fedora", "fedora", "gcc-c++"),
+        ("suse", "opensuse-tumbleweed", "gcc-c++"),
+    ),
+)
+def test_c_cpp_compiler_uses_native_distro_package(family, distro, expected):
+    facts = host(package_family=family, distro=distro, flatpak=False, flathub=False)
+    source = source_for(BY_ID["development.cpp"], facts)
+    assert source is not None
+    assert source.kind == "package"
+    assert source.name == expected
+
+
 def test_immutable_host_falls_back_to_flatpak_where_available():
     facts = host(
         distro="bazzite", distro_like=("fedora",), package_family="rpm-ostree",
@@ -228,6 +245,7 @@ def test_web_js_recipe_has_no_ai_or_remote_service_dependencies(private_state):
 @pytest.mark.parametrize(
     ("profile_id", "expected_packages"),
     (
+        ("development-c-cpp", {"gcc"}),
         ("development-rust", {"rust"}),
         ("development-java", {"jdk-openjdk", "maven"}),
         ("development-dotnet", {"dotnet-sdk"}),

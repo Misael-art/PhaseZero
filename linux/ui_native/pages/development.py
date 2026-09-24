@@ -22,6 +22,8 @@ _OBJECTIVES = (
      "Instala pyenv para versões isoladas; não altera o Python do sistema."),
     ("Rust", "development-rust", "app.rust",
      "Instala Rust e Cargo pelo gerenciador de pacotes do sistema."),
+    ("C/C++", "development-c-cpp", "app.cpp",
+     "Instala o compilador GCC para C e C++ pelo gerenciador do sistema."),
     ("Java e JVM", "development-java", "app.maven",
      "Instala Maven e seu requisito OpenJDK. Não altera configuração de projetos existentes."),
     (".NET", "development-dotnet", "app.dotnet",

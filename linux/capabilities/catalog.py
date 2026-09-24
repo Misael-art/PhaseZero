@@ -129,6 +129,7 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
     _c("development.kind", "Kind", "Clusters Kubernetes locais em containers.", "development", packages={"arch": "kind", "debian": "kind", "fedora": "kind"}, requires=("development.docker",)),
     _c("development.nodejs", "Node.js", "Runtime JavaScript para projetos web e ferramentas de desenvolvimento.", "development", packages={"arch": "nodejs", "debian": "nodejs", "fedora": "nodejs", "suse": "nodejs"}, keywords=("javascript", "typescript", "web", "js", "ts")),
     _c("development.rust", "Rust", "Compilador rustc e gerenciador Cargo para projetos Rust.", "development", packages={"arch": "rust", "debian": "cargo", "fedora": "cargo", "suse": "rust"}, keywords=("rustc", "cargo", "rust-lang")),
+    _c("development.cpp", "Compilador C/C++", "Toolchain GCC para compilar projetos C e C++.", "development", packages={"arch": "gcc", "debian": "g++", "fedora": "gcc-c++", "suse": "gcc-c++"}, keywords=("c", "c++", "cpp", "gcc", "g++")),
     _c("development.dotnet", ".NET SDK", "SDK moderno da plataforma .NET.", "development", packages={"arch": "dotnet-sdk", "debian": "dotnet-sdk-8.0", "fedora": "dotnet-sdk-8.0", "suse": "dotnet-sdk-8.0"}),
     _c("development.jdk", "OpenJDK", "JDK livre para Java e ferramentas JVM.", "development", packages={"arch": "jdk-openjdk", "debian": "default-jdk", "fedora": "java-latest-openjdk-devel", "suse": "java-devel"}),
     _c("development.maven", "Maven", "Build e dependências Java.", "development", packages={"arch": "maven", "debian": "maven", "fedora": "maven", "suse": "maven"}, requires=("development.jdk",)),
@@ -176,6 +177,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "development-web-js": ("development.nodejs", "development.pnpm"),
     "development-python": ("development.pyenv",),
     "development-rust": ("development.rust",),
+    "development-c-cpp": ("development.cpp",),
     "development-java": ("development.maven",),
     "development-dotnet": ("development.dotnet",),
     "gaming-core": ("gaming.gamescope", "gaming.gamemode", "gaming.mangohud", "gaming.goverlay", "gaming.protonplus", "gaming.protontricks"),
@@ -202,7 +204,8 @@ PROFILES["full-workstation"] = tuple(
 # ("creative", "administration", "education", "full-workstation") ficam de fora:
 # pertencer a eles não é recomendação, é só existir no catálogo.
 CURATED_PROFILES = (
-    "development-web-js", "development-python", "development-rust", "development-java",
+    "development-web-js", "development-python", "development-rust",
+    "development-c-cpp", "development-java",
     "development-dotnet",
     "gaming-core", "game-streaming", "hardware-tools",
     "system-health", "developer", "security", "backup",
