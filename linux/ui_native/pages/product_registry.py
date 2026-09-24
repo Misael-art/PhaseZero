@@ -30,6 +30,17 @@ _RECOVERY_ACTION_BY_APP = {
     # the legacy server restore route changes exposure defaults and is unsafe
     # as an implicit recovery action.
     "app.ollama": "ai.ollama",
+    "app.opencode": "ai.opencode-install",
+}
+_RECOVERY_IMPACT_BY_APP = {
+    "app.ollama": (
+        "Ativa ou inicia o serviço Ollama gerenciado; se o pacote estiver ausente, "
+        "a rotina também pode instalá-lo. Nenhum modelo é baixado."
+    ),
+    "app.opencode": (
+        "Sincroniza OpenCode e mescla a rota local 9Router com rollback; pode instalar "
+        "ou atualizar a CLI. Não inicia login nem importa credenciais."
+    ),
 }
 
 
@@ -460,10 +471,7 @@ class ProductRegistryPage(BasePage):
                 if recovery.mutable and authority_id in product.get("installationAuthorityIds", []):
                     return replace(
                         recovery,
-                        impact=(
-                            "Ativa ou inicia o serviço Ollama gerenciado; se o pacote estiver ausente, "
-                            "a rotina também pode instalá-lo. Nenhum modelo é baixado."
-                        ),
+                        impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),
                     )
         return next((action for action in actions if any(
             term in action.id.casefold().replace("-", ".").split(".")
