@@ -1271,22 +1271,15 @@ def child_env(client: R9Client) -> dict:
 def run_client(client: R9Client, config: Config, task: str, client_name: str, args: list[str]) -> int:
     if client_name not in CLIENTS:
         raise RedactionError(f"unknown client '{client_name}' (expected {', '.join(CLIENTS)})")
-    inventory = build_inventory(client, refresh_quota=True)
-    reco = recommend(client, config, inventory, task, "balanced")
-    chain = recommendation_chain(reco)
-    if not chain:
-        raise RedactionError("no eligible model; cannot start session")
-    top = chain[0]
-    # Recompute route before session: ensure phasezero-<task> combo matches plan.
-    apply_plan(client, config, task, "balanced", dry_run=False, assume_yes=True)
-
-    env = child_env(client)
-    if client_name == "claude":
-        cmd = [shutil.which("claude") or "claude", "--model", top]
-    else:
-        cmd = [shutil.which("opencode") or "opencode", "run", "--model", top]
-    cmd += list(args)
-    return subprocess.call(cmd, env=env)
+    # 9Router combos and model IDs cannot pin one consumer to one connection.
+    # Launching a client here could therefore use another account or fall back
+    # to a paid provider even when a grant exists. Keep generic route management
+    # available, but fail closed for consumer session launch until upstream
+    # exposes an enforceable account-bound selection mechanism.
+    raise RedactionError(
+        "consumer session launch is disabled: 9Router cannot enforce a connection grant; "
+        "no client process was started"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1577,7 +1570,7 @@ def main(argv: list[str] | None = None) -> int:
     p_apply.add_argument("--chain", help="comma-separated model ids overriding the recommendation order")
     p_apply.set_defaults(func=cmd_apply)
 
-    p_run = sub.add_parser("run", help="Recompute route, materialize combo, launch client")
+    p_run = sub.add_parser("run", help="Blocked until consumer-scoped connection grants are enforceable")
     p_run.add_argument("task", choices=TASKS)
     p_run.add_argument("--client", choices=CLIENTS, required=True)
     p_run.add_argument("--", dest="args", nargs=argparse.REMAINDER, default=[])

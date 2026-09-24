@@ -396,6 +396,21 @@ def test_consumer_grants_filter_routes_and_never_fallback(fake, config):
     assert all(model_id.startswith("cx/") for model_id in chain)
 
 
+@pytest.mark.parametrize("client_name", ("claude", "opencode"))
+def test_client_launch_fails_closed_until_router_can_enforce_connection_grants(
+    client_name, config, monkeypatch, capsys,
+):
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("blocked launch must not inspect providers or start a process")
+
+    monkeypatch.setattr(rm.Config, "load", lambda **_kwargs: config)
+    monkeypatch.setattr(rm, "R9Client", object)
+    monkeypatch.setattr(rm, "build_inventory", unexpected)
+    monkeypatch.setattr(rm.subprocess, "call", unexpected)
+    assert rm.main(["run", "code", "--client", client_name]) == 1
+    assert "cannot enforce a connection grant" in capsys.readouterr().err
+
+
 def test_save_quota_requires_known_quota(fake, config):
     _fake, base = fake
     inv = _fresh_inventory(_client_for(fake, base))
