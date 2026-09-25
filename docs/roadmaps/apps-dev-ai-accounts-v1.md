@@ -617,3 +617,21 @@ e imagem temporária `pxa-g2-arch:20260925` foram removidos; imagem base Arch pr
 foi preservada. Build efêmero teve aviso de assinatura do hook `archlinux-keyring` sem chave
 privada, não tratado como prova. Nenhum pacote/serviço do host foi alterado. PXA-004 G2
 segue pendente para VM/snapshot Arch real e Windows descartável.
+
+PXA-004 sondagem adicional em QEMU/KVM: iniciei Arch Linux 2026.09.01 em live ISO,
+`systemd-detect-virt --vm` retornou `kvm`, `--container` retornou `none`, rede ficou
+desligada e o rootfs fonte foi exportado read-only. SHA-256 do ISO conferido contra a
+[página oficial de download](https://archlinux.org/download/):
+`be8458032f8105e60ee2a3067f950b6e3c007ee51b38dac50e8b48e765561c91`. O primeiro plano
+ficou sem fonte até copiar, só dentro do guest efêmero, os índices e pacotes Arch já
+disponíveis no cache local. Depois, `development-web-js` gerou plano `ready`; apply
+passou após `pacman-key --init` e `pacman-key --populate archlinux`, sem desativar
+verificação de assinatura. Node.js `v26.10.0` e pnpm `11.26.0` executaram. Remoção
+PhaseZero de pnpm concluiu; `verify-removal` confirmou Node.js e pnpm ausentes após a
+limpeza do guest. Limite observado: remover Node.js isolado com `pacman -R` falha enquanto
+`node-gyp`, `nodejs-nopt` e `semver` ainda dependem dele; a limpeza efêmera removeu esses
+quatro alvos juntos. Ciclo completo de reativação e remoção pelo fluxo PhaseZero não foi
+comprovado nesta tentativa. Esta live ISO sem disco persistente não é snapshot limpo; G2
+Arch/Windows continua pendente. QEMU foi encerrado; imagem ISO e saídas temporárias foram
+apagadas. Sobrou somente `/tmp/pxa-g2-arch-vm-f17f889/rootfs/etc/ca-certificates`,
+root-owned; a ponte `phasezero-admin` recusou `rm -rf` deste caminho como não autorizado.
