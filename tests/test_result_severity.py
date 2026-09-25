@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from linux.ui_native.result_parser import (
-    is_pending_report, restart_required, severity_for,
+    is_failure_report, is_pending_report, restart_required, severity_for,
 )
 
 
@@ -40,6 +40,22 @@ def test_requires_restart_is_not_a_failure():
 
 def test_ok_false_mutable_is_error():
     assert severity_for({"ok": False}, 0, mutable=True) == "error"
+
+
+@pytest.mark.parametrize("status", ["failed", "failure", "error", "blocked", "manualAction"])
+def test_zero_exit_structured_failure_is_not_success(status):
+    from linux.ui_native.models import OperationResult
+
+    payload = {"kind": "operation", "status": status}
+    result = OperationResult(
+        action_id="capability.profile.development-web-js", command=["pz"],
+        preview=False, exit_code=0, started_at="", finished_at="",
+        stdout="", stderr="", parsed=payload,
+    )
+
+    assert is_failure_report(payload) is True
+    assert result.ok is False
+    assert severity_for(payload, 0) == "error"
 
 
 def test_result_dialog_titles_restart(qapp_offscreen=None):

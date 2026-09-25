@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .result_parser import is_failure_report
+
 
 @dataclass(frozen=True)
 class ActionParameter:
@@ -232,6 +234,8 @@ class OperationResult:
         if self.exit_code != 0:
             return False
         if isinstance(self.parsed, dict) and self.parsed.get("ok") is False:
+            return False
+        if is_failure_report(self.parsed):
             return False
         return True
 

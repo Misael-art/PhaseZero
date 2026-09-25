@@ -53,8 +53,15 @@ _RESUMABLE_STATUSES = {
 # resumable junto não transforma falha em "pendente".
 _FAILURE_STATES = {
     "error", "failed", "failure", "fail", "blocked", "timeout", "timed-out",
-    "unhealthy", "crashed", "aborted",
+    "unhealthy", "crashed", "aborted", "manualaction",
 }
+
+
+def is_failure_report(value: Any) -> bool:
+    """Whether a structured result's top-level status is a failure."""
+    if not isinstance(value, dict):
+        return False
+    return str(value.get("status", "")).strip().casefold() in _FAILURE_STATES
 
 
 def restart_required(value: Any) -> bool:
@@ -122,9 +129,9 @@ def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output
         return "success"
     if restart_required(value):
         return "warning"
-    status = str(value.get("status", "")).casefold()
-    if status in {"failed", "error", "blocked", "manualaction"}:
+    if is_failure_report(value):
         return "error"
+    status = str(value.get("status", "")).casefold()
     if status in {
         "warn", "warning", "degraded", "needsinstall", "needsrepair",
         "needs-login", "needslogin", "needs-credentials", "needscredentials",
