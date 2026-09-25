@@ -1208,3 +1208,39 @@ sem fallback para `.desktop`. `bash -n`, ShellCheck nos três scripts tocados e
 `git diff --check` passaram. Nenhuma conta, chave, serviço ou inferência real foi
 consultada. URLs locais diretas e containers já ativos continuam fora do manager;
 enforcement por requisição, cota observável real e PXA-006/G3 permanecem pendentes.
+
+PXA-003/PXA-008 Hermes sem grant por requisição (`43a9f28`, 2026-09-25): a
+[documentação oficial de providers Hermes](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/integrations/providers.md)
+lista OAuth Codex/ChatGPT, múltiplos provedores por API key e custom endpoints.
+Fixar o cliente ao endpoint 9Router não prova qual conexão ou conta atende cada
+request.
+
+`setup-hermes.sh` status/doctor mantém leitura; setup/install/configure/MCP/portal/
+gateway retornam `connection-grant-not-enforceable` (exit 69) antes de download,
+configuração, autenticação, launcher ou serviço. Status separa
+`configurationReady`/saúde observada de `ready:false` e `usageBlocked:true`.
+Mutação de rota/provider, live inference probe e watch também bloqueados nos dois
+managers Hermes/9Router. `auth-registry`, catálogo, Contas, Proxies e detalhe de
+produto mostram uso bloqueado; seletor setup genérico não oferece Hermes. Atalho
+remoto propaga o gate local antes de invocar portal. `ai setup all` registra skip,
+continua itens posteriores e retorna 69 parcial.
+
+Provas G1: `tests/linux-hermes-grant-gate.sh` passou; cobre caminhos CLI e managers,
+confirma nenhuma chamada de `curl`, Hermes, `uv` ou systemd nos bloqueios e testa
+`ai setup all` em root sombreado descartável. `tests/linux-ai-hermes-empty-config.sh`,
+`tests/linux-ai-hermes-durable-config.sh` e `tests/linux-agent-workspaces.sh`
+passaram. Pytest focal (`test_auth_registry.py`, `test_product_inventory.py`,
+`test_proxies_page_integrates_hermes_and_safe_odysseus_plan` e
+`test_hermes_detail_uses_local_status_and_read_only_recovery`): 21 passaram em
+2,69 s, exit 0. `bash -n`, ShellCheck sem `-x` e `git diff --check` passaram. Uma
+regressão mais ampla imprimiu 86 passes, mas o processo continuou ativo após o
+resumo; não usada como evidência limpa. ShellCheck com `-x` excedeu 78 s sem saída;
+checagem sem expansão terminou normalmente.
+
+Nenhuma conta/chave real, endpoint upstream ou API de inferência foi usada; nenhum
+pacote ou serviço Hermes real foi instalado, alterado, iniciado ou parado.
+Launchers/desktops e gateways Hermes já existentes
+podem ser chamados diretamente fora destes managers e continuam fora do enforcement;
+nenhum foi removido ou parado nesta etapa. PXA-003/PXA-008 permanecem
+`in_progress`; enforcement por request, fallback, cliente/serviço já ativo,
+Windows, Secret Service real e PXA-006/G3 ainda pendem. Fixtures não fecham G3.
