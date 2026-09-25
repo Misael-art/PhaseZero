@@ -112,6 +112,33 @@ def test_global_deadline_keeps_partial_result_and_cancels_late_probe():
     assert cancelled
 
 
+def test_global_deadline_does_not_wait_for_probe_that_delays_cancellation():
+    async def scenario():
+        release = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+
+        async def slow_to_cancel():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                await release.wait()
+                raise
+
+        task = asyncio.create_task(collect_evidence(
+            {"slow": slow_to_cancel}, deadline_s=0.01,
+        ))
+        done, _pending = await asyncio.wait({task}, timeout=0.05)
+        release.set()
+        result = await task
+        return task in done, cancellation_seen.is_set(), result
+
+    returned_before_release, cancelled, result = asyncio.run(scenario())
+    assert returned_before_release
+    assert cancelled
+    assert result["slow"].error == "timeout"
+
+
 def test_claude_adapter_keeps_credential_unknown_and_session_explicit():
     found = claude_code_account({"auth": {"loggedIn": True, "apiProvider": "firstParty"}})
     assert found is not None

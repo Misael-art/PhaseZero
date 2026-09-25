@@ -166,6 +166,15 @@ def redacted_summary(connections: tuple[Connection, ...]) -> dict[str, object]:
 Probe = Callable[[], Awaitable[Evidence]]
 
 
+def _consume_probe_completion(task: asyncio.Task[Evidence]) -> None:
+    """Retrieve late task exceptions after the bounded collector has returned."""
+    if not task.cancelled():
+        try:
+            task.exception()
+        except Exception:
+            pass
+
+
 async def collect_evidence(probes: dict[str, Probe], *, deadline_s: float = 10.0) -> dict[str, Evidence]:
     """Bound aggregate latency; late probes never overwrite a newer selection.
 
@@ -194,10 +203,13 @@ async def collect_evidence(probes: dict[str, Probe], *, deadline_s: float = 10.0
         for task in pending:
             task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            # Give cooperative probes one loop turn to stop. Never await them
+            # without a bound: a probe may delay or suppress cancellation.
+            await asyncio.sleep(0)
         return {key: (task.result() if task in done and not task.cancelled() else Evidence(error="timeout"))
                 for key, task in tasks.items()}
     finally:
         for task in tasks.values():
             if not task.done():
                 task.cancel()
+                task.add_done_callback(_consume_probe_completion)
