@@ -11,7 +11,7 @@ import asyncio
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 
@@ -47,6 +47,19 @@ class Evidence:
                     raise ValueError(f"invalid evidence {name}: timezone required")
         if self.error in {"timeout", "backend-unavailable", "network", "unknown"} and self.state != "unknown":
             raise ValueError("probe failure cannot prove a negative state")
+
+    @property
+    def is_expired(self) -> bool:
+        if self.error == "expired":
+            return True
+        if not self.expires_at:
+            return False
+        expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+        return expires.astimezone(timezone.utc) <= datetime.now(timezone.utc)
+
+    @property
+    def effective_state(self) -> str:
+        return "no" if self.is_expired else self.state
 
 
 @dataclass(frozen=True)
@@ -131,9 +144,10 @@ class Connection:
 
     @property
     def usable(self) -> bool:
-        return (self.enabled and self.credential.state == "yes"
-                and self.session.state == "yes" and self.service.state == "yes"
-                and self.access.state == "yes"
+        return (self.enabled and self.credential.effective_state == "yes"
+                and self.session.effective_state == "yes"
+                and self.service.effective_state == "yes"
+                and self.access.effective_state == "yes"
                 and (self.quota is None or self.quota.remaining is None or self.quota.remaining > 0))
 
 

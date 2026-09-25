@@ -13,6 +13,8 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRad
 ROOT = Path(__file__).resolve().parents[1]
 
 from linux.ai.account_adapters import router_provider_accounts
+from linux.ai.account_contract import Connection, Evidence
+from linux.ui_native.pages.accounts import AccountsPage
 
 
 @pytest.fixture(scope="module")
@@ -122,6 +124,17 @@ def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_p
     finally:
         window.close()
         host_patcher.stop()
+
+
+def test_account_screen_labels_expired_evidence_explicitly():
+    positive = Evidence("yes", "fixture")
+    expired = Evidence("no", "fixture", error="expired")
+    connection = Connection(
+        "conn", "account", "adapter", "local", True,
+        credential=positive, session=expired, service=positive, access=positive,
+    )
+
+    assert "sessão expirada" in AccountsPage._connection_state(connection)
 
 
 def test_hidden_ai_dev_page_probes_only_when_opened(qapp):

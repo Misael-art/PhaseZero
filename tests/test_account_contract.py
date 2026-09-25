@@ -33,6 +33,25 @@ def test_credential_session_service_and_quota_are_independent():
         Evidence("no", error="timeout")
 
 
+def test_expired_positive_evidence_cannot_make_connection_usable():
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    expired_at = now.replace(year=2000).isoformat()
+    future_at = now.replace(year=2999).isoformat()
+    positive = Evidence("yes", "provider-check", expires_at=future_at)
+    expired = Evidence("yes", "provider-check", expires_at=expired_at)
+    connection = Connection(
+        "c-expired", "a-expired", "adapter", "local", True,
+        credential=positive, session=expired, service=positive, access=positive,
+    )
+
+    assert positive.effective_state == "yes"
+    assert expired.is_expired
+    assert expired.effective_state == "no"
+    assert not connection.usable
+
+
 def test_evidence_timestamps_require_iso_timezone():
     evidence = Evidence(
         "yes", "provider-check", "2026-09-25T06:00:00Z",

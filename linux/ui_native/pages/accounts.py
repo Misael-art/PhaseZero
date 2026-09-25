@@ -328,11 +328,14 @@ class AccountsPage(BasePage):
 
     @staticmethod
     def _connection_state(connection: Connection) -> str:
+        def status(evidence: Evidence) -> str:
+            return "expirada" if evidence.is_expired else evidence.state
+
         return " · ".join((
-            f"credencial {connection.credential.state}",
-            f"sessão {connection.session.state}",
-            f"serviço {connection.service.state}",
-            f"acesso {connection.access.state}",
+            f"credencial {status(connection.credential)}",
+            f"sessão {status(connection.session)}",
+            f"serviço {status(connection.service)}",
+            f"acesso {status(connection.access)}",
         ))
 
     def block_while_running(self, running: bool) -> None:
