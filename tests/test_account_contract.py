@@ -52,6 +52,21 @@ def test_expired_positive_evidence_cannot_make_connection_usable():
     assert not connection.usable
 
 
+def test_local_quota_estimate_does_not_block_connection_but_official_zero_does():
+    positive = Evidence("yes", "provider-check")
+    base = Connection(
+        "connection", "account", "adapter", "local", True,
+        credential=positive, session=positive, service=positive, access=positive,
+    )
+    local_zero = Quota("requests", "requests", remaining=0, source="local_estimate")
+    official_zero = Quota("requests", "requests", remaining=0, source="official")
+    official_unknown = Quota("requests", "requests", source="official")
+
+    assert Connection(**{**base.__dict__, "quota": local_zero}).usable
+    assert not Connection(**{**base.__dict__, "quota": official_zero}).usable
+    assert Connection(**{**base.__dict__, "quota": official_unknown}).usable
+
+
 def test_evidence_timestamps_require_iso_timezone():
     evidence = Evidence(
         "yes", "provider-check", "2026-09-25T06:00:00Z",

@@ -144,11 +144,19 @@ class Connection:
 
     @property
     def usable(self) -> bool:
-        return (self.enabled and self.credential.effective_state == "yes"
-                and self.session.effective_state == "yes"
-                and self.service.effective_state == "yes"
-                and self.access.effective_state == "yes"
-                and (self.quota is None or self.quota.remaining is None or self.quota.remaining > 0))
+        evidence_ready = (
+            self.enabled
+            and self.credential.effective_state == "yes"
+            and self.session.effective_state == "yes"
+            and self.service.effective_state == "yes"
+            and self.access.effective_state == "yes"
+        )
+        quota_exhausted = (
+            self.quota is not None
+            and self.quota.source == "official"
+            and self.quota.remaining == 0
+        )
+        return evidence_ready and not quota_exhausted
 
 
 @dataclass(frozen=True)
