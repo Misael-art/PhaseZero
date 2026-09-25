@@ -322,12 +322,11 @@ def _load_opencode_manager():
 
 
 def refresh_opencode_catalog(client: R9Client, backup_dir: Path | None = None) -> dict:
-    """Refresh provider.9router.models in opencode.json so every 9Router combo
-    (incl. phasezero-*) is selectable. No-op when opencode is absent.
+    """Ask the OpenCode manager to sync; preserve config if grant binding blocks it.
 
-    When ``backup_dir`` is given and the catalog actually changes, the previous
-    opencode.json bytes are written there for byte-level rollback; the path is
-    returned as ``beforeBackup`` (JSON-serializable). Failure is non-fatal.
+    When the manager updates a catalog, ``backup_dir`` stores prior bytes for
+    rollback. Grant enforcement failures remain explicit and non-fatal to the
+    independent 9Router combo operation.
     """
     path = opencode_config_path()
     result: dict = {
@@ -363,7 +362,11 @@ def refresh_opencode_catalog(client: R9Client, backup_dir: Path | None = None) -
             result["beforeBackup"] = str(backup)
     except Exception as exc:  # catalog sync must never abort an apply
         result["skipped"] = True
-        result["reason"] = "sync failed"
+        if "connection-grant-not-enforceable" in str(exc):
+            result["reason"] = "OpenCode sync blocked until account-bound grants are enforceable"
+            result["blockedReason"] = "connection-grant-not-enforceable"
+        else:
+            result["reason"] = "sync failed"
         result["error"] = str(exc) if not str(exc) else "sync error"
     return result
 

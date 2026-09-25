@@ -40,7 +40,7 @@ _RECOVERY_ACTION_BY_APP = {
 
 # These managed-session routes remain unavailable until a supported account
 # adapter can bind the selected connection to an enforceable consumer grant.
-_ACCOUNT_GRANT_GATED_ACTIONS = frozenset({"ai.claude-bonsai-run"})
+_ACCOUNT_GRANT_GATED_ACTIONS = frozenset({"ai.claude-bonsai-run", "ai.opencode-install"})
 _PROXY_RECOVERY_AUTHORITY_BY_APP = {
     "app.kimiproxy": "linux/ai/proxy-suite.sh",
     "app.qwen-proxy": "linux/ai/proxy-suite.sh",
@@ -299,8 +299,8 @@ class ProductRegistryPage(BasePage):
         self._account_grant_notice.setObjectName("accountGrantNotice")
         self._account_grant_notice.setWordWrap(True)
         self._account_grant_notice.setText(
-            "Execução de sessões pelo PhaseZero bloqueada: falta grant vinculado à conta e à rota. "
-            "Login ou status online, sozinho, não libera essa ação."
+            "Execução gerenciada bloqueada: a rota não vincula cada requisição à conexão aprovada. "
+            "Login, status online ou grant registrado, isoladamente, não provam qual conta será usada."
         )
         self._account_grant_notice.hide()
         layout.addWidget(self._account_grant_notice)
@@ -455,7 +455,7 @@ class ProductRegistryPage(BasePage):
         self.status_loader.cancel_all()
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
-        self._account_grant_notice.setVisible(app_id == "app.claude-code")
+        self._account_grant_notice.setVisible(app_id in {"app.claude-code", "app.opencode"})
         self._instances.clear()
         self._instance_id_collision = False
         self._populate_instance_selector()
@@ -706,6 +706,7 @@ class ProductRegistryPage(BasePage):
         if state == "prepare":
             authority_ids = set(product.get("installationAuthorityIds", []))
             return next((action for action in actions if self._action_matches_selected_instance(action)
+                         and action.id not in _ACCOUNT_GRANT_GATED_ACTIONS
                          and self._manifest_action(action.id).get(
                              "installationAuthorityId") in authority_ids and action.mutable), None)
         if state == "configure":
@@ -714,7 +715,8 @@ class ProductRegistryPage(BasePage):
             instance = self._selected_instance()
             route = _PROXY_CONFIGURE_TARGET_BY_APP.get(self._selected_app_id)
             if (
-                configure is not None and route is not None and instance is not None
+                configure is not None and configure_id not in _ACCOUNT_GRANT_GATED_ACTIONS
+                and route is not None and instance is not None
                 and configure_id in product.get("actionIds", [])
                 and self._action_matches_selected_instance(configure)
                 and instance.origin == "phasezero"
@@ -757,7 +759,8 @@ class ProductRegistryPage(BasePage):
                 and recovery.args[3] == _PROXY_RECOVERY_TARGET_BY_APP.get(self._selected_app_id)
             )
             if (
-                recovery is not None and recovery_id in product.get("actionIds", [])
+                recovery is not None and recovery_id not in _ACCOUNT_GRANT_GATED_ACTIONS
+                and recovery_id in product.get("actionIds", [])
                 and self._action_matches_selected_instance(recovery)
                 and instance is not None and instance.origin == "phasezero"
             ):
@@ -768,7 +771,8 @@ class ProductRegistryPage(BasePage):
                         recovery,
                         impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),
                     )
-        return next((action for action in actions if self._action_matches_selected_instance(action)
+        return next((action for action in actions if action.id not in _ACCOUNT_GRANT_GATED_ACTIONS
+                     and self._action_matches_selected_instance(action)
                      and (state != "resolve" or not action.mutable) and any(
             term in action.id.casefold().replace("-", ".").split(".")
             or term in action.args for term in terms

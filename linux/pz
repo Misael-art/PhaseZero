@@ -177,9 +177,9 @@ Usage:
   pz ai ollama [--pull <m>]    Ollama install/config; model pulls broker-gated
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
   pz ai opencode status        Audit CLI/Desktop, canonical config and 9Router route
-  pz ai opencode install       Configure canonical loopback 9Router provider transactionally
-  pz ai opencode verify        Verify config, secret isolation and optional live prompt
-  pz ai opencode run --route=9router -- <args>  Run OpenCode with isolated 9Router route
+  pz ai opencode install       Blocked until 9Router can enforce account-bound grants
+  pz ai opencode verify        Read-only config check; live inference blocked without grant binding
+  pz ai opencode run --route=9router -- <args>  Blocked until account-bound grants are enforceable
   pz ai opencode rollback <manifest> Restore an OpenCode route transaction
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
   pz ai drift [status|sync [--dry-run]]  Compare installed runtime copies with the repo (exit 2 on drift)

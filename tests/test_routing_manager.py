@@ -688,7 +688,7 @@ def test_rollback_refuses_drift_without_force(fake, config):
     assert after["phasezero-code"] == ["stale-model"]
 
 
-def test_apply_propagates_combos_to_opencode_catalog(fake, config, sandbox, monkeypatch):
+def test_apply_blocks_opencode_catalog_sync_without_account_bound_grant(fake, config, sandbox, monkeypatch):
     _fake, base = fake
     client = _client_for(fake, base)
     # opencode.json present with stale model list
@@ -704,17 +704,18 @@ def test_apply_propagates_combos_to_opencode_catalog(fake, config, sandbox, monk
                    "phasezero-analysis", "phasezero-plan"]
     monkeypatch.setenv("PZ_OPENCODE_ROUTER_COMBOS_JSON", json.dumps({"combos": combo_names}))
 
+    before = opencode_path.read_bytes()
     result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
     catalog = result["opencodeCatalog"]
-    assert catalog["updated"] is True
-    assert set(catalog["models"]) == set(combo_names)
-    written = json.loads(opencode_path.read_text(encoding="utf-8"))
-    assert set(written["provider"]["9router"]["models"].keys()) == set(combo_names)
+    assert catalog["skipped"] is True
+    assert catalog["updated"] is False
+    assert catalog.get("blockedReason") == "connection-grant-not-enforceable", catalog
+    assert opencode_path.read_bytes() == before
     manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
-    assert manifest["opencodeCatalogBefore"]
+    assert manifest["opencodeCatalogBefore"] is None
 
 
-def test_rollback_restores_opencode_catalog_bytes(fake, config, sandbox, monkeypatch):
+def test_rollback_leaves_opencode_catalog_unchanged_when_sync_was_blocked(fake, config, sandbox, monkeypatch):
     _fake, base = fake
     client = _client_for(fake, base)
     opencode_path = rm.opencode_config_path()
@@ -725,10 +726,10 @@ def test_rollback_restores_opencode_catalog_bytes(fake, config, sandbox, monkeyp
                        json.dumps({"combos": ["Default", "phasezero-code", "phasezero-analysis", "phasezero-plan"]}))
 
     result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
-    assert result["opencodeCatalog"]["updated"] is True
-    assert opencode_path.read_bytes() != before_bytes
+    assert result["opencodeCatalog"].get("blockedReason") == "connection-grant-not-enforceable", result["opencodeCatalog"]
+    assert opencode_path.read_bytes() == before_bytes
     rb = rm.rollback(client, result["manifest"], force=True)
-    assert rb["opencodeCatalogRestored"] is True
+    assert rb["opencodeCatalogRestored"] is False
     assert opencode_path.read_bytes() == before_bytes
 
 

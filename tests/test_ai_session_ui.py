@@ -338,10 +338,10 @@ def test_ai_dev_app_shortcut_opens_canonical_detail_instead_of_running_directly(
     )
     configure = next(
         button for button in opencode_card.findChildren(QPushButton)
-        if button.text() == "Configurar"
+        if button.text() == "Verificar"
     )
     configure.click()
-    assert selected == ["ai.opencode-install"]
+    assert selected == ["ai.opencode-verify"]
     assert requested == []
 
 

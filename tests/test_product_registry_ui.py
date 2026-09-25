@@ -208,7 +208,8 @@ def test_claude_detail_explains_grant_gate_and_never_offers_bonsai_run(qapp):
         page.open_product("app.claude-code")
         notice = page.findChild(QLabel, "accountGrantNotice")
         assert notice is not None and not notice.isHidden()
-        assert "grant vinculado à conta e à rota" in notice.text()
+        assert "grant registrado" in notice.text()
+        assert "conexão aprovada" in notice.text()
         assert "ai.claude-bonsai-run" not in _detail_action_ids(page)
 
         page._instances_ready(page._status_action_id, (ProductInstance(
@@ -764,7 +765,7 @@ def test_offline_ollama_uses_canonical_setup_as_confirmed_recovery(qapp):
         status_patcher.stop()
 
 
-def test_offline_managed_opencode_uses_configure_recovery_but_external_is_untouched(qapp):
+def test_opencode_recovery_never_offers_unbound_9router_setup(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Aplicativos")
@@ -774,14 +775,17 @@ def test_offline_managed_opencode_uses_configure_recovery_but_external_is_untouc
             installation="present", origin="phasezero", configuration="ready", health="offline",
         ),))
         assert page._primary_button.text() == "Resolver"
-        assert page._primary_action.id == "ai.opencode-install"
-        assert "rollback" in page._primary_action.impact
-        assert "Não inicia login" in page._primary_action.impact
+        assert page._primary_action.id == "ai.opencode-verify"
+        assert not page._primary_action.mutable
+        notice = page.findChild(QLabel, "accountGrantNotice")
+        assert notice is not None and not notice.isHidden()
+        assert "não vincula cada requisição" in notice.text()
+        assert "ai.opencode-install" not in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.opencode-install"
-        assert start.call_args.kwargs["preview"] is True
+        assert start.call_args.args[0].id == "ai.opencode-verify"
+        assert start.call_args.kwargs["preview"] is False
 
         page._instances_ready(page._status_action_id, (ProductInstance(
             "external:local:app.opencode", "app.opencode", "local", "local",

@@ -103,10 +103,10 @@ class AiDevPage(BasePage):
         cards.setVerticalSpacing(14)
         cards.addWidget(self._agent_card(
             "OpenCode",
-            "Editor e CLI com 9Router e modelo free",
+            "Verificação disponível; uso gerenciado bloqueado sem vínculo da conta por requisição",
             "opencode",
-            "ai.opencode-install",
-            "Configurar",
+            "ai.opencode-verify",
+            "Verificar",
             "ai.opencode-free",
             "Modelo free",
         ), 0, 0)
