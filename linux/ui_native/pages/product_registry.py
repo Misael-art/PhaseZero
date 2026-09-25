@@ -609,15 +609,17 @@ class ProductRegistryPage(BasePage):
         if not action.mutable:
             return True
         app_id = str(product.get("appId") or "")
+        if instance is None:
+            return False
         if action.id in _PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP.get(app_id, ()):
             return bool(
-                instance is not None
-                and instance.installation == "present"
+                instance.installation == "present"
                 and instance.origin == "phasezero"
                 and instance.manager == "phasezero-ai-proxy-suite"
             )
         if action.id == _RECOVERY_ACTION_BY_APP.get(app_id):
-            return self._action_for_state("resolve") is not None
+            recovery = self._action_for_state("resolve")
+            return bool(recovery is not None and recovery.mutable and recovery.id == action.id)
         if action.id in _PROXY_CONFIGURE_ACTION_BY_APP.values():
             return self._action_for_state("configure") is not None
 
@@ -631,13 +633,14 @@ class ProductRegistryPage(BasePage):
             )
 
         authority = self._manifest_action(action.id).get("installationAuthorityId")
-        if authority:
-            if instance is None:
-                return False
-            if instance.installation == "present" and instance.origin != "phasezero":
-                return False
-            if instance.installation == "unknown":
-                return False
+        if not authority or instance is None:
+            return False
+        if authority not in product.get("installationAuthorityIds", []):
+            return False
+        if instance.installation == "unknown":
+            return False
+        if instance.installation == "present" and instance.origin != "phasezero":
+            return False
         return True
 
     def _manifest_action(self, action_id: str) -> dict[str, object]:

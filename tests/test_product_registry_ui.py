@@ -162,6 +162,49 @@ def test_registry_has_all_manifest_products_and_unknown_is_not_absent(qapp):
         status_patcher.stop()
 
 
+def test_unknown_status_hides_every_mutating_secondary_app_action(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        for product in page.products:
+            page.open_product(product["appId"])
+            mutable_ids = {
+                action_id for action_id in product["actionIds"]
+                if action_id in window.registry.by_id
+                and window.registry.by_id[action_id].mutable
+            }
+            visible_mutations = _detail_action_ids(page) & mutable_ids
+            assert not visible_mutations, (product["appId"], visible_mutations)
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_external_installation_hides_every_mutating_secondary_app_action(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        for product in page.products:
+            page.open_product(product["appId"])
+            page._instances_ready(page._status_action_id, (ProductInstance(
+                f"external:{product['appId']}", product["appId"], "local", page._status_scope,
+                manager="external", installation="present", origin="external",
+                configuration="unknown", health="offline",
+            ),))
+            mutable_ids = {
+                action_id for action_id in product["actionIds"]
+                if action_id in window.registry.by_id
+                and window.registry.by_id[action_id].mutable
+            }
+            visible_mutations = _detail_action_ids(page) & mutable_ids
+            assert not visible_mutations, (product["appId"], visible_mutations)
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_product_search_indexes_purpose_synonyms(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
