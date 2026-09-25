@@ -335,6 +335,32 @@ def test_quota_reset_and_min_bucket(fake):
     assert rm.quota_reset_at(kimi["quota"]) == "2026-08-01T00:00:00.000Z"
 
 
+def test_quota_provenance_and_estimate_are_separate():
+    state, quota, _confidence = rm.parse_quota({
+        "quotas": {"session": {"used": 25, "total": 100}},
+    }, observed_at="2026-09-24T12:00:00Z")
+    assert state == "unknown"
+    assert quota["source"] == "9router_usage_api"
+    assert quota["observedAt"] == "2026-09-24T12:00:00Z"
+    bucket = quota["buckets"][0]
+    assert bucket["dimension"] == "session"
+    assert bucket["unit"] == "unknown"
+    assert bucket["remaining"] is None
+    assert bucket["remainingPercentage"] is None
+    assert bucket["estimatedRemainingPercentage"] == 75
+    assert rm.quota_remaining_pct(quota) is None
+
+
+def test_quota_probe_exception_preserves_connection_rows(fake, monkeypatch):
+    _fake, base = fake
+    client = _client_for(fake, base)
+    monkeypatch.setattr(client, "usage_connection", lambda _connection_id: (_ for _ in ()).throw(TimeoutError()))
+    inventory = rm.build_inventory(client, refresh_quota=True)
+    assert len(inventory["connections"]) == len(client.providers())
+    assert all(c["quotaState"] == "unavailable" for c in inventory["connections"])
+    assert all(c["quota"]["error"] == "unavailable" for c in inventory["connections"])
+
+
 def test_cooldown_and_error_classification(fake):
     _fake, base = fake
     inv = _fresh_inventory(_client_for(fake, base))

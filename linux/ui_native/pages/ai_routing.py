@@ -77,6 +77,7 @@ class AiRoutingPage(BasePage):
         super().__init__(root, runner, actions, by_id, parent)
         self._status_value: QLabel | None = None
         self._quota_label: QLabel | None = None
+        self._quota_details: QLabel | None = None
         self._task_cards: dict[str, dict] = {}
         self._recommendations: dict[str, list[dict]] = {}
         self._policy_combo: QComboBox | None = None
@@ -151,6 +152,11 @@ class AiRoutingPage(BasePage):
                 self._technical_widgets.append(button)
         actions_row.addStretch()
         layout.addLayout(actions_row)
+
+        self._quota_details = QLabel("Atualize cotas para consultar fonte, horário e unidade.")
+        self._quota_details.setObjectName("cardDescription")
+        self._quota_details.setWordWrap(True)
+        layout.addWidget(self._quota_details)
 
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
@@ -453,6 +459,7 @@ class AiRoutingPage(BasePage):
             if self._status_value:
                 self._status_value.setText(routing_status_text(parsed))
         elif action_id == "ai.routing-inventory":
+            details = []
             if self._quota_label:
                 states = {}
                 for conn in _first(parsed, "connections", default=[]) or []:
@@ -460,6 +467,38 @@ class AiRoutingPage(BasePage):
                     states[qs] = states.get(qs, 0) + 1
                 text = ", ".join(f"{k}: {v}" for k, v in sorted(states.items())) or _CLEAR
                 self._quota_label.setText(text)
+            for conn in _first(parsed, "connections", default=[]) or []:
+                quota = conn.get("quota") if isinstance(conn.get("quota"), dict) else {}
+                state = str(conn.get("quotaState", "unknown"))
+                label = str(conn.get("provider") or "provedor")
+                source = "9Router Usage API" if quota.get("source") == "9router_usage_api" else "fonte desconhecida"
+                observed = str(quota.get("observedAt") or "horário indisponível")
+                buckets = quota.get("buckets") if isinstance(quota.get("buckets"), list) else []
+                bucket_parts = []
+                for bucket in buckets:
+                    if not isinstance(bucket, dict):
+                        continue
+                    dimension = str(bucket.get("dimension") or bucket.get("name") or "dimensão desconhecida")
+                    pct = bucket.get("remainingPercentage")
+                    unit = str(bucket.get("unit") or "unknown")
+                    if unit == "unknown":
+                        unit = "unidade desconhecida"
+                    value = f"{pct}% restante" if isinstance(pct, (int, float)) else "percentual não informado"
+                    if bucket.get("remaining") is not None:
+                        value += f"; {bucket['remaining']} {unit} restantes"
+                    else:
+                        value += f"; unidade: {unit}"
+                    estimate = bucket.get("estimatedRemainingPercentage")
+                    if isinstance(estimate, (int, float)):
+                        value += f"; estimativa local {estimate}%"
+                    bucket_parts.append(f"{dimension}: {value}")
+                state_label = {"known": "informada", "unknown": "desconhecida", "unavailable": "indisponível"}.get(state, state)
+                bucket_text = " · " + "; ".join(bucket_parts) if bucket_parts else ""
+                if not bucket_parts:
+                    bucket_text = " · unidade: desconhecida"
+                details.append(f"{label}: cota {state_label}{bucket_text} · fonte: {source} · consultada em: {observed}")
+            if self._quota_details:
+                self._quota_details.setText("\n".join(details) or "Nenhuma conta retornada.")
             return
         for task, label, aid in TASKS:
             if action_id != aid and not action_id.startswith(f"routing.dynamic.{task}."):
@@ -486,8 +525,11 @@ class AiRoutingPage(BasePage):
             quota = top.get("quota_state", "?")
             pct = top.get("quota", 0)
             conf = top.get("quota_confidence", 0)
-            card["quota"].setText(
-                f"cota: {QUOTA_LABELS.get(str(quota), quota)} ({pct:.0%}) · confiança: {conf:.0%}")
+            quota_text = f"cota: {QUOTA_LABELS.get(str(quota), quota)}"
+            if quota == "known":
+                quota_text += f" ({pct:.0%})"
+            quota_text += f" · confiança: {conf:.0%}"
+            card["quota"].setText(quota_text)
             if self._apply_all_button is not None:
                 self._apply_all_button.setEnabled(
                     all(task_id in self._recommendations for task_id, _label, _aid in TASKS)

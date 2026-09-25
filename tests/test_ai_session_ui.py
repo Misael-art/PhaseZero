@@ -426,6 +426,31 @@ def test_routing_dynamic_success_populates_fallback_and_enables_apply(routing_pa
     assert "cota: conhecida" in card["quota"].text()
 
 
+def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(routing_page):
+    page, _actions = routing_page
+    page._routing_status_ready("ai.routing-inventory", "", {
+        "connections": [{
+            "provider": "glm", "quotaState": "unknown", "quota": {
+                "source": "9router_usage_api", "observedAt": "2026-09-24T12:00:00Z",
+                "buckets": [{"dimension": "session", "unit": "unknown",
+                             "remainingPercentage": None,
+                             "estimatedRemainingPercentage": 75}],
+            },
+        }],
+    })
+    assert "fonte: 9Router Usage API" in page._quota_details.text()
+    assert "consultada em: 2026-09-24T12:00:00Z" in page._quota_details.text()
+    assert "unidade desconhecida" in page._quota_details.text()
+    assert "estimativa local 75%" in page._quota_details.text()
+
+    recommendation = [{"model_id": "provider/model-a", "score": 0.9,
+                       "quota_state": "unknown", "quota": 0.5,
+                       "quota_confidence": 0.4}]
+    page._routing_status_ready("routing.dynamic.code.balanced", "", {"recommendation": recommendation})
+    assert "desconhecida" in page._task_cards["code"]["quota"].text()
+    assert "50%" not in page._task_cards["code"]["quota"].text()
+
+
 def test_routing_dynamic_failure_never_stays_verifying(routing_page):
     page, _actions = routing_page
     page._routing_status_failed("routing.dynamic.analysis.quality", "timeout")

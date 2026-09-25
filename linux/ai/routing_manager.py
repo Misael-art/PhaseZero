@@ -572,12 +572,19 @@ def ready_statuses() -> set:
     return {"active", "ok", "ready", "healthy", "9router"}
 
 
-def parse_quota(payload: dict) -> tuple[str, dict, float]:
-    """Return (state, redacted quota, confidence)."""
+def parse_quota(payload: dict, *, observed_at: str | None = None) -> tuple[str, dict, float]:
+    """Return redacted quota plus explicit provenance and local observation time.
+
+    Values inferred from used/total stay in separate estimate fields and never
+    become observed quota or routing-filter input.
+    """
+    observed_at = observed_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    provenance = {"source": "9router_usage_api", "observedAt": observed_at}
     if payload.get("_unavailable"):
-        return "unavailable", {}, QUOTA_CONFIDENCE["unavailable"]
+        return "unavailable", {**provenance, "error": "unavailable"}, QUOTA_CONFIDENCE["unavailable"]
     if isinstance(payload.get("quotas"), dict) and payload["quotas"]:
         buckets = []
+        observed_values = False
         for name, bucket in payload["quotas"].items():
             if not isinstance(bucket, dict):
                 continue
@@ -585,22 +592,29 @@ def parse_quota(payload: dict) -> tuple[str, dict, float]:
             total = bucket.get("total")
             remaining = bucket.get("remaining")
             pct = bucket.get("remainingPercentage")
+            observed_values = observed_values or remaining is not None or pct is not None
+            estimate_pct = None
             if pct is None and isinstance(total, (int, float)) and isinstance(used, (int, float)) and total:
-                pct = round((1 - used / total) * 100, 1)
+                estimate_pct = round((1 - used / total) * 100, 1)
             buckets.append({
                 "name": str(name),
+                "dimension": str(bucket.get("dimension") or name),
+                "unit": str(bucket.get("unit") or "unknown"),
                 "used": used,
                 "total": total,
-                "remaining": remaining if remaining is not None else (total - used if total else None),
+                "remaining": remaining,
                 "remainingPercentage": pct,
+                "estimatedRemainingPercentage": estimate_pct,
                 "resetAt": bucket.get("resetAt"),
                 "unlimited": bool(bucket.get("unlimited", False)),
             })
-        return "known", {"plan": payload.get("plan"), "buckets": buckets}, QUOTA_CONFIDENCE["known"]
+        if buckets:
+            state = "known" if observed_values else "unknown"
+            return state, {**provenance, "plan": payload.get("plan"), "buckets": buckets}, QUOTA_CONFIDENCE[state]
     message = str(payload.get("message") or "")
     if "not implemented" in message.lower() or "not available" in message.lower():
-        return "unknown", {"note": "usage api not implemented"}, QUOTA_CONFIDENCE["unknown"]
-    return "unavailable", {"note": "usage api unavailable"}, QUOTA_CONFIDENCE["unavailable"]
+        return "unknown", {**provenance, "error": "not_implemented"}, QUOTA_CONFIDENCE["unknown"]
+    return "unavailable", {**provenance, "error": "unavailable"}, QUOTA_CONFIDENCE["unavailable"]
 
 
 def quota_remaining_pct(quota: dict) -> float | None:
@@ -626,7 +640,12 @@ def build_inventory(client: R9Client, refresh_quota: bool = False) -> dict:
     for conn in providers:
         c = classify_connection(conn)
         if refresh_quota:
-            payload = client.usage_connection(c.id)
+            try:
+                payload = client.usage_connection(c.id)
+            except Exception:
+                # Quota is optional evidence. A partial probe failure must not
+                # remove the provider/account row from the inventory.
+                payload = {"_unavailable": True}
             c.quota_state, c.quota, c.quota_confidence = parse_quota(payload)
         conns.append(c)
 
