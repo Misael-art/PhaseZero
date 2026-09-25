@@ -910,6 +910,14 @@ estimativa local zero e saldo oficial desconhecido não bloqueiam nem fingem sal
 `test_account_contract.py`, `test_account_grants.py`, `test_accounts_page.py`: 26 passaram;
 `git diff --check` passou. Nenhuma API ou conta real consultada.
 
+PXA-006 sessão proxy salva (2026-09-25, `6f3890f`): regressão red mostrou que o valor
+genérico `sessionStatus=present` era elevado a sessão válida. Agora `present` em campo de
+sessão permanece `unknown`; `credentialStatus=present` continua evidenciando credencial
+armazenada. Resultado de login verificado ainda exige `authenticated`/`valid` ou prova
+explícita equivalente. `test_account_contract.py`, `test_auth_registry.py`,
+`test_account_grants.py`, `test_accounts_page.py`: 28 passaram. Provas herméticas; nenhum
+probe real, login ou cota foi consultado; PXA-006/G3 continua externo.
+
 PXA-004/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO indicada pelo operador:
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 (8.172.068.864 bytes; `stat` somente, sem hash, montagem ou boot). Nova avaliação
