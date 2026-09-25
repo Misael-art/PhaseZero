@@ -117,14 +117,17 @@ class Provider:
 
         Debian uses APT's simulation summary; Arch asks pacman to print the
         resolved sync targets and reads each target's repository installed
-        size. Both use existing local package indexes. Missing or unparseable
-        results fall back to direct-package lower bounds in the planner.
+        size; Fedora uses a cache-only DNF simulation. These use existing local
+        package indexes. Missing or unparseable results fall back to direct-
+        package lower bounds in the planner.
         """
         if not sources or any(source.kind != "package" for source in sources):
             return None
         names = list(dict.fromkeys(source.name for source in sources))
         if self.facts.package_family == "arch":
             return self._estimate_pacman_transaction_space(names)
+        if self.facts.package_family == "fedora":
+            return self._estimate_dnf_transaction_space(names)
         if self.facts.package_family != "debian":
             return None
         command = [
@@ -144,6 +147,56 @@ class Provider:
             return None
         output = f"{result.stdout or ''}\n{result.stderr or ''}"
         return self.parse_apt_transaction_space(output)
+
+    def _estimate_dnf_transaction_space(self, names: list[str]) -> dict | None:
+        command = [
+            self.facts.package_manager or "dnf", "--cacheonly", "--assumeno",
+            "install", "--", *names,
+        ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=45, check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        # DNF reports cancellation as non-zero after --assumeno. Other errors
+        # can contain partial summaries, so accept that status only on its
+        # explicit cancellation marker.
+        if result.returncode != 0 and not re.search(r"(?im)^Operation aborted\.?\s*$", output):
+            return None
+        return self.parse_dnf_transaction_space(output)
+
+    @classmethod
+    def parse_dnf_transaction_space(cls, output: str) -> dict | None:
+        """Parse DNF transaction totals; reject removals and partial output."""
+        if re.search(r"(?im)^\s*(?:Removing|Erasing)(?:\s|:)", output):
+            return None
+        size_pattern = r"([0-9][0-9,]*(?:\.[0-9]+)?\s*(?:[KMGT](?:i?B)?|[kMGT]|B)?)"
+        download = re.search(rf"(?im)^\s*Total download size:\s*{size_pattern}\s*$", output)
+        installed = re.search(rf"(?im)^\s*(?:Total )?Installed size:\s*{size_pattern}\s*$", output)
+        download_bytes = cls._dnf_size_bytes(download.group(1)) if download else None
+        installed_bytes = cls._dnf_size_bytes(installed.group(1)) if installed else None
+        if download_bytes is None or installed_bytes is None:
+            return None
+        return {
+            "downloadBytes": download_bytes,
+            "installedBytes": installed_bytes,
+            "estimateSource": "dnf-transaction-simulation",
+            "estimateCompleteness": "resolved-local-package-indexes",
+        }
+
+    @classmethod
+    def _dnf_size_bytes(cls, value: str) -> int | None:
+        """Parse DNF's binary format_number suffixes and explicit byte units."""
+        match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]|[KMGT]i?B|B)?", value.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        number, raw_unit = match.groups()
+        unit = (raw_unit or "B").casefold()
+        short_units = {"k": "kib", "m": "mib", "g": "gib", "t": "tib"}
+        return cls._size_bytes(number + " " + short_units.get(unit, unit))
 
     def _estimate_pacman_transaction_space(self, names: list[str]) -> dict | None:
         command = [

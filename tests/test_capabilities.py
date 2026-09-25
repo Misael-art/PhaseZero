@@ -371,6 +371,67 @@ def test_apt_transaction_estimate_runs_only_simulation(monkeypatch):
     assert kwargs["timeout"] <= 30
 
 
+def test_dnf_transaction_parser_handles_dnf4_and_dnf5_totals():
+    output = """Dependencies resolved.
+Total download size: 10 M
+Installed size: 25 M
+Operation aborted.
+"""
+    assert Provider.parse_dnf_transaction_space(output) == {
+        "downloadBytes": 10 * 1024**2,
+        "installedBytes": 25 * 1024**2,
+        "estimateSource": "dnf-transaction-simulation",
+        "estimateCompleteness": "resolved-local-package-indexes",
+    }
+    dnf5 = "Total download size: 10 MiB\nTotal installed size: 25 MiB\n"
+    assert Provider.parse_dnf_transaction_space(dnf5)["downloadBytes"] == 10 * 1024**2
+    assert Provider.parse_dnf_transaction_space("Total download size: 10 M\n") is None
+    assert Provider.parse_dnf_transaction_space(
+        output + "Removing:\n old-package\n"
+    ) is None
+
+
+def test_dnf_transaction_estimate_is_cache_only_and_non_mutating(monkeypatch):
+    facts = host(distro="fedora", package_family="fedora", package_manager="dnf")
+    provider = Provider(facts)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=1,
+            stdout="Total download size: 10 M\nInstalled size: 25 M\nOperation aborted.\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("linux.capabilities.providers.subprocess.run", fake_run)
+    result = provider.estimate_transaction_space([
+        SourceSpec("package", "nodejs"), SourceSpec("package", "pnpm"),
+        SourceSpec("package", "nodejs"),
+    ])
+    assert result["downloadBytes"] == 10 * 1024**2
+    command, kwargs = calls[0]
+    assert command[:5] == ["dnf", "--cacheonly", "--assumeno", "install", "--"]
+    assert command[5:] == ["nodejs", "pnpm"]
+    assert "-y" not in command
+    assert kwargs["env"]["LC_ALL"] == "C"
+    assert kwargs["timeout"] <= 45
+
+
+def test_dnf_transaction_estimate_rejects_partial_nonzero_output(monkeypatch):
+    facts = host(distro="fedora", package_family="fedora", package_manager="dnf")
+    provider = Provider(facts)
+    monkeypatch.setattr(
+        "linux.capabilities.providers.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="Total download size: 10 M\nError: repository unavailable\n",
+            stderr="",
+        ),
+    )
+    assert provider.estimate_transaction_space([SourceSpec("package", "nodejs")]) is None
+
+
 def test_pacman_transaction_includes_resolved_targets_and_installed_sizes(monkeypatch):
     provider = Provider(host())
     calls = []
