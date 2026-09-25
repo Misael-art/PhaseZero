@@ -676,7 +676,9 @@ também aceitava `bool`/infinito como número, mostrava `known` mesmo sem valor
 válido, e preservava reset inválido. Commits `0f66b23` e `5fe738c` normalizam
 números finitos, percentuais 0–100, reset ISO com fuso e booleano `unlimited`
 estrito; parser, cálculo de cota e UI rejeitam o mesmo payload inválido. Estado sem
-valor válido volta a `unknown`, e UI usa “não informado”/“indisponível”.
+valor válido volta a `unknown`, e UI usa “não informado”/“indisponível”. Commit
+`59c5130` substitui `observedAt` inválido pelo instante local de observação, oculta
+horário/reset sem fuso e exibe reset válido. As suítes permanecem 76 aprovadas.
 `tests/test_routing_manager.py` + `tests/test_ai_session_ui.py`: 76 passaram;
 `compileall` e `git diff --check` passaram. Ruff ausente. Sem chamada real à API;
 PXA-009/G3 segue pendente de semântica e cota observadas em conta real.
