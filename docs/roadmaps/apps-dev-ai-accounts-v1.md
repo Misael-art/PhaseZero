@@ -567,6 +567,7 @@ para instalação e recovery mapeados, e deixa diagnóstico read-only visível. 
 falhou provando `ai.proxies-start-qwen` presente com CTA desabilitado; helper passou a contar
 botões da seção avançada além de `ActionListRow`. Fluxo antigo `server.llm` ainda preserva
 contexto; após status absent, action fica acessível. Suíte completa `tests/test_product_registry_ui.py`:
-26 passou; `git diff --check` passou. Commit `a64a453`. Fixtures não iniciaram processos,
+26 passou; teste adicional bloqueou controles nos quatro proxies externos (1 passou);
+`git diff --check` passou. Commits `a64a453`, `b5a7752`. Fixtures não iniciaram processos,
 serviços nem contas. PXA-003 segue `in_progress`; rotas remotas e IDs múltiplos no mesmo
 escopo continuam sem executor contextual.
