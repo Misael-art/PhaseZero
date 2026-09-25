@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRadioButton, QWidget
 
 
@@ -160,7 +161,9 @@ def test_accounts_privacy_toggle_masks_identity_and_persists(qapp, tmp_path, mon
             "Private Account", "Second Identity",
         ]
 
-        privacy.click()
+        privacy.setFocus()
+        QTest.keyClick(privacy, Qt.Key_Space)
+        assert privacy.isChecked()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         assert [label.text() for label in page.findChildren(QLabel, "accountDisplayName")] == [
             "Conta 1", "Conta 2",
@@ -192,7 +195,9 @@ def test_accounts_privacy_toggle_masks_identity_and_persists(qapp, tmp_path, mon
         page._accounts = router_provider_accounts({"connections": [
             {"id": "private-a", "provider": "openai", "name": "Private Account", "active": True},
         ]})
-        privacy.click()
+        privacy.setFocus()
+        QTest.keyClick(privacy, Qt.Key_Space)
+        assert not privacy.isChecked()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         assert [label.text() for label in page.findChildren(QLabel, "accountDisplayName")] == [
             "Private Account",
