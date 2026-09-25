@@ -1301,7 +1301,7 @@ justificam iniciar VM aqui. Nenhum processo foi parado ou alterado. Repetir some
 em host com margem confirmada e snapshot descartável; seguir trabalho hermético PXA.
 
 
-PXA-008 adapter Windows de credenciais — 2026-09-25: faltava backend nativo Windows
+PXA-008 adapter Windows de credenciais — commit 1f0f5cb, 2026-09-25: faltava backend nativo Windows
 para o cofre de credenciais. Adicionado WindowsCredentialManagerStore com WinCred,
 handles aleatórios, validação de 2.560 bytes, limpeza de buffers e erros sanitizados;
 metadados usam DPAPI current-user em LOCALAPPDATA. Caminhos de symlink/reparse são
