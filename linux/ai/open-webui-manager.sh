@@ -77,22 +77,16 @@ status_json() {
         '{schemaVersion:1,id:"open-webui",hasStatus:$hasStatus,
           installationState:(if ($hasStatus|not) then "unknown" elif $installed then "present" else "absent" end),
           origin:"unknown",configurationState:$configuration,health:$health,
+          usageBlocked:true,blockedReason:"connection-grant-not-enforceable",
           dashboardUrl:(if $port!="" then "http://127.0.0.1:"+$port+"/" else "" end),
           error:(if ($hasStatus|not) then "backend-unavailable" else null end)}'
 }
 
-open_dashboard() {
-    local status healthy url
-    status="$(status_json)"
-    healthy="$(jq -r '.hasStatus == true and .installationState == "present" and .configurationState == "ready" and .health == "online"' <<< "$status")"
-    [ "$healthy" = true ] || { pz_error "Open WebUI is not observed healthy; run status before opening"; return 1; }
-    url="$(jq -r '.dashboardUrl' <<< "$status")"
-    command -v xdg-open >/dev/null 2>&1 || { pz_error "xdg-open missing"; return 1; }
-    xdg-open "$url" >/dev/null 2>&1 &
-}
-
 case "${1:-status}" in
     status) status_json ;;
-    open|dashboard) open_dashboard ;;
+    open|dashboard)
+        pz_error "Open WebUI usage blocked: provider connections can hold shared credentials, but requests are not bound to PhaseZero grants"
+        exit 69
+        ;;
     *) pz_error "usage: open-webui-manager.sh (status|open)"; exit 2 ;;
 esac

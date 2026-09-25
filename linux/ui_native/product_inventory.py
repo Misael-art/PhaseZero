@@ -480,6 +480,7 @@ def instances_from_status_payload(
                 active = gateway.get("active")
         raw_health = "online" if active is True else "offline" if active is False else "unknown"
     version = payload.get("version", "")
+    blocked_reason = payload.get("blockedReason")
     instance_id = f"{host_id}:{scope}:{app_id}:{instance_key}"
     return (ProductInstance(
         instance_id=instance_id,
@@ -493,4 +494,6 @@ def instances_from_status_payload(
         configuration=raw_configuration,
         health=raw_health,
         observed_at=str(payload.get("observedAt") or ""),
+        usage_blocked=payload.get("usageBlocked") is True,
+        blocked_reason=blocked_reason if isinstance(blocked_reason, str) else "",
     ),)

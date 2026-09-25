@@ -737,9 +737,17 @@ cmd_ai() {
                 usagebar|ai-usagebar) bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup ;;
                 codexbar|kodexbar|codexbar-cli) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" setup ;;
                 all)
+                    local setup_blocked=0 setup_rc=0
                     bash "$PZ_ROOT/linux/ai/setup-codex.sh"
                     bash "$PZ_ROOT/linux/ai/setup-ollama.sh"
-                    bash "$PZ_ROOT/linux/ai/setup-open-webui.sh"
+                    if bash "$PZ_ROOT/linux/ai/setup-open-webui.sh"; then
+                        :
+                    else
+                        setup_rc=$?
+                        if [ "$setup_rc" -ne 69 ]; then return "$setup_rc"; fi
+                        pz_warn "Open WebUI omitted: request-bound account grants are unavailable; other setup steps continue"
+                        setup_blocked=69
+                    fi
                     bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" install --yes
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
@@ -752,6 +760,7 @@ cmd_ai() {
                     bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure
+                    [ "$setup_blocked" -eq 0 ] || return "$setup_blocked"
                     ;;
                 *) pz_error "unknown tool: $target"; return 1 ;;
             esac

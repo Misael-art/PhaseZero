@@ -48,6 +48,7 @@ _ACCOUNT_GRANT_GATED_ACTIONS = frozenset({
     "ai.proxies.restart-one", "ai.proxies.test-one",
     "ai.9router-dashboard", "ai.9router-combos", "ai.9router-secrets",
     "ai.odysseus-install", "ai.odysseus-update", "ai.odysseus-open",
+    "ai.webui", "ai.webui-open",
 })
 _PROXY_CONFIGURE_ACTION_BY_APP = {
     "app.kimiproxy": "ai.proxies-login-kimi",
@@ -629,6 +630,11 @@ class ProductRegistryPage(BasePage):
         app_id = str(product.get("appId") or "")
         if action.id in _ACCOUNT_GRANT_GATED_ACTIONS:
             return False
+        if instance is not None and instance.usage_blocked:
+            verbs = set(action.args) | set(action.id.casefold().split("."))
+            if verbs.intersection({"install", "setup", "open", "launch", "dashboard",
+                                   "run", "start", "restart", "configure"}):
+                return False
         if not action.mutable:
             verbs = set(action.args) | set(action.id.casefold().split("."))
             if not verbs.intersection({"open", "launch", "dashboard"}):
@@ -697,6 +703,9 @@ class ProductRegistryPage(BasePage):
 
     def _action_for_state(self, state: str) -> ActionSpec | None:
         if not self._selected_app_id:
+            return None
+        instance = self._selected_instance()
+        if instance is not None and instance.usage_blocked and state != "verify":
             return None
         product = self._product_by_id[self._selected_app_id]
         actions = [self.by_id[item] for item in product.get("actionIds", []) if item in self.by_id]
@@ -811,8 +820,10 @@ class ProductRegistryPage(BasePage):
                   "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
         consumer_route_blocked = (
             (
-                self._selected_app_id == "app.9router" and state in {"configure", "open"}
+                instance is not None and instance.usage_blocked
+                or self._selected_app_id == "app.9router" and state in {"configure", "open"}
                 or self._selected_app_id == "app.odysseus" and state in {"prepare", "configure", "open"}
+                or self._selected_app_id == "app.open-webui" and state in {"prepare", "configure", "resolve", "open"}
             )
             and action is None
         )
@@ -823,6 +834,7 @@ class ProductRegistryPage(BasePage):
         self._primary_desktop_entry = (
             self._desktop_entry_for_product(product)
             if state == "open" and self._primary_action is None
+            and not (instance is not None and instance.usage_blocked)
             and self._selected_context_is_actionable() else ""
         )
         enabled = (
@@ -838,10 +850,15 @@ class ProductRegistryPage(BasePage):
                 "Dashboard bloqueado: testes do painel podem enviar inferência sem grant vinculado "
                 "à requisição e consumir cota."
             )
-        elif consumer_route_blocked:
+        elif consumer_route_blocked and self._selected_app_id == "app.odysseus":
             self._primary_button.setToolTip(
                 "Uso Odysseus bloqueado: workspace encaminha inferência pela credencial 9Router "
                 "sem grant por requisição."
+            )
+        elif self._selected_app_id == "app.open-webui" and state in {"prepare", "configure", "resolve", "open"}:
+            self._primary_button.setToolTip(
+                "Uso bloqueado: Open WebUI pode salvar conexões de provedores, mas não vincula "
+                "cada inferência a um grant PhaseZero."
             )
         elif state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
@@ -923,7 +940,7 @@ class ProductRegistryPage(BasePage):
             f"Instância: {instance.host_id} · escopo {instance.scope} · "
             f"Instalação: {instance.installation} · Origem: {instance.origin} · "
             f"Configuração: {instance.configuration} · Saúde: {instance.health} · "
-            f"Ação: {instance.next_action}"
+            f"Ação: {'uso bloqueado' if instance.usage_blocked else instance.next_action}"
         )
         self._render_primary_action()
 

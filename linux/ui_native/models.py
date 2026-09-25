@@ -149,6 +149,8 @@ class ProductInstance:
     health: str = "unknown"  # online | offline | failed | unknown
     observed_at: str = ""
     details: str = ""
+    usage_blocked: bool = False
+    blocked_reason: str = ""
 
     def __post_init__(self) -> None:
         if (
@@ -164,6 +166,10 @@ class ProductInstance:
             raise ValueError("invalid configuration state")
         if self.health not in {"online", "offline", "failed", "unknown"}:
             raise ValueError("invalid health state")
+        if type(self.usage_blocked) is not bool:
+            raise ValueError("invalid usage permission state")
+        if not isinstance(self.blocked_reason, str):
+            raise ValueError("invalid usage block reason")
         if self.origin == "external" and self.installation != "present":
             raise ValueError("external installation must be present")
 
@@ -183,7 +189,7 @@ class ProductInstance:
 
     @property
     def ready(self) -> bool:
-        return self.next_action == "open"
+        return self.next_action == "open" and not self.usage_blocked
 
     def to_dict(self) -> dict[str, str | bool | int]:
         return {
@@ -199,6 +205,8 @@ class ProductInstance:
             "configuration": self.configuration,
             "health": self.health,
             "observedAt": self.observed_at,
+            "usageBlocked": self.usage_blocked,
+            "blockedReason": self.blocked_reason,
             "nextAction": self.next_action,
             "ready": self.ready,
         }

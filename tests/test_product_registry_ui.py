@@ -366,7 +366,13 @@ def test_primary_open_uses_installed_desktop_entry_without_shell(qapp, tmp_path,
         status_patcher.stop()
 
 
-def test_open_webui_status_gates_its_local_dashboard_action(qapp):
+def test_open_webui_status_keeps_usage_blocked_without_request_grants(qapp, tmp_path, monkeypatch):
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "open-webui.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Open WebUI\n", encoding="utf-8",
+    )
+    monkeypatch.setattr("linux.ui_native.pages.product_registry.desktop_dirs", lambda: (apps,))
     window, host_patcher, status_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Aplicativos")
@@ -375,21 +381,28 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         page._instances_ready(page._status_action_id, (ProductInstance(
             "local:local:app.open-webui", "app.open-webui", "local", "local",
             installation="present", origin="unknown", configuration="ready", health="online",
+            usage_blocked=True, blocked_reason="connection-grant-not-enforceable",
         ),))
-        assert page._primary_button.text() == "Abrir"
-        assert page._primary_action is not None
-        assert page._primary_action.id == "ai.webui-open"
-        assert "ai.webui-open" in _detail_action_ids(page)
+        assert page._primary_button.text() == "Uso bloqueado"
+        assert not page._primary_button.isEnabled()
+        assert page._primary_action is None
+        assert page._primary_desktop_entry == ""
+        assert page._primary_button.toolTip() == (
+            "Uso bloqueado: Open WebUI pode salvar conexões de provedores, mas não vincula "
+            "cada inferência a um grant PhaseZero."
+        )
+        assert not {"ai.webui", "ai.webui-open"}.intersection(_detail_action_ids(page))
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.webui-open"
+        start.assert_not_called()
+        assert "Ação: uso bloqueado" in page._status_label.text()
 
         page._instances_ready(page._status_action_id, (ProductInstance(
             "local:local:app.open-webui", "app.open-webui", "local", "local",
             installation="present", origin="unknown", configuration="ready", health="offline",
+            usage_blocked=True, blocked_reason="connection-grant-not-enforceable",
         ),))
-        assert page._primary_button.text() == "Resolver"
+        assert page._primary_button.text() == "Uso bloqueado"
         assert not page._primary_button.isEnabled()
         assert "ai.webui-open" not in _detail_action_ids(page)
     finally:

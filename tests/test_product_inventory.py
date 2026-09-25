@@ -54,6 +54,25 @@ def test_existing_shortcuts_converge_on_one_product():
     assert rows["capability.plan.development.vscodium"].target_id == "app.vscodium"
 
 
+def test_open_webui_usage_routes_are_not_advertised_without_request_grant_support():
+    actions = {action.id: action for action in build_catalog(ROOT)}
+
+    assert actions["ai.webui"].title == "Uso bloqueado — Open WebUI"
+    assert actions["ai.webui-open"].title == "Uso bloqueado — Open WebUI"
+    assert "webui" not in actions["ai.setup.tool"].parameters[0].choices
+    assert actions["ai.webui-status"].status_args == ("ai", "webui", "status")
+    observed = instances_from_status_payload(
+        {"hasStatus": True, "installationState": "present", "configurationState": "ready",
+         "health": "online", "usageBlocked": True,
+         "blockedReason": "connection-grant-not-enforceable"},
+        app_id="app.open-webui", host_id="local", scope="local",
+    )[0]
+    assert observed.next_action == "open"
+    assert observed.ready is False
+    assert observed.to_dict()["usageBlocked"] is True
+    assert observed.to_dict()["blockedReason"] == "connection-grant-not-enforceable"
+
+
 def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
     payload = inventory_manifest(ROOT)
     actions = {item["actionId"]: item for item in payload["actions"]}
