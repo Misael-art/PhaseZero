@@ -673,8 +673,9 @@ foi observada; fixtures não fecham G3.
 PXA-009 quota malformada: antes da correção, `parse_quota` tratava
 `remainingPercentage: true` e `remaining: NaN` como observação conhecida; UI
 também aceitava `bool`/infinito como número, mostrava `known` mesmo sem valor
-válido, e preservava reset inválido. Commit `0f66b23` normaliza números finitos,
-percentuais 0–100, reset ISO com fuso e booleano `unlimited` estrito; estado sem
+válido, e preservava reset inválido. Commits `0f66b23` e `5fe738c` normalizam
+números finitos, percentuais 0–100, reset ISO com fuso e booleano `unlimited`
+estrito; parser, cálculo de cota e UI rejeitam o mesmo payload inválido. Estado sem
 valor válido volta a `unknown`, e UI usa “não informado”/“indisponível”.
 `tests/test_routing_manager.py` + `tests/test_ai_session_ui.py`: 76 passaram;
 `compileall` e `git diff --check` passaram. Ruff ausente. Sem chamada real à API;
