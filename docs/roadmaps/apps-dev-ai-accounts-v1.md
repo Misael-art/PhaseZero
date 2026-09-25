@@ -669,3 +669,13 @@ Regressão `tests/test_account_contract.py`, `tests/test_auth_registry.py`,
 `tests/test_routing_manager.py` e `tests/test_ai_session_ui.py`: 93 passaram;
 `git diff --check` passou. PXA-006 segue `in_progress`: nenhuma sessão/cota real
 foi observada; fixtures não fecham G3.
+
+PXA-009 quota malformada: antes da correção, `parse_quota` tratava
+`remainingPercentage: true` e `remaining: NaN` como observação conhecida; UI
+também aceitava `bool`/infinito como número, mostrava `known` mesmo sem valor
+válido, e preservava reset inválido. Commit `0f66b23` normaliza números finitos,
+percentuais 0–100, reset ISO com fuso e booleano `unlimited` estrito; estado sem
+valor válido volta a `unknown`, e UI usa “não informado”/“indisponível”.
+`tests/test_routing_manager.py` + `tests/test_ai_session_ui.py`: 76 passaram;
+`compileall` e `git diff --check` passaram. Ruff ausente. Sem chamada real à API;
+PXA-009/G3 segue pendente de semântica e cota observadas em conta real.
