@@ -1010,3 +1010,9 @@ montagem ou boot. Windows G2 segue pendente para janela com memória acima do
 mínimo e carga reduzida. Avançamos para trabalho hermético independente.
 Nova leitura às 10:36 -03:00: 1,9 GiB disponíveis, 9,8 GiB de swap em uso e
 load average 12,73/7,47/6,14; decisão de não iniciar VM permanece.
+
+Regressão ampla UI após `9598ae5`: `tests/test_product_registry_ui.py` +
+`tests/test_ai_session_ui.py` exibiram 66 passed em 76,91 s, mas pytest continuou
+ativo após o resumo (PID 135831, 28,1% CPU, estado R); interrompi somente esse
+runner (exit 130). Não conta como execução limpa. Os 16 testes focados anteriores
+encerraram com exit 0 e seguem como evidência comportamental válida.
