@@ -939,3 +939,15 @@ comprova sessão válida, acesso ou cota. `tests/test_account_contract.py`,
 falharam antes da correção e passaram depois; `git diff --check` passou. `ruff`
 não está instalado. Prova hermética: nenhuma conta, API ou quota real consultada;
 nenhum `verified_at` inferido. PXA-006/G3 continua externo e aberto.
+
+PXA-003 contexto do atalho validado (`d4efd39`, 2026-09-25): `open_product` aceitava
+qualquer `context_action_id`; detalhe de `app.ollama` podia exibir origem de
+`server.hermes`. Agora só preserva origem cujo target é app e cujo `target_id`
+coincide com `appId`; contexto inválido vira “Catálogo de aplicativos”. Teste red
+reproduziu a origem errada. Os dois atalhos legados de Ollama e o mapa de ações
+para detalhe canônico passaram junto com a regressão: 4 passaram. A suíte maior
+de catálogo/status/detalhe/navegação exibiu 65 passed, mas pytest continuou
+consumindo CPU após o resumo; interrompi somente esse runner (exit 130), então
+esse lote não conta como execução limpa. `git diff --check` passou. Sem ações
+reais; PXA-003 permanece `in_progress`, com executor remoto e rotas restantes
+sem comprovação.
