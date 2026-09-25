@@ -34,6 +34,13 @@ source "$PZ_ROOT/linux/lib/common.sh"
 # info() -> stderr, so JSON envelopes on stdout stay clean (pz_info -> stdout).
 info() { echo "INFO:  $*" >&2; }
 
+require_connection_grant() {
+    pz_error "Hermes provider changes blocked: per-request account grants are unavailable"
+    jq -cn '{schemaVersion:1,tool:"9router-hermes-provider",status:"blocked",usageBlocked:true,
+      blockedReason:"connection-grant-not-enforceable",secretsRedacted:true}'
+    return 69
+}
+
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 HERMES_CONFIG="$HERMES_HOME/config.yaml"
 HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"
@@ -359,7 +366,8 @@ status_json() {
             name:$provider,label:$label,endpoint:$endpoint,
             registered:$providerActive,isDefault:$providerActive,routed:$routed,
             defaultCombo:$hermesDefault,routerActiveCombo:$routerCombo},
-          hermesConfig:$hermesConfig,secretsRedacted:true}'
+          hermesConfig:$hermesConfig,usageBlocked:true,
+          blockedReason:"connection-grant-not-enforceable",secretsRedacted:true}'
 }
 
 doctor_json() {
@@ -370,7 +378,8 @@ doctor_json() {
           issues:([
             if $status.provider.registered|not then {severity:"error",component:"hermes",code:"provider-not-registered"} else empty end,
             if $status.provider.isDefault|not then {severity:"error",component:"hermes",code:"provider-not-default"} else empty end,
-            if $status.provider.routed|not then {severity:"error",component:"hermes",code:"not-routed-through-9router"} else empty end
+            if $status.provider.routed|not then {severity:"error",component:"hermes",code:"not-routed-through-9router"} else empty end,
+            if $status.usageBlocked then {severity:"warning",component:"hermes",code:"connection-grant-not-enforceable"} else empty end
           ]),secretsRedacted:true}'
 }
 
@@ -503,15 +512,15 @@ main() {
     case "${1:-status}" in
         status) status_json ;;
         doctor|diagnose) doctor_json ;;
-        apply|register|install-provider) apply_provider "${2:-}"; status_json ;;
-        set|pin) shift; set_combo "${1:-}" ;;
+        apply|register|install-provider) require_connection_grant ;;
+        set|pin) require_connection_grant ;;
         list-providers) list_providers ;;
         combos|list-combos) list_combos ;;
-        live|probe|auto) live ;;
-        install) install_watch ;;
-        heal|repair) apply_provider "${2:-}"; status_json ;;
+        live|probe|auto) require_connection_grant ;;
+        install) require_connection_grant ;;
+        heal|repair) require_connection_grant ;;
         help|-h|--help)
-            echo "usage: 9router-hermes-provider.sh (status|doctor|apply [combo]|set <combo>|live|combos|list-providers|install|heal)"
+            echo "usage: 9router-hermes-provider.sh (status|doctor|combos|list-providers); provider changes and inference probes blocked until per-request grants exist"
             ;;
         *) pz_error "usage: 9router-hermes-provider.sh (status|doctor|apply [combo]|set <combo>|live|combos|list-providers|install|heal)"; return 2 ;;
     esac

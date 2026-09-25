@@ -237,9 +237,9 @@ class AiProxiesPage(BasePage):
         ))
         layout.addWidget(self._gateway_card(
             "hermes", "Hermes",
-            "Agente e canais remotos. Autenticação, MCPs e acesso seguro.",
+            "Uso bloqueado: Hermes aceita várias contas e endpoints, sem grant PhaseZero por requisição. Status e doctor seguem read-only.",
             "ai.hermes-doctor", "ai.hermes-doctor", "ai.hermes-status",
-            install_label="Diagnosticar", repair_label="Diagnosticar", open_label="Ver status",
+            install_label="Uso bloqueado", repair_label="Uso bloqueado", open_label="Uso bloqueado",
         ))
         layout.addWidget(self._gateway_card(
             "9router", "9Router",
@@ -497,6 +497,11 @@ class AiProxiesPage(BasePage):
     def _gateway_use(self, gateway_id: str) -> None:
         refs = self._gateway_rows.get(gateway_id) or {}
         state = self._gateway_state.get(gateway_id)
+        if gateway_id == "hermes":
+            detail = refs.get("detail")
+            if isinstance(detail, QLabel):
+                detail.setText("Uso bloqueado: grant por conexão não é aplicado a cada requisição.")
+            return
         if state is None or not state.installed:
             self.run_action(str(refs.get("install") or ""))
             return
@@ -555,10 +560,16 @@ class AiProxiesPage(BasePage):
                 use.setToolTip(_CONSUMER_USAGE_BLOCKED)
             if isinstance(stop, QPushButton):
                 stop.setEnabled(not running)
-        for refs in self._gateway_rows.values():
+        for gateway_id, refs in self._gateway_rows.items():
             use = refs.get("use")
             if isinstance(use, QPushButton):
-                use.setEnabled(not running)
+                state = self._gateway_state.get(gateway_id)
+                permanently_blocked = bool(
+                    gateway_id == "hermes"
+                    or state is not None and state.id in {"9router", "odysseus"}
+                    and state.installed and state.healthy
+                )
+                use.setEnabled(not running and not permanently_blocked)
         if not running and self.isVisible():
             self.reload()
 
@@ -600,6 +611,12 @@ class AiProxiesPage(BasePage):
                 status = refs.get("status")
                 if isinstance(status, QLabel):
                     status.setText("Status indisponível")
+                if gateway_id == "hermes":
+                    use = refs.get("use")
+                    if isinstance(use, QPushButton):
+                        use.setText("Uso bloqueado")
+                        use.setEnabled(False)
+                        use.setToolTip("Grant por conexão não pode ser aplicado a cada requisição Hermes.")
         elif action_id == "ai.auth-registry":
             self.auth_summary.setText("Autenticação indisponível. Tente atualizar.")
             _set_state(self.auth_summary, "error")
@@ -683,16 +700,23 @@ class AiProxiesPage(BasePage):
         if isinstance(detail, QLabel):
             detail.setText(state.detail or str(refs.get("description") or ""))
         if isinstance(use, QPushButton):
-            if not state.installed:
+            if state.id == "hermes":
+                use.setText("Uso bloqueado")
+            elif not state.installed:
                 use.setText(str(refs.get("install_label") or "Instalar"))
             elif not state.healthy:
                 use.setText(str(refs.get("repair_label") or "Reparar"))
             else:
                 use.setText(str(refs.get("open_label") or "Abrir"))
-            dashboard_blocked = state.id in {"9router", "odysseus"} and state.installed and state.healthy
+            dashboard_blocked = (
+                state.id == "hermes"
+                or state.id in {"9router", "odysseus"} and state.installed and state.healthy
+            )
             use.setEnabled(not dashboard_blocked)
             if dashboard_blocked:
                 use.setToolTip(
+                    "Bloqueado: Hermes não aplica grants por conexão a cada requisição."
+                    if state.id == "hermes" else
                     "Bloqueado: o dashboard pode enviar inferência sem grant por requisição."
                     if state.id == "9router" else
                     "Bloqueado: o workspace encaminha inferência pela credencial 9Router sem grant por requisição."

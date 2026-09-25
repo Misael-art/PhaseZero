@@ -73,6 +73,23 @@ def test_open_webui_usage_routes_are_not_advertised_without_request_grant_suppor
     assert observed.to_dict()["blockedReason"] == "connection-grant-not-enforceable"
 
 
+def test_hermes_consumption_and_setup_wait_for_request_bound_grants():
+    actions = {action.id: action for action in build_catalog(ROOT)}
+
+    assert "hermes" not in actions["ai.setup.tool"].parameters[0].choices
+    assert "bloqueado" in actions["server.hermes.start"].title.casefold()
+    observed = instances_from_status_payload(
+        {"id": "hermes", "installed": True, "configured": True,
+         "healthy": True, "ready": False, "usageBlocked": True,
+         "blockedReason": "connection-grant-not-enforceable"},
+        app_id="app.hermes", host_id="local", scope="local",
+    )[0]
+    assert observed.next_action == "open"
+    assert observed.ready is False
+    assert observed.to_dict()["usageBlocked"] is True
+    assert observed.to_dict()["blockedReason"] == "connection-grant-not-enforceable"
+
+
 def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
     payload = inventory_manifest(ROOT)
     actions = {item["actionId"]: item for item in payload["actions"]}

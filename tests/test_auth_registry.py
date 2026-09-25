@@ -122,6 +122,10 @@ def test_auth_registry_v1_redaction_and_probe_failure_semantics(tmp_path):
     odysseus = next(entry for entry in registry["entries"] if entry["id"] == "workspace:odysseus")
     assert odysseus["usageBlocked"] is True
     assert odysseus["blockedReason"] == "connection-grant-not-enforceable"
+    hermes = next(entry for entry in registry["entries"] if entry["id"] == "workspace:hermes")
+    assert hermes["ready"] is False
+    assert hermes["usageBlocked"] is True
+    assert hermes["blockedReason"] == "connection-grant-not-enforceable"
     assert "Private person" not in result.stdout
     assert "Private profile" not in result.stdout
     assert "provider-record-1" not in result.stdout

@@ -155,10 +155,12 @@ registry="$(jq -cn \
       nextAction:"linux/pz ai claude login bonsai",secretsRedacted:true
     },{
       id:"workspace:hermes",label:"Hermes",kind:"workspace",scope:"agent",required:false,
-      installed:($h.installed == true),configured:($h.configured == true),authenticated:($h.auth.configured == true),ready:($h.ready == true),
-      status:(if $h.ready then "ready" elif $h.installed then "attention" else "missing" end),method:"env-reference",
+      installed:($h.installed == true),configured:($h.configured == true),
+      configurationReady:($h.configurationReady == true),authenticated:($h.auth.configured == true),ready:false,
+      status:(if $h.installed then "blocked" else "missing" end),method:"env-reference",
       accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
-      nextAction:"linux/pz ai hermes doctor",secretsRedacted:true
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     },{
       id:"workspace:odysseus",label:"Odysseus",kind:"workspace",scope:"agent",required:false,
       installed:($d.installed == true),configured:($d.configured == true),authenticated:($d.routerCredential.configured == true),ready:($d.ready == true),

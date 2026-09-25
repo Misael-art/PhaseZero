@@ -485,17 +485,18 @@ def test_hermes_detail_uses_local_status_and_read_only_recovery(qapp):
         page._instances_ready(page._status_action_id, (ProductInstance(
             "local:local:app.hermes", "app.hermes", "local", "local",
             installation="present", origin="unknown", configuration="ready", health="offline",
+            usage_blocked=True, blocked_reason="connection-grant-not-enforceable",
         ),))
-        assert page._primary_button.text() == "Resolver"
-        assert page._primary_action.id == "ai.hermes-doctor"
-        assert not page._primary_action.mutable
+        assert page._primary_button.text() == "Uso bloqueado"
+        assert not page._primary_button.isEnabled()
+        assert page._primary_action is None
+        assert any(row.action.id == "ai.hermes-doctor" for row in _detail_action_rows(page))
         assert "server.hermes.start" not in {
             row.action.id for row in _detail_action_rows(page)
         }
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.hermes-doctor"
+        start.assert_not_called()
     finally:
         window.close()
         host_patcher.stop()

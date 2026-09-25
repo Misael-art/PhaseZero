@@ -181,7 +181,7 @@ Usage:
   pz ai opencode verify        Read-only config check; live inference blocked without grant binding
   pz ai opencode run --route=9router -- <args>  Blocked until account-bound grants are enforceable
   pz ai opencode rollback <manifest> Restore an OpenCode route transaction
-  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
+  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
   pz ai drift [status|sync [--dry-run]]  Compare installed runtime copies with the repo (exit 2 on drift)
   pz ai codexbar <action>      CodexBar CLI + optional KodexBar plasmoid (status|setup|health|auth|watchdog|plasmoid|plasmoid-remove|repair)
   pz ai claude status          Audit Claude, Bonsai, routes, hooks and 9Router conflicts
@@ -233,9 +233,9 @@ Usage:
   pz ai odysseus install       Blocked until workspace inference enforces per-request grants
   pz ai odysseus open          Blocked until workspace inference enforces per-request grants
   pz ai odysseus update        Blocked until workspace inference enforces per-request grants
-  pz ai hermes status          Redacted Hermes readiness and authentication state
+  pz ai hermes status          Redacted Hermes configuration, auth and grant-block state
   pz ai hermes doctor          Read-only Hermes integrity and policy diagnostic
-  pz ai hermes route           Force+self-heal Hermes through 9Router (apply|status|doctor|models|bai|model <id>|heal)
+  pz ai hermes route           Read Hermes routing status (status|doctor|models|bai); writes blocked without request grants
   pz ai workspaces doctor      Unified Hermes/Odysseus/9Router readiness audit
   pz ai workspaces plan        Safe read-only deployment plan and blockers
   pz ai auth status            Redacted registry for AI accounts and sessions
@@ -752,7 +752,14 @@ cmd_ai() {
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
                     bash "$PZ_ROOT/linux/ai/setup-opencode.sh"
-                    bash "$PZ_ROOT/linux/ai/setup-hermes.sh"
+                    if bash "$PZ_ROOT/linux/ai/setup-hermes.sh"; then
+                        :
+                    else
+                        setup_rc=$?
+                        if [ "$setup_rc" -ne 69 ]; then return "$setup_rc"; fi
+                        pz_warn "Hermes omitted: per-request account grants are unavailable; other setup steps continue"
+                        setup_blocked=69
+                    fi
                     bash "$PZ_ROOT/linux/ai/setup-openclaw.sh"
                     bash "$PZ_ROOT/linux/ai/setup-memory.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup

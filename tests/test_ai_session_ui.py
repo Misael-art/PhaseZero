@@ -246,12 +246,19 @@ def test_proxies_page_integrates_hermes_and_safe_odysseus_plan(proxies_page):
     page._proxy_status_ready("ai.hermes-status", "", {
         "installed": True,
         "ready": False,
+        "configurationReady": True,
+        "usageBlocked": True,
+        "blockedReason": "connection-grant-not-enforceable",
         "version": "0.20.5",
         "auth": {"configured": False},
     })
     hermes = page._gateway_rows["hermes"]
-    assert hermes["use"].text() == "Diagnosticar"
-    assert hermes["detail"].text() == "Autenticação pendente"
+    assert hermes["use"].text() == "Uso bloqueado"
+    assert not hermes["use"].isEnabled()
+    assert "grant por conexão" in hermes["detail"].text()
+    with patch.object(page, "run_action") as run_action:
+        page._gateway_use("hermes")
+    run_action.assert_not_called()
     page._proxy_status_ready("ai.odysseus-status", "", {
         "installed": False, "ready": False, "podmanRootless": True,
     })

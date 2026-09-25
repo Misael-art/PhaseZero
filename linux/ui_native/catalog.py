@@ -240,7 +240,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
     profile_meta = {
         "safe-base": ("Base segura", "Essenciais para uso diário.", "Seguro"),
-        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Hermes é experimental e opcional (skip explicado quando bloqueado).", "Dev"),
+        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Uso Hermes aguarda grants aplicados por requisição.", "Dev"),
         "gaming": ("Gaming", "Steam, Heroic, Lutris e telemetria local.", "Jogos"),
         "steamdeck-linux": ("Steam Deck Linux", "UX SteamOS, hotkeys e Gamepad UI.", "Recomendado"),
         "windows-vm-linux": ("Windows VM", "QEMU/KVM, OVMF, TPM e compartilhamentos.", "VM"),
@@ -661,8 +661,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("odysseus-update", "Update Odysseus bloqueado", "Não reinicia workspace enquanto inferência não exigir grant por requisição.", ("ai", "odysseus", "update"), ("ai", "odysseus", "check-update")),
         ("odysseus-backup", "Backup Odysseus", "Arquiva dados persistentes com SHA-256.", ("ai", "odysseus", "backup"), ("ai", "odysseus", "status")),
         ("odysseus-doctor", "Doctor Odysseus", "Audita containers, endpoint e credenciais sem alterar nada.", ("ai", "odysseus", "doctor"), None),
-        ("hermes-status", "Status Hermes", "Prontidão, autenticação, configuração e MCPs sem revelar segredos.", ("ai", "hermes", "status"), None),
-        ("hermes-doctor", "Doctor Hermes", "Audita integridade, política e acesso remoto sem alterar nada.", ("ai", "hermes", "doctor"), None),
+        ("hermes-status", "Status Hermes", "Configuração, saúde e bloqueio de uso sem revelar segredos.", ("ai", "hermes", "status"), None),
+        ("hermes-doctor", "Doctor Hermes", "Audita integridade, política, grants e acesso remoto sem alterar nada.", ("ai", "hermes", "doctor"), None),
         ("workspaces-doctor", "Diagnóstico Hermes + Odysseus", "Auditoria read-only e redigida da jornada completa.", ("ai", "workspaces", "doctor"), None),
         ("workspaces-plan", "Plano Hermes + Odysseus", "Mostra fases, bloqueios e próxima ação segura sem implantar workloads.", ("ai", "workspaces", "plan"), None),
         ("operations-status", "Operações persistentes", "Estado redigido de operações concluídas, falhas e interrupções recuperáveis.", ("ai", "operations", "status"), None),
@@ -942,7 +942,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("server.llm.expose", "Servidor", "Expor LLM na LAN", "Habilita acesso LAN ao LLM local.", ("server", "llm", "expose-lan"), "network-wired", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
             _a("server.llm.restore", "Servidor", "Restaurar LLM local", "Remove exposição e restaura defaults.", ("server", "llm", "restore"), "edit-undo", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
             _a("server.hermes.status", "Servidor", "Status Hermes", "Estado da atuação remota.", ("server", "hermes", "status"), "network-transmit-receive", visibility="advanced"),
-            _a("server.hermes.start", "Servidor", "Iniciar Hermes", "Inicia atuação remota configurada.", ("server", "hermes", "start"), "media-playback-start", mutable=True, preview=("server", "hermes", "status"), visibility="advanced"),
+            _a("server.hermes.start", "Servidor", "Uso Hermes remoto bloqueado", "Não inicia agente remoto sem grant PhaseZero vinculado a cada requisição.", ("server", "hermes", "start"), "media-playback-start", mutable=True, preview=("server", "hermes", "status"), visibility="advanced"),
             _a("server.slim.status", "Servidor", "Status modo enxuto", "Serviços afetados pelo slimming.", ("server", "slim", "status"), "preferences-system-performance", visibility="advanced"),
             _a("server.boot.status", "Servidor", "Status boot servidor", "Audita entrada headless.", ("server", "boot", "status"), "system-reboot", visibility="advanced"),
             _a("server.boot.remove", "Servidor", "Remover boot servidor", "Remove entrada GRUB headless.", ("server", "boot", "remove"), "edit-delete", mutable=True, preview=("server", "boot", "status"), elevated=True, visibility="advanced"),
@@ -1050,7 +1050,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("ai.codexbar.watchdog-install", "IA & Dev", "Ativar watchdog CodexBar", "Ativa verificação horária sem tocar no Plasma.", ("ai", "codexbar", "watchdog", "install"), "appointment-new", mutable=True, preview=("ai", "codexbar", "watchdog", "status"), visibility="advanced"),
             _a("ai.codexbar.watchdog-remove", "IA & Dev", "Desativar watchdog CodexBar", "Remove timer de saúde CodexBar.", ("ai", "codexbar", "watchdog", "remove"), "appointment-missed", mutable=True, preview=("ai", "codexbar", "watchdog", "status"), visibility="advanced"),
             _a("ai.codexbar.plasmoid-remove", "IA & Dev", "Remover KodexBar do Plasma", "Faz backup do layout, remove instâncias via DBus e desinstala pacote QML.", ("ai", "codexbar", "plasmoid-remove"), "edit-delete", mutable=True, preview=("ai", "codexbar", "status"), risk="high", visibility="advanced"),
-            _a("ai.setup.tool", "IA & Dev", "Instalar ferramenta IA", "Executa setup seguro para uma ferramenta pública; Open WebUI aguarda grant por requisição.", ("ai", "setup", "{tool}"), "system-software-install", mutable=True, preview=("ai", "status"), parameters=(_p("tool", "Ferramenta", "choice", choices=("codex", "ollama", "claude", "desktop", "opencode", "omo", "hermes", "openclaw", "memory", "admin", "rtk", "caveman", "headroom", "compat", "ides", "ide-apps", "usagebar", "codexbar", "all")),), visibility="advanced"),
+            _a("ai.setup.tool", "IA & Dev", "Instalar ferramenta IA", "Executa setup disponível; consumidores sem grant por requisição ficam fora da seleção.", ("ai", "setup", "{tool}"), "system-software-install", mutable=True, preview=("ai", "status"), parameters=(_p("tool", "Ferramenta", "choice", choices=("codex", "ollama", "claude", "desktop", "opencode", "omo", "openclaw", "memory", "admin", "rtk", "caveman", "headroom", "compat", "ides", "ide-apps", "usagebar", "codexbar", "all")),), visibility="advanced"),
             _a("ai.mcp.sync-target", "IA & Dev", "Sincronizar MCP por cliente", "Sincroniza servidores seguros no cliente escolhido.", ("ai", "mcp", "sync", "{target}"), "folder-sync", mutable=True, preview=("ai", "mcp", "status"), parameters=(_p("target", "Cliente", "choice", choices=("all", "codex", "claude", "opencode", "vscode")),), visibility="advanced"),
             _a("ai.proxies.install-one", "Proxies IA", "Instalar proxy específico", "Instala ou atualiza um proxy da suite.", ("ai", "proxies", "install", "{proxy}"), "network-server", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy", "9router")),), visibility="advanced"),
 

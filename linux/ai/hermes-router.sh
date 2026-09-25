@@ -40,6 +40,13 @@ source "$PZ_ROOT/linux/lib/common.sh"
 # info() -> stderr, so JSON envelopes on stdout stay clean (pz_info goes to stdout).
 info() { echo "INFO:  $*" >&2; }
 
+require_connection_grant() {
+    pz_error "Hermes routing changes blocked: per-request account grants are unavailable"
+    jq -cn '{schemaVersion:1,tool:"hermes-router",status:"blocked",usageBlocked:true,
+      blockedReason:"connection-grant-not-enforceable",secretsRedacted:true}'
+    return 69
+}
+
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 HERMES_CONFIG="$HERMES_HOME/config.yaml"
 HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"
@@ -371,7 +378,8 @@ status_json() {
         --arg endpoint "$ROUTER_ENDPOINT" \
         '{schemaVersion:1,tool:"hermes-router",router:{endpoint:$endpoint,ready:$routerReady,models:$models},
           hermes:{configured:$configured,home:$home,configPath:$config,modelBlock:$drift},
-          forcedThroughRouter:$routed,drift:$drift_bool,
+          forcedThroughRouter:$routed,drift:$drift_bool,usageBlocked:true,
+          blockedReason:"connection-grant-not-enforceable",
           secretsRedacted:true}'
 }
 
@@ -388,6 +396,7 @@ doctor_json() {
             if $status.router.models == 0 then {severity:"error",component:"9router",code:"router-no-models"} else empty end,
             if $status.hermes.configured|not then {severity:"error",component:"hermes",code:"hermes-not-configured"} else empty end,
             if $status.forcedThroughRouter|not then {severity:"error",component:"hermes",code:"hermes-not-routed-through-9router"} else empty end,
+            if $status.usageBlocked then {severity:"warning",component:"hermes",code:"connection-grant-not-enforceable"} else empty end,
             if $bai.detected and ($bai.connected|not) then {severity:"warning",component:"b.ai",code:"bai-no-credential"} else empty end
           ]),secretsRedacted:true}'
 }
@@ -483,14 +492,14 @@ main() {
         doctor|diagnose) doctor_json ;;
         models|list) list_models ;;
         bai|b-ai|b.ai) bai_status ;;
-        apply|wire|enforce) wire ;;
-        model|pin|set) shift; pin_model "${1:-}" ;;
-        heal|repair) apply_router_config; status_json ;;
+        apply|wire|enforce) require_connection_grant ;;
+        model|pin|set) require_connection_grant ;;
+        heal|repair) require_connection_grant ;;
         list-models) list_models ;;
-        install|install-watch) install_watch ;;
+        install|install-watch) require_connection_grant ;;
         watch|guard) watch_status ;;
         help|-h|--help)
-            echo "usage: hermes-router.sh (status|doctor|models|bai|apply|model <id>|heal|install|watch)"
+            echo "usage: hermes-router.sh (status|doctor|models|bai|watch); route changes blocked until per-request grants exist"
             ;;
         *) pz_error "usage: hermes-router.sh (status|doctor|models|bai|apply|model <id>|heal|install|watch)"; return 2 ;;
     esac
