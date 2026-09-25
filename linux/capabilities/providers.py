@@ -369,7 +369,11 @@ class Provider:
             )
         family = self.facts.package_family
         if family == "arch":
-            return CommandPlan(self.facts.package_manager, ("-R", "--noconfirm", source.name), True)
+            # Remove package-owned dependencies only when pacman confirms no
+            # installed package still requires them. Plain -R can leave
+            # dependencies from the install transaction behind as blockers
+            # for removing the primary package later.
+            return CommandPlan(self.facts.package_manager, ("-Rs", "--noconfirm", source.name), True)
         if family == "debian":
             return CommandPlan(self.facts.package_manager, ("remove", "-y", source.name), True)
         if family == "fedora":

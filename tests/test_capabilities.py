@@ -75,7 +75,9 @@ class FakeProvider(Provider):
     def execute(self, plan):
         self.executed.append(plan.command())
         name = plan.args[-1]
-        if "uninstall" in plan.args or "-R" in plan.args or "remove" in plan.args:
+        if "uninstall" in plan.args or any(
+            argument.startswith("-R") for argument in plan.args
+        ) or "remove" in plan.args:
             self.installed_names.discard(name)
         else:
             self.installed_names.add(name)
@@ -120,6 +122,13 @@ def test_installation_probe_distinguishes_absent_from_unverifiable():
         assert provider.installed(source) is None
     with patch("linux.capabilities.providers.subprocess.run", side_effect=FileNotFoundError):
         assert provider.installed(source) is None
+
+
+def test_arch_removal_asks_pacman_to_prune_only_unneeded_dependencies():
+    command = Provider(host()).remove_plan(SourceSpec("package", "nodejs"))
+
+    assert command.command() == ["pacman", "-Rs", "--noconfirm", "nodejs"]
+    assert command.elevated is True
 
 
 def test_plan_blocks_when_existing_installation_cannot_be_probed(private_state):

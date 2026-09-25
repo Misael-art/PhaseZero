@@ -635,3 +635,12 @@ comprovado nesta tentativa. Esta live ISO sem disco persistente não é snapshot
 Arch/Windows continua pendente. QEMU foi encerrado; imagem ISO e saídas temporárias foram
 apagadas. Sobrou somente `/tmp/pxa-g2-arch-vm-f17f889/rootfs/etc/ca-certificates`,
 root-owned; a ponte `phasezero-admin` recusou `rm -rf` deste caminho como não autorizado.
+
+PXA-004 correção após o probe Arch: `Provider.remove_plan` usava `pacman -R`, que deixou
+pacotes dependentes instalados pela transação anterior e impediu remover Node.js após
+pnpm. Agora usa `pacman -Rs`; segundo o [manual oficial do pacman](https://man.archlinux.org/man/pacman.8),
+`--recursive` remove dependências sem uso restante e não explicitamente instaladas, sem
+remover pacote ainda requerido. `tests/test_capabilities.py`: 55 passaram, incluindo o
+comando exato e a fixture Compose/Kind que preserva Docker compartilhado. Limite: alteração
+foi verificada hermeticamente; repetir instalação→remoção e dependência compartilhada numa
+VM/snapshot permanece necessário antes de aceitar o comportamento G2.
