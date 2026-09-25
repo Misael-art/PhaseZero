@@ -8,6 +8,7 @@ The existing redacted auth registry remains a separate v1 summary.
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -65,10 +66,17 @@ class Quota:
                     raise ValueError(f"invalid quota {name}") from exc
                 if parsed.tzinfo is None:
                     raise ValueError(f"invalid quota {name}: timezone required")
-        if self.remaining is not None and self.remaining < 0:
-            raise ValueError("negative quota")
-        if self.total is not None and self.total < 0:
-            raise ValueError("negative quota total")
+        for name, value in (("remaining", self.remaining), ("total", self.total)):
+            if value is None:
+                continue
+            try:
+                finite = math.isfinite(value)
+            except (TypeError, OverflowError):
+                finite = False
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not finite:
+                raise ValueError(f"invalid quota {name}")
+            if value < 0:
+                raise ValueError(f"negative quota {name}")
         if self.source == "unknown" and (self.remaining is not None or self.total is not None):
             raise ValueError("unknown quota cannot invent numbers")
 

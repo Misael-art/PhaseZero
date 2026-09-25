@@ -49,6 +49,9 @@ def test_quota_requires_dimension_unit_and_valid_timestamps():
         Quota("requests", "calls", observed_at="2026-09-25T06:00:00")
     with pytest.raises(ValueError, match="invalid quota reset_at"):
         Quota("requests", "calls", reset_at="tomorrow")
+    for value in (True, "4", float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="invalid quota remaining"):
+            Quota("requests", "calls", remaining=value, source="official")
 
 
 def test_private_identity_stays_out_of_redacted_export():
