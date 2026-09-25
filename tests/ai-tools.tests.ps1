@@ -124,6 +124,53 @@ Describe 'AI coding tool support' {
         (@($catalog['aionui'].Aliases) -contains 'aion-ui') | Should Be $true
     }
 
+    It 'blocks OpenClaw usage actions but preserves explicit managed uninstall' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+        Mock Install-BootstrapAiNpmTool { throw 'OpenClaw npm install must not run' }
+        Mock Invoke-BootstrapAiNativeCommand { throw 'OpenClaw npm uninstall must not run in dry-run' }
+
+        foreach ($action in @('install','configure','start')) {
+            $result = Invoke-BootstrapAiToolAction -ToolName 'openclaw' -Action $action -InstallRoot $script:AiToolsTestRoot -ProjectRoot $script:AiToolsTestRoot -DryRun -Yes
+            [string]$result.status | Should Be 'blocked'
+            [bool]$result.ready | Should Be $false
+            [bool]$result.usageBlocked | Should Be $true
+            [string]$result.blockedReason | Should Be 'connection-grant-not-enforceable'
+        }
+
+        Assert-MockCalled Install-BootstrapAiNpmTool -Times 0 -Exactly
+        Assert-MockCalled Invoke-BootstrapAiNativeCommand -Times 0 -Exactly
+        { Install-BootstrapAiNpmTool -ToolName 'openclaw' -CatalogEntry (Get-BootstrapAiToolCatalog)['openclaw'] -InstallRoot $script:AiToolsTestRoot -DryRun } | Should Throw '*connection-grant-not-enforceable*'
+        $uninstall = Invoke-BootstrapAiToolAction -ToolName 'openclaw' -Action 'uninstall' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $script:AiToolsTestRoot -DryRun -Yes
+        [string]$uninstall.status | Should Be 'planned'
+        [string]$uninstall.message | Should Match 'npm uninstall -g --prefix'
+        [string]$uninstall.message | Should Match ([regex]::Escape((Get-BootstrapAiNpmPrefix -InstallRoot $script:AiToolsTestRoot)))
+        $directUninstall = Uninstall-BootstrapAiNpmTool -ToolName 'openclaw' -CatalogEntry (Get-BootstrapAiToolCatalog)['openclaw'] -InstallRoot $script:AiToolsTestRoot -DryRun
+        [string]$directUninstall.status | Should Be 'planned'
+        @(Get-ChildItem -LiteralPath $script:AiToolsTestRoot -Force).Count | Should Be 0
+
+        $component = (Get-BootstrapComponentCatalog)['openclaw']
+        (@($component.DependsOn).Count) | Should Be 0
+        [string]$component.Description | Should Match 'blocked'
+        $profiles = Get-BootstrapProfileCatalog
+        (@($profiles['ai'].Items) -contains 'openclaw') | Should Be $false
+        (@($profiles['legacy'].Items) -contains 'openclaw') | Should Be $false
+        $capability = (Get-BootstrapAppCapabilityCatalog)['openClaw']
+        [bool]$capability.autoInstall | Should Be $false
+        [bool]$capability.authByFile | Should Be $false
+        [bool]$capability.authByEnv | Should Be $false
+        [bool]$capability.manualOnly | Should Be $true
+
+        Mock Resolve-BootstrapAiToolCommandPath { return 'C:\External\openclaw.cmd' }
+        Mock Invoke-NativeFirstLine { throw 'OpenClaw/node command must not run in blocked status.' }
+        Mock Invoke-BootstrapDoctorCommandProbe { throw 'OpenClaw probe must not run.' }
+        $openClawReport = Get-BootstrapOpenClawAiConfigReport
+        [bool]$openClawReport.ready | Should Be $false
+        [bool]$openClawReport.usageBlocked | Should Be $true
+        [string]$openClawReport.smoke.status.status | Should Be 'blocked'
+        Assert-MockCalled Invoke-NativeFirstLine -Times 0 -Exactly
+        Assert-MockCalled Invoke-BootstrapDoctorCommandProbe -Times 0 -Exactly
+    }
+
     It 'declares ai-jail as an opt-in WSL sandbox tool and plans a dry-run install' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 

@@ -1244,3 +1244,49 @@ podem ser chamados diretamente fora destes managers e continuam fora do enforcem
 nenhum foi removido ou parado nesta etapa. PXA-003/PXA-008 permanecem
 `in_progress`; enforcement por request, fallback, cliente/serviço já ativo,
 Windows, Secret Service real e PXA-006/G3 ainda pendem. Fixtures não fecham G3.
+
+PXA-003/PXA-008 OpenClaw: gate cruzado Linux/Windows (2026-09-25). A documentação
+oficial do [gateway authentication](https://docs.openclaw.ai/gateway/authentication)
+permite perfis de credenciais distintos e retry por chaves; a documentação de
+[custom providers](https://docs.openclaw.ai/concepts/model-providers/custom-providers)
+permite endpoint/provider configurável. A configuração PhaseZero existente não
+vincula cada request a um grant de conta nem impede fallback entre contas.
+
+Linux: `setup-openclaw.sh` bloqueia setup/install/configure/daemon antes de efeitos,
+status permanece read-only e registra `usageBlocked:true`, `ready:false`;
+`ai setup all` omite OpenClaw, continua os próximos itens e sinaliza resultado parcial.
+Wrapper Headroom também retorna exit 69. Seletor, reparo, catálogo e fiação MCP/
+ai-memory deixam de recomendar ou adotar instalação/config externa. Testes G1 de
+grant-gate, auth registry, inventário, Hermes e linux-ai já passaram nesta execução;
+sem instalação, serviço ou inferência real.
+
+Windows: gate anterior à instalação npm no componente e no AI Tools API; install,
+configure e start retornam `blocked`. Uninstall explícito segue disponível apenas
+no prefixo npm gerenciado pelo PhaseZero; dry-run mostra esse caminho sem chamar npm.
+Perfis amplos não instalam OpenClaw. Propagação de chaves/provedores/MCPs mantém
+bytes externos intactos; OpenClaw sai dos targets BYOK e é reportado bloqueado na
+cobertura. Headroom gera helper cujo `wrap-openclaw` retorna JSON + exit 69. Um
+harness `pwsh` fixture-only passou esses caminhos, inclusive ausência de probe,
+Node/npm e mutação, além de confirmar preview de uninstall no prefixo gerenciado.
+`tests/linux-openclaw-grant-gate.sh`, `tests/linux-hermes-grant-gate.sh` e
+`tests/linux-ai.sh` passaram; regressão Python de contratos, grants, inventário,
+página de contas, roteamento e sessão passou 138 testes. ShellCheck nos scripts
+alterados passou com as exclusões do CI; parser PowerShell passou em seis arquivos.
+
+Limites: PXA-003/PXA-008 continuam `in_progress`; executar diretamente binário,
+daemon/gateway, launcher ou URL local já existente ainda fica fora do manager.
+Pester local não serve como prova: Pester 3.4 não carrega no PowerShell Core/Linux
+(`Get-WmiObject` indisponível); Pester 6 falha antes dos testes por isolamento de
+funções de fixture legadas. Reexecutar Pester 3.4 no Windows CI. Nenhuma conta,
+sessão ou cota real observada; PXA-006/G3 continua gate externo, e fixtures não o
+fecham.
+
+PXA-004/PXA-005/PXA-014 Windows G2 — etapa **não realizada**; reavaliação read-only
+em 2026-09-25, ~18:10 -03:00: 14 GiB RAM, 7,2 GiB disponíveis, swap usada ~3,6 MiB,
+load 1,17/1,80/1,41; sem processo QEMU e `virsh list --all` vazio. Snapshot de recurso
+recuperou; pressão de memória não é motivo atual. ISO
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`: apenas
+`stat` (8.172.068.864 bytes); sem hash, montagem, leitura do conteúdo ou boot. Etapa
+segue pendente porque não há snapshot Windows descartável e o contrato do operador
+proíbe VM/boot no host de desenvolvimento; roadmap WinVM registra risco histórico
+de Btrfs checksum/QEMU AIO. Nenhum processo do host interrompido ou alterado.

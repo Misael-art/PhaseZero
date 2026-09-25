@@ -45,11 +45,13 @@ run_probe opencode '{"cli":{"installed":false},"configuration":{"configured":fal
 pid_opencode=$!
 run_probe hermes '{"installed":false,"configured":false,"ready":false,"auth":{"configured":false}}' bash "$PZ_ROOT/linux/ai/setup-hermes.sh" status &
 pid_hermes=$!
+run_probe openclaw '{"available":false,"configExists":false,"ready":false,"usageBlocked":true,"blockedReason":"connection-grant-not-enforceable"}' bash "$PZ_ROOT/linux/ai/setup-openclaw.sh" status &
+pid_openclaw=$!
 run_probe odysseus '{"installed":false,"configured":false,"ready":false,"routerCredential":{"configured":false}}' bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status &
 pid_odysseus=$!
 
 for pid in "$pid_proxies" "$pid_router" "$pid_providers" "$pid_claude" \
-    "$pid_opencode" "$pid_hermes" "$pid_odysseus"; do
+    "$pid_opencode" "$pid_hermes" "$pid_openclaw" "$pid_odysseus"; do
     wait "$pid" || true
 done
 
@@ -63,6 +65,7 @@ registry="$(jq -cn \
     --arg claudeProbe "$(cat "$tmp_dir/claude.state")" \
     --arg opencodeProbe "$(cat "$tmp_dir/opencode.state")" \
     --arg hermesProbe "$(cat "$tmp_dir/hermes.state")" \
+    --arg openclawProbe "$(cat "$tmp_dir/openclaw.state")" \
     --arg odysseusProbe "$(cat "$tmp_dir/odysseus.state")" \
     --slurpfile proxies "$tmp_dir/proxies.json" \
     --slurpfile router "$tmp_dir/router.json" \
@@ -70,6 +73,7 @@ registry="$(jq -cn \
     --slurpfile claude "$tmp_dir/claude.json" \
     --slurpfile opencode "$tmp_dir/opencode.json" \
     --slurpfile hermes "$tmp_dir/hermes.json" \
+    --slurpfile openclaw "$tmp_dir/openclaw.json" \
     --slurpfile odysseus "$tmp_dir/odysseus.json" '
   def label_proxy:
     if . == "kimiproxy" then "Kimi Proxy"
@@ -80,7 +84,8 @@ registry="$(jq -cn \
   def degrade($probe):
     if $probe == "ok" then . else
       .installed = null | .configured = null | .authenticated = null |
-      .ready = null | .status = "unknown" | .lastVerifiedAt = null
+      .ready = (if .usageBlocked == true then false else null end) |
+      .status = "unknown" | .lastVerifiedAt = null
     end;
   def proxy_entry:
     . as $p |
@@ -103,6 +108,7 @@ registry="$(jq -cn \
   ($claude[0] // {}) as $c |
   ($opencode[0] // {}) as $o |
   ($hermes[0] // {}) as $h |
+  ($openclaw[0] // {}) as $oc |
   ($odysseus[0] // {}) as $d |
   ([($proxies[0] // [])[] | select(.id == "kimiproxy" or .id == "qwenproxy" or .id == "deepsproxy" or .id == "mimo-ai-proxy") | proxy_entry]) as $proxyEntries |
   ([$connections | sort_by(.provider) | group_by(.provider)[] |
@@ -162,6 +168,14 @@ registry="$(jq -cn \
       nextAction:"blocked:connection-grant-not-enforceable",
       usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     },{
+      id:"workspace:openclaw",label:"OpenClaw",kind:"workspace",scope:"agent",required:false,
+      installed:($oc.available == true),configured:($oc.configExists == true),
+      authenticated:null,ready:false,
+      status:(if $oc.available == true then "blocked" else "missing" end),
+      method:"provider-managed",accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
+    },{
       id:"workspace:odysseus",label:"Odysseus",kind:"workspace",scope:"agent",required:false,
       installed:($d.installed == true),configured:($d.configured == true),authenticated:($d.routerCredential.configured == true),ready:($d.ready == true),
       status:(if $d.ready then "ready" elif $d.installed then "attention" else "blocked" end),method:"canonical-9router-reference",
@@ -174,6 +188,7 @@ registry="$(jq -cn \
     elif .id == "client:opencode" then degrade($opencodeProbe)
     elif .id == "client:claude" or .id == "client:bonsai" then degrade($claudeProbe)
     elif .id == "workspace:hermes" then degrade($hermesProbe)
+    elif .id == "workspace:openclaw" then degrade($openclawProbe)
     elif .id == "workspace:odysseus" then degrade($odysseusProbe)
     else . end] +
     [$providerEntries[] | degrade($providersProbe)] +
@@ -181,7 +196,7 @@ registry="$(jq -cn \
   {
     schemaVersion:1,observedAt:$observedAt,entries:$entries,
     probes:{proxies:$proxiesProbe,router:$routerProbe,providers:$providersProbe,
-      claude:$claudeProbe,opencode:$opencodeProbe,hermes:$hermesProbe,
+      claude:$claudeProbe,opencode:$opencodeProbe,hermes:$hermesProbe,openclaw:$openclawProbe,
       odysseus:$odysseusProbe},
     summary:{
       total:($entries|length),ready:([$entries[]|select(.ready == true)]|length),

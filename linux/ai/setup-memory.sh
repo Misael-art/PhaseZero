@@ -38,7 +38,6 @@ detected_agents() {
     command -v claude >/dev/null 2>&1 && echo "claude-code:claude-code"
     command -v codex >/dev/null 2>&1 && echo "codex:codex"
     command -v opencode >/dev/null 2>&1 && echo "opencode:open-code"
-    command -v openclaw >/dev/null 2>&1 && echo "openclaw:openclaw"
     command -v cursor >/dev/null 2>&1 && echo "cursor:cursor"
     command -v gemini >/dev/null 2>&1 && echo "gemini-cli:gemini-cli"
     { command -v grok >/dev/null 2>&1 || [ -d "$HOME/.grok" ]; } && echo "grok:grok"
@@ -216,6 +215,11 @@ wire_agents() {
             --argjson mcp "$mcp_ok" --argjson hooks "$hook_ok" \
             '{client:$client,agent:$agent,mcp:$mcp,hooks:$hooks,ready:($mcp and $hooks)}' >> "$rows"
     done < <(detected_agents)
+    if command -v openclaw >/dev/null 2>&1; then
+        pz_warn "OpenClaw memory wiring skipped: managed use is blocked until per-request grants are enforceable"
+        jq -cn '{client:"openclaw",agent:"openclaw",mcp:false,hooks:false,ready:false,
+          usageBlocked:true,blockedReason:"connection-grant-not-enforceable"}' >> "$rows"
+    fi
     # ZCode consumes PhaseZero's canonical MCP store. It has no documented
     # ai-memory lifecycle-hook adapter; claiming hooks here would be false.
     if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json" ]; then

@@ -116,7 +116,7 @@ export PZ_SETUP_ALL_CALLS="$TMP_ROOT/setup-all.calls"
 setup_all_stdout="$TMP_ROOT/setup-all.stdout"
 setup_all_stderr="$TMP_ROOT/setup-all.stderr"
 setup_all_rc=0
-if PZ_SETUP_ALL_BLOCKED="setup-open-webui.sh,setup-hermes.sh" \
+if PZ_SETUP_ALL_BLOCKED="setup-open-webui.sh,setup-hermes.sh,setup-openclaw.sh" \
     bash "$SHADOW_ROOT/linux/pz" ai setup all >"$setup_all_stdout" 2>"$setup_all_stderr"; then
     setup_all_rc=0
 else
@@ -125,6 +125,7 @@ fi
 test "$setup_all_rc" -eq 69
 grep -q 'Open WebUI omitted: request-bound account grants are unavailable' "$setup_all_stderr"
 grep -q 'Hermes omitted: per-request account grants are unavailable' "$setup_all_stderr"
+grep -q 'OpenClaw omitted: per-request account grants are unavailable' "$setup_all_stderr"
 for script in setup-openclaw.sh setup-memory.sh setup-admin-bridge.sh \
     setup-agent-compat.sh setup-usagebar.sh setup-codexbar.sh setup-ides.sh; do
     grep -q "^$script " "$PZ_SETUP_ALL_CALLS"

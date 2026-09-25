@@ -90,6 +90,11 @@ def test_hermes_consumption_and_setup_wait_for_request_bound_grants():
     assert observed.to_dict()["blockedReason"] == "connection-grant-not-enforceable"
 
 
+def test_openclaw_setup_is_not_offered_without_request_bound_grants():
+    actions = {action.id: action for action in build_catalog(ROOT)}
+    assert "openclaw" not in actions["ai.setup.tool"].parameters[0].choices
+
+
 def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
     payload = inventory_manifest(ROOT)
     actions = {item["actionId"]: item for item in payload["actions"]}

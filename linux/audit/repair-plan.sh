@@ -394,17 +394,6 @@ elif ! jq -e '.agentConfigs.hermes.mcpServerCount > 0' <<< "$ai_status" >/dev/nu
     add_item "AI10" "low" "Hermes MCP servers not configured" "linux/ai/setup-hermes.sh configure"
 fi
 
-if ! jq -e '.clis.openclaw.available == true' <<< "$ai_status" >/dev/null 2>&1; then
-    add_item "AI09" "medium" "OpenClaw CLI missing" "linux/pz ai setup openclaw"
-elif ! jq -e '.agentConfigs.openclaw.mcpServerCount > 0' <<< "$ai_status" >/dev/null 2>&1; then
-    add_item "AI11" "low" "OpenClaw MCP servers not configured" "linux/ai/setup-openclaw.sh configure"
-fi
-
-if jq -e '.clis.openclaw.available == true' <<< "$ai_status" >/dev/null 2>&1 &&
-    ! jq -e '.services.openclaw.active == true or .services["openclaw-gateway"].active == true' <<< "$ai_status" >/dev/null 2>&1; then
-    add_item "AI12" "low" "OpenClaw daemon inactive" "linux/ai/setup-openclaw.sh daemon"
-fi
-
 if ! jq -e '.memory.installed == true and (.memory.serverReachable == true or .memory.configuredMarker == true or .memory.userServiceActive == true)' <<< "$ai_status" >/dev/null 2>&1; then
     add_item "AI05" "medium" "ai-memory not installed or not wired" "linux/pz ai setup memory"
 fi

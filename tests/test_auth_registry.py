@@ -47,6 +47,7 @@ case "$args" in
   *"9router-manager.sh status"*) cat "$PZ_TEST_FIXTURES/router.json"; exit 0 ;;
   *"setup-claude-code.sh status"*) cat "$PZ_TEST_FIXTURES/claude.json"; exit 0 ;;
   *"setup-hermes.sh status"*) cat "$PZ_TEST_FIXTURES/hermes.json"; exit 0 ;;
+  *"setup-openclaw.sh status"*) cat "$PZ_TEST_FIXTURES/openclaw.json"; exit 0 ;;
   *"odysseus-manager.sh status"*) cat "$PZ_TEST_FIXTURES/odysseus.json"; exit 0 ;;
 esac
 exec /bin/bash "$@"
@@ -82,6 +83,9 @@ exec "{real_python}" "$@"
                           "router": {"healthy": True}},
         "hermes.json": {"installed": False, "configured": False,
                          "ready": False, "auth": {"configured": False}},
+        "openclaw.json": {"available": True, "configExists": True,
+                           "ready": False, "usageBlocked": True,
+                           "blockedReason": "connection-grant-not-enforceable"},
         "odysseus.json": {"installed": False, "configured": False,
                            "ready": False, "routerCredential": {"configured": False}},
     }
@@ -126,6 +130,10 @@ def test_auth_registry_v1_redaction_and_probe_failure_semantics(tmp_path):
     assert hermes["ready"] is False
     assert hermes["usageBlocked"] is True
     assert hermes["blockedReason"] == "connection-grant-not-enforceable"
+    openclaw = next(entry for entry in registry["entries"] if entry["id"] == "workspace:openclaw")
+    assert openclaw["ready"] is False
+    assert openclaw["usageBlocked"] is True
+    assert openclaw["blockedReason"] == "connection-grant-not-enforceable"
     assert "Private person" not in result.stdout
     assert "Private profile" not in result.stdout
     assert "provider-record-1" not in result.stdout

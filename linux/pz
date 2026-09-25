@@ -760,7 +760,14 @@ cmd_ai() {
                         pz_warn "Hermes omitted: per-request account grants are unavailable; other setup steps continue"
                         setup_blocked=69
                     fi
-                    bash "$PZ_ROOT/linux/ai/setup-openclaw.sh"
+                    if bash "$PZ_ROOT/linux/ai/setup-openclaw.sh"; then
+                        :
+                    else
+                        setup_rc=$?
+                        if [ "$setup_rc" -ne 69 ]; then return "$setup_rc"; fi
+                        pz_warn "OpenClaw omitted: per-request account grants are unavailable; other setup steps continue"
+                        setup_blocked=69
+                    fi
                     bash "$PZ_ROOT/linux/ai/setup-memory.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" setup
