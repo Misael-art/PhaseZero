@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QRadioButton
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRadioButton, QWidget
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +119,85 @@ def test_account_without_photo_uses_accessible_initials(qapp):
         page = window.registry.page_for("Contas e conexões")
         assert page._initials("Account Two") == "AT"
         assert page._initials("") == "?"
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_accounts_privacy_toggle_masks_identity_and_persists(qapp, tmp_path, monkeypatch):
+    class Preferences:
+        hidden = False
+
+        def __init__(self, _parent=None):
+            pass
+
+        @property
+        def hide_account_identity(self):
+            return self.hidden
+
+        def set_hide_account_identity(self, hidden):
+            type(self).hidden = bool(hidden)
+
+    monkeypatch.setattr("linux.ui_native.pages.accounts.UiPreferences", Preferences)
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        page._accounts = router_provider_accounts({"connections": [
+            {
+                "id": "private-a", "provider": "openai", "name": "Private Account",
+                "workspace": "sensitive-workspace", "active": True,
+            },
+            {
+                "id": "private-b", "provider": "openai", "name": "Second Identity",
+                "workspace": "second-workspace", "active": True,
+            },
+        ]})
+        page._render_cards()
+
+        privacy = page.findChild(QCheckBox, "hideAccountIdentity")
+        assert privacy is not None and not privacy.isChecked()
+        assert [label.text() for label in page.findChildren(QLabel, "accountDisplayName")] == [
+            "Private Account", "Second Identity",
+        ]
+
+        privacy.click()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert [label.text() for label in page.findChildren(QLabel, "accountDisplayName")] == [
+            "Conta 1", "Conta 2",
+        ]
+        assert all(
+            "workspace oculto" in label.text()
+            for label in page.findChildren(QLabel, "accountProvider")
+        )
+        assert all(button.accessibleName() in {
+            "Selecionar Conta 1 (openai)", "Selecionar Conta 2 (openai)",
+        } for button in page.findChildren(QRadioButton))
+        assert all(label.text() == "?" for label in page.findChildren(QLabel, "accountAvatarInitials"))
+        rendered_text = " ".join(
+            widget.text() + " " + widget.accessibleName()
+            for widget in page.findChildren(QWidget)
+            if hasattr(widget, "text")
+        )
+        assert "Private Account" not in rendered_text
+        assert "Second Identity" not in rendered_text
+        assert "sensitive-workspace" not in rendered_text
+        assert "second-workspace" not in rendered_text
+
+        window.close()
+        host_patcher.stop()
+        window, host_patcher = _window(qapp)
+        page = window.registry.page_for("Contas e conexões")
+        privacy = page.findChild(QCheckBox, "hideAccountIdentity")
+        assert privacy.isChecked()
+        page._accounts = router_provider_accounts({"connections": [
+            {"id": "private-a", "provider": "openai", "name": "Private Account", "active": True},
+        ]})
+        privacy.click()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert [label.text() for label in page.findChildren(QLabel, "accountDisplayName")] == [
+            "Private Account",
+        ]
+        assert not page.preferences.hide_account_identity
     finally:
         window.close()
         host_patcher.stop()

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -16,6 +16,7 @@ from linux.ai.grants import GrantError, GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
+from ..preferences import UiPreferences
 from ..widgets import SectionHeader
 from .base import BasePage
 
@@ -57,6 +58,8 @@ class AccountsPage(BasePage):
         self.summary: QLabel | None = None
         self._probe_ids: dict[str, tuple[int, str]] = {}
         self._grant_load_error = False
+        self.preferences = UiPreferences(self)
+        self._privacy_toggle: QCheckBox | None = None
         try:
             self.grant_ledger = GrantLedger(_grant_ledger_path())
         except (OSError, ValueError, TypeError):
@@ -88,6 +91,12 @@ class AccountsPage(BasePage):
         refresh.clicked.connect(self.refresh_accounts)
         row.addWidget(refresh)
         layout.addLayout(row)
+        self._privacy_toggle = QCheckBox("Ocultar identidade das contas")
+        self._privacy_toggle.setObjectName("hideAccountIdentity")
+        self._privacy_toggle.setAccessibleName("Ocultar identidade das contas nesta tela")
+        self._privacy_toggle.setChecked(self.preferences.hide_account_identity)
+        self._privacy_toggle.toggled.connect(self._set_identity_hidden)
+        layout.addWidget(self._privacy_toggle)
         cards = QWidget()
         self._cards_layout = QVBoxLayout(cards)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
@@ -102,6 +111,10 @@ class AccountsPage(BasePage):
         self._layout.addWidget(scroll, 1)
         self.status_loader.status_ready.connect(self._source_ready)
         self.status_loader.status_failed.connect(self._source_failed)
+
+    def _set_identity_hidden(self, hidden: bool) -> None:
+        self.preferences.set_hide_account_identity(hidden)
+        self._render_cards()
 
     def refresh_accounts(self) -> None:
         self._generation += 1
@@ -194,21 +207,28 @@ class AccountsPage(BasePage):
             if widget is not None:
                 widget.deleteLater()
         self._radios_by_provider.clear()
-        for account, connection in self._accounts:
+        for index, (account, connection) in enumerate(self._accounts, start=1):
             public = public_account(account)
+            hidden = self.preferences.hide_account_identity
+            display_name = f"Conta {index}" if hidden else str(
+                public.get("displayName") or public.get("nickname") or "Conta"
+            )
+            workspace = "workspace oculto" if hidden else str(
+                public.get("workspace") or "workspace não informado"
+            )
             card = QFrame()
             card.setObjectName("accountCard")
             row = QHBoxLayout(card)
-            initials = self._initials(str(public.get("displayName") or public.get("nickname") or "?"))
+            initials = "?" if hidden else self._initials(display_name)
             avatar = QLabel(initials)
             avatar.setObjectName("accountAvatarInitials")
             avatar.setAlignment(Qt.AlignCenter)
             avatar.setFixedSize(48, 48)
             row.addWidget(avatar)
             details = QVBoxLayout()
-            name = QLabel(str(public.get("displayName") or public.get("nickname") or "Conta"))
+            name = QLabel(display_name)
             name.setObjectName("accountDisplayName")
-            provider = QLabel(f"{account.provider} · {public.get('workspace') or 'workspace não informado'}")
+            provider = QLabel(f"{account.provider} · {workspace}")
             provider.setObjectName("accountProvider")
             state = QLabel(self._connection_state(connection))
             state.setObjectName("accountEvidence")
