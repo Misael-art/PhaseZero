@@ -444,9 +444,10 @@ def test_consumer_grants_filter_routes_and_never_fallback(fake, config):
     assert any("no active grant" in item["reason"] for item in denied["excluded"])
 
     grant = Grant("grant-test", rm._contract_connection_id("codex", "conn-codex-plus"),
-                  "app.claude-code", ("inference",), enabled=True)
+                  "app.claude-code", ("inference",), enabled=True,
+                  consented_at="2026-09-25T00:00:00Z")
     wrong_scope = Grant("grant-read", grant.connection_id, "app.claude-code",
-                        ("status",), enabled=True)
+                        ("status",), enabled=True, consented_at=grant.consented_at)
     scope_denied = rm.recommend(client, config, inv, "code", "balanced",
                                 consumer_id="app.claude-code", grants=(wrong_scope,))
     assert scope_denied["recommendation"] == []
@@ -455,6 +456,43 @@ def test_consumer_grants_filter_routes_and_never_fallback(fake, config):
     chain = rm.recommendation_chain(allowed)
     assert chain
     assert all(model_id.startswith("cx/") for model_id in chain)
+
+    malformed_grants = (
+        {
+            "connectionId": grant.connection_id,
+            "consumerId": "app.claude-code",
+            "scopes": ["inference"],
+            "enabled": "false",
+            "consentedAt": grant.consented_at,
+        },
+        {
+            "connectionId": grant.connection_id,
+            "consumerId": "app.claude-code",
+            "scopes": ["inference"],
+            "enabled": 1,
+            "consentedAt": grant.consented_at,
+        },
+        {
+            "connectionId": grant.connection_id,
+            "consumerId": "app.claude-code",
+            "scopes": "inference",
+            "enabled": True,
+            "consentedAt": grant.consented_at,
+        },
+        {
+            "connectionId": grant.connection_id,
+            "consumerId": "app.claude-code",
+            "scopes": ["inference"],
+            "enabled": True,
+            "consentedAt": "not-a-time",
+        },
+    )
+    for malformed in malformed_grants:
+        rejected = rm.recommend(
+            client, config, inv, "code", "balanced",
+            consumer_id="app.claude-code", grants=(malformed,),
+        )
+        assert rejected["recommendation"] == []
 
 
 @pytest.mark.parametrize("client_name", ("claude", "opencode"))

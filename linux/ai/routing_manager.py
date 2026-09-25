@@ -68,6 +68,35 @@ def _grant_value(grant: object, attribute: str, key: str, default: object = None
         return grant.get(key, default)
     return getattr(grant, attribute, default)
 
+
+def _granted_connection_for_scope(
+    grant: object, consumer_id: str, required_scope: str,
+) -> str:
+    """Return only a structurally valid, explicitly consented active grant."""
+    connection_id = _grant_value(grant, "connection_id", "connectionId", "")
+    enabled = _grant_value(grant, "enabled", "enabled", False)
+    scopes = _grant_value(grant, "scopes", "scopes", ())
+    consented_at = _grant_value(grant, "consented_at", "consentedAt", "")
+    revoked_at = _grant_value(grant, "revoked_at", "revokedAt", "")
+    if (
+        _grant_value(grant, "consumer_id", "consumerId", "") != consumer_id
+        or type(enabled) is not bool or not enabled
+        or not isinstance(connection_id, str) or not connection_id.strip()
+        or not isinstance(scopes, (list, tuple))
+        or any(not isinstance(scope, str) or not scope.strip() for scope in scopes)
+        or required_scope not in scopes
+        or not isinstance(consented_at, str) or not consented_at
+        or not isinstance(revoked_at, str) or revoked_at
+    ):
+        return ""
+    try:
+        consent_timestamp = datetime.fromisoformat(consented_at.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if consent_timestamp.tzinfo is None:
+        return ""
+    return connection_id
+
 # Curated per-task priorities. Real inventory, health, quota, cooldown and
 # capabilities always win over these lists.
 CURATED_PRIORITIES: dict[str, list[str]] = {
@@ -865,11 +894,10 @@ def recommend(client: R9Client, config: Config, inventory: dict, task: str, poli
     inventory_connections = inventory["connections"]
     if consumer_id is not None:
         granted_ids = {
-            _grant_value(grant, "connection_id", "connectionId", "")
-            for grant in grants
-            if _grant_value(grant, "consumer_id", "consumerId", "") == consumer_id
-            and _grant_value(grant, "enabled", "enabled", False)
-            and required_scope in _grant_value(grant, "scopes", "scopes", ())
+            connection_id for grant in grants
+            if (connection_id := _granted_connection_for_scope(
+                grant, consumer_id, required_scope,
+            ))
         }
         eligible_connections = []
         for connection in inventory_connections:

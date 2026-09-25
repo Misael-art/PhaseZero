@@ -33,6 +33,14 @@ def _grant_id(connection_id: str, consumer_id: str) -> str:
     return f"grant:{digest}"
 
 
+def _valid_timestamp(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return parsed.tzinfo is not None
+
+
 class GrantLedger:
     """Private local consent ledger; ``support`` maps consumer -> adapter -> scopes."""
 
@@ -98,20 +106,55 @@ class GrantLedger:
     def _load(self) -> None:
         assert self.path is not None
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        if raw.get("schemaVersion") != self.SCHEMA_VERSION or not isinstance(raw.get("grants"), list):
+        if (
+            not isinstance(raw, dict)
+            or type(raw.get("schemaVersion")) is not int
+            or raw.get("schemaVersion") != self.SCHEMA_VERSION
+            or not isinstance(raw.get("grants"), list)
+        ):
             raise GrantError("unsupported grant ledger schema")
         for item in raw["grants"]:
+            if not isinstance(item, dict):
+                raise GrantError("invalid grant record")
+            grant_id = item.get("grantId")
+            connection_id = item.get("connectionId")
+            consumer_id = item.get("consumerId")
+            scopes = item.get("scopes")
+            enabled = item.get("enabled")
+            consented_at = item.get("consentedAt")
+            revoked_at = item.get("revokedAt", "")
+            if any(
+                not isinstance(value, str) or not value.strip()
+                for value in (grant_id, connection_id, consumer_id)
+            ):
+                raise GrantError("invalid grant identity")
+            if (
+                not isinstance(scopes, list) or not scopes
+                or any(not isinstance(scope, str) or not scope.strip() for scope in scopes)
+                or len(set(scopes)) != len(scopes)
+            ):
+                raise GrantError("invalid grant scopes")
+            if type(enabled) is not bool:
+                raise GrantError("invalid grant enabled state")
+            if not isinstance(consented_at, str) or not _valid_timestamp(consented_at):
+                raise GrantError("invalid grant consent timestamp")
+            if not isinstance(revoked_at, str) or (revoked_at and not _valid_timestamp(revoked_at)):
+                raise GrantError("invalid grant revocation timestamp")
+            if enabled and revoked_at:
+                raise GrantError("revoked grant cannot be enabled")
             grant = Grant(
-                grant_id=str(item["grantId"]),
-                connection_id=str(item["connectionId"]),
-                consumer_id=str(item["consumerId"]),
-                scopes=tuple(str(scope) for scope in item["scopes"]),
-                enabled=bool(item["enabled"]),
-                consented_at=str(item.get("consentedAt", "")),
-                revoked_at=str(item.get("revokedAt", "")),
+                grant_id=grant_id,
+                connection_id=connection_id,
+                consumer_id=consumer_id,
+                scopes=tuple(scopes),
+                enabled=enabled,
+                consented_at=consented_at,
+                revoked_at=revoked_at,
             )
             if grant.grant_id != _grant_id(grant.connection_id, grant.consumer_id):
                 raise GrantError("invalid grant identity")
+            if grant.grant_id in self._grants:
+                raise GrantError("duplicate grant identity")
             self._grants[grant.grant_id] = grant
 
     def _save(self) -> None:

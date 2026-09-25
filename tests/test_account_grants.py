@@ -87,3 +87,39 @@ def test_router_account_adapter_and_routing_share_opaque_grant_id():
     assert len(adapted) == 1
     _, connection = adapted[0]
     assert connection.connection_id == _contract_connection_id("codex", "record-7")
+
+
+def _write_enabled_grant(path: Path) -> None:
+    ledger = GrantLedger(path)
+    connection = Connection("connection", "account", "adapter", "local", enabled=True)
+    ledger.grant(
+        connection, "consumer", ("inference",),
+        support={"consumer": {"adapter": ("inference",)}}, consented=True,
+    )
+
+
+@pytest.mark.parametrize("enabled_value", ["false", 1, None])
+def test_grant_ledger_rejects_non_boolean_enabled_state(tmp_path, enabled_value):
+    path = tmp_path / "state" / "grants.json"
+    _write_enabled_grant(path)
+    payload = json.loads(path.read_text())
+    payload["grants"][0]["enabled"] = enabled_value
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(GrantError, match="enabled"):
+        GrantLedger(path)
+
+
+@pytest.mark.parametrize("payload", [
+    [],
+    {"schemaVersion": True, "grants": []},
+    {"schemaVersion": 1, "grants": [None]},
+    {"schemaVersion": 1, "grants": [{}]},
+])
+def test_grant_ledger_rejects_malformed_json_shapes(tmp_path, payload):
+    path = tmp_path / "state" / "grants.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(GrantError):
+        GrantLedger(path)

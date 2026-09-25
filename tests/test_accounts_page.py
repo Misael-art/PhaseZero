@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 from linux.ai.account_adapters import router_provider_accounts
 from linux.ai.account_contract import Connection, Evidence, Quota
+from linux.ai.grants import GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
 from linux.ui_native.pages.accounts import AccountChannelsDialog, AccountsPage
 
 
@@ -416,11 +417,16 @@ def test_disabled_connection_cannot_receive_a_new_consumer_grant(qapp, tmp_path,
         host_patcher.stop()
 
 
-def test_invalid_grant_ledger_disables_consent_controls(qapp, tmp_path, monkeypatch):
+@pytest.mark.parametrize("invalid_contents", [
+    "not-json", "[]", '{"schemaVersion":true,"grants":[null]}',
+])
+def test_invalid_grant_ledger_disables_consent_controls(
+    qapp, tmp_path, monkeypatch, invalid_contents,
+):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     ledger_path = tmp_path / "phasezero" / "ai-accounts" / "grants.json"
     ledger_path.parent.mkdir(parents=True)
-    ledger_path.write_text("not-json")
+    ledger_path.write_text(invalid_contents)
     window, host_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Contas e conexões")
@@ -428,6 +434,34 @@ def test_invalid_grant_ledger_disables_consent_controls(qapp, tmp_path, monkeypa
         account, connection = router_provider_accounts({"connections": [{
             "id": "record-a", "provider": "openai", "name": "Private Account", "active": True,
         }]})[0]
+        page._accounts = ((account, connection),)
+        page._render_cards()
+        assert page.findChildren(QPushButton, "accountConsumerGrant") == []
+        assert "ledger local inválido" in page.findChild(QLabel, "accountGrantUnavailable").text()
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_coerced_grant_enabled_value_disables_consent_controls(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    ledger_path = tmp_path / "phasezero" / "ai-accounts" / "grants.json"
+    account, connection = router_provider_accounts({"connections": [{
+        "id": "record-a", "provider": "openai", "name": "Private Account", "active": True,
+    }]})[0]
+    ledger = GrantLedger(ledger_path)
+    ledger.grant(
+        connection, "app.claude-code", ("inference",),
+        support=SUPPORTED_CONSUMER_ADAPTERS, consented=True,
+    )
+    payload = json.loads(ledger_path.read_text())
+    payload["grants"][0]["enabled"] = "false"
+    ledger_path.write_text(json.dumps(payload))
+
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        assert page._grant_load_error
         page._accounts = ((account, connection),)
         page._render_cards()
         assert page.findChildren(QPushButton, "accountConsumerGrant") == []
