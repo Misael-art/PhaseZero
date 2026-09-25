@@ -1023,3 +1023,28 @@ PXA-005 reteste G1 (2026-09-25):
 passaram novamente: 15 testes em 17,92 s, exit 0. Processo Qt/QProcess encerrou
 normalmente; fixture não executou gerenciador de pacotes. G1 confirmado; runtime
 real do SO, pacote real e G2 Windows continuam pendentes.
+
+PXA-008 gestão local de chaves G1 (2026-09-25): `CredentialVault` associa o modelo canônico
+`Account` a referência opaca do Secret Service. Arquivo XDG guarda só metadados/referência,
+com diretório 0700 e arquivo 0600; reserva pendente antes da gravação, rollback após falha e
+referência pendente recuperável quando remoção não puder ser confirmada. A página Contas ganhou
+fluxo público para guardar e remover cópia local em worker fora da UI; entrada mascarada, modo
+privacidade e confirmação de remoção preservam estado honesto. Guardar não cria sessão, conexão
+habilitada, grant ou uso; remoção local não revoga a chave do provedor. Testes usaram cofre falso,
+sem DBus, credencial, conta, login, API ou cota reais. `tests/test_credential_vault.py`,
+`tests/test_secret_store.py`, `tests/test_account_contract.py`, `tests/test_account_grants.py` e
+`tests/test_accounts_page.py`: 59 passaram em 9,43 s; `compileall` e `git diff --check` passaram.
+O primeiro teste red encontrou módulo ausente; regressão seguinte rejeitou newline em rótulo e
+exercitou limpeza após gravação ambígua; correções e retentativa passaram. `ruff` não está
+instalado. PXA-008 continua `in_progress`: o 9Router/OpenCode não vincula cada requisição ao
+grant, nenhum consumidor atual usa a referência, Secret Service real não foi observado e adapter
+Windows ainda falta. PXA-006/G3 continua atrás da observação externa de conta/sessão/cota.
+
+PXA-004/PXA-005/PXA-014 Windows G2 — **não realizada**; reavaliação read-only às 11:14 -03:00
+em 2026-09-25: 2,3 GiB disponíveis, 9,7 GiB de swap em uso e load average 2,46/3,81/7,58.
+Guest exige ao menos 4 GiB; sem margem. Nenhum QEMU iniciado nem processo interrompido. ISO
+indicada segue sem hash, montagem ou boot. G2 Windows continua pendente para janela com memória
+disponível acima do mínimo e pressão menor.
+Reavaliação às 11:24 -03:00: 2,6 GiB disponíveis, 9,9 GiB de swap em uso e load average
+7,06/5,15/6,35; `python3`, Qoder, ZCode, Electron e Java seguiam ativos. Sem margem para o guest
+de 4 GiB; etapa continua não realizada e nenhum processo foi encerrado.

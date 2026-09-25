@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,15 +10,21 @@ from unittest.mock import patch
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRadioButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QLabel, QLineEdit, QPushButton, QRadioButton, QWidget,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 from linux.ai.account_adapters import router_provider_accounts
 from linux.ai.account_contract import Connection, Evidence, Quota
+from linux.ai.credential_vault import CredentialVault
 from linux.ai.grants import GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
-from linux.ui_native.pages.accounts import AccountChannelsDialog, AccountsPage
+from linux.ai.secret_store import SecretStoreUnavailable
+from linux.ui_native.pages.accounts import (
+    AccountChannelsDialog, AccountsPage, AddApiCredentialDialog,
+)
 
 
 @pytest.fixture(scope="module")
@@ -36,10 +43,17 @@ def _window(qapp):
 
 
 @pytest.fixture(autouse=True)
-def reject_unmocked_status_probes(monkeypatch):
+def reject_unmocked_status_probes(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+
     def reject(*_args, **_kwargs):
         pytest.fail("account UI test attempted a real status probe")
 
+    # This page is outside the Accounts UI tests and starts a local capability
+    # probe during MainWindow construction.
+    monkeypatch.setattr("linux.ui_native.pages.linux_hub.LinuxHubPage.reload", lambda _self: None)
     monkeypatch.setattr("linux.ui_native.status_loader.StatusLoader.fetch", reject)
 
 
@@ -466,6 +480,138 @@ def test_coerced_grant_enabled_value_disables_consent_controls(qapp, tmp_path, m
         page._render_cards()
         assert page.findChildren(QPushButton, "accountConsumerGrant") == []
         assert "ledger local inválido" in page.findChild(QLabel, "accountGrantUnavailable").text()
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+class FakeCredentialStore:
+    def __init__(self, failure=None):
+        self.values = {}
+        self.failure = failure
+
+    def store(self, reference, secret):
+        if self.failure is not None:
+            raise self.failure
+        self.values[reference] = secret
+
+    def delete(self, reference):
+        if self.failure is not None:
+            raise self.failure
+        return self.values.pop(reference, None) is not None
+
+
+def _submit_api_credential(qapp, page, *, secret="secret-value-for-test"):
+    def fill_and_submit():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, AddApiCredentialDialog)
+        dialog.findChild(QLineEdit, "credentialProvider").setText("MiMo API")
+        dialog.findChild(QLineEdit, "credentialNickname").setText("Conta particular")
+        secret_input = dialog.findChild(QLineEdit, "credentialValue")
+        assert secret_input.echoMode() == QLineEdit.Password
+        secret_input.setText(secret)
+        dialog.findChild(QPushButton, "saveApiCredential").click()
+
+    QTimer.singleShot(0, fill_and_submit)
+    page.findChild(QPushButton, "addApiCredential").click()
+    deadline = time.monotonic() + 3
+    while page._credential_busy and time.monotonic() < deadline:
+        qapp.processEvents()
+        QTest.qWait(10)
+    assert not page._credential_busy
+
+
+def test_public_credential_flow_uses_secure_vault_without_connecting_or_granting(
+    qapp, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        secure_store = FakeCredentialStore()
+        credential_path = tmp_path / "credential-fixture" / "credentials.json"
+        page.credential_vault = CredentialVault(credential_path, secure_store)
+
+        _submit_api_credential(qapp, page)
+
+        assert len(page.credential_vault.entries) == 1
+        entry = page.credential_vault.entries[0]
+        assert secure_store.values == {entry.secret_ref: "secret-value-for-test"}
+        assert "secret-value-for-test" not in credential_path.read_text(encoding="utf-8")
+        assert "secret-value-for-test" not in " ".join(
+            widget.text() for widget in page.findChildren(QWidget) if hasattr(widget, "text")
+        )
+        assert page._accounts == ()
+        assert page.grant_ledger.for_consumer("app.claude-code") == ()
+        assert page.redacted_export == {
+            "schemaVersion": 2, "total": 0, "enabled": 0,
+            "usable": 0, "secretsRedacted": True,
+        }
+        assert "nenhum app autorizado" in page.findChild(
+            QLabel, "storedApiCredentialState",
+        ).text()
+
+        page.findChild(QCheckBox, "hideAccountIdentity").setChecked(True)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert "MiMo API" not in page.findChild(QLabel, "storedApiCredentialLabel").text()
+        assert "Conta particular" not in page.findChild(
+            QLabel, "storedApiCredentialLabel",
+        ).text()
+
+        page._confirm_remove_api_credential = lambda _entry: True
+        page.findChild(QPushButton, "removeApiCredential").click()
+        deadline = time.monotonic() + 3
+        while page._credential_busy and time.monotonic() < deadline:
+            qapp.processEvents()
+            QTest.qWait(10)
+        assert not page._credential_busy
+        assert page.credential_vault.entries == ()
+        assert secure_store.values == {}
+        assert "não foi revogada" in page.findChild(QLabel, "credentialVaultStatus").text()
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_credential_ui_fails_closed_when_secure_store_is_unavailable(qapp, tmp_path):
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        secure_store = FakeCredentialStore(
+            SecretStoreUnavailable("Secret Service backend is unavailable"),
+        )
+        credential_path = tmp_path / "credential-fixture" / "credentials.json"
+        page.credential_vault = CredentialVault(credential_path, secure_store)
+
+        _submit_api_credential(qapp, page, secret="never-display-this-secret")
+
+        pending = page.credential_vault.entries
+        assert len(pending) == 1
+        assert pending[0].state == "pending"
+        assert secure_store.values == {}
+        assert "never-display-this-secret" not in credential_path.read_text(encoding="utf-8")
+        assert "Gravação incerta" in page.findChild(
+            QLabel, "credentialVaultStatus",
+        ).text()
+        assert "referência mantida para limpeza" in page.findChild(
+            QLabel, "storedApiCredentialState",
+        ).text()
+
+        secure_store.failure = None
+        page._confirm_remove_api_credential = lambda _entry: True
+        page.findChild(QPushButton, "removeApiCredential").click()
+        deadline = time.monotonic() + 3
+        while page._credential_busy and time.monotonic() < deadline:
+            qapp.processEvents()
+            QTest.qWait(10)
+        assert not page._credential_busy
+        assert page.credential_vault.entries == ()
+        assert json.loads(credential_path.read_text(encoding="utf-8"))["credentials"] == []
+        assert secure_store.values == {}
+        rendered = " ".join(
+            widget.text() for widget in page.findChildren(QWidget) if hasattr(widget, "text")
+        )
+        assert "never-display-this-secret" not in rendered
     finally:
         window.close()
         host_patcher.stop()

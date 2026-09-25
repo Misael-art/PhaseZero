@@ -5,15 +5,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QRadioButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from linux.ai.account_adapters import adapt_account_sources
 from linux.ai.account_contract import Account, Connection, Evidence, public_account, redacted_summary
+from linux.ai.credential_vault import CredentialEntry, CredentialVault, CredentialVaultError
 from linux.ai.grants import GrantError, GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
+from linux.ai.secret_store import SecretStoreUnavailable
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
@@ -129,9 +131,111 @@ class AccountChannelsDialog(QDialog):
         layout.addWidget(close, 0, Qt.AlignRight)
 
 
+class AddApiCredentialDialog(QDialog):
+    """Collect an API key for local vault storage only."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("addApiCredentialDialog")
+        self.setWindowTitle("Armazenar chave de API")
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "A chave vai ao cofre seguro do sistema. Esta ação não valida a chave, "
+            "não conecta o provedor e não autoriza nenhum aplicativo."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.provider = QLineEdit()
+        self.provider.setObjectName("credentialProvider")
+        self.provider.setAccessibleName("Provedor da chave")
+        self.nickname = QLineEdit()
+        self.nickname.setObjectName("credentialNickname")
+        self.nickname.setAccessibleName("Apelido da chave")
+        self.secret = QLineEdit()
+        self.secret.setObjectName("credentialValue")
+        self.secret.setAccessibleName("Chave de API")
+        self.secret.setEchoMode(QLineEdit.Password)
+        form.addRow("Provedor", self.provider)
+        form.addRow("Apelido", self.nickname)
+        form.addRow("Chave de API", self.secret)
+        layout.addLayout(form)
+
+        self.error = QLabel("")
+        self.error.setObjectName("credentialFormError")
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
+        actions = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        save = actions.button(QDialogButtonBox.Save)
+        save.setText("Armazenar no cofre")
+        save.setObjectName("saveApiCredential")
+        cancel = actions.button(QDialogButtonBox.Cancel)
+        cancel.setObjectName("cancelApiCredential")
+        actions.accepted.connect(self._accept_if_valid)
+        actions.rejected.connect(self.reject)
+        layout.addWidget(actions)
+
+    def values(self) -> tuple[str, str, str]:
+        return self.provider.text(), self.nickname.text(), self.secret.text()
+
+    def _accept_if_valid(self) -> None:
+        provider, nickname, secret = self.values()
+        if not provider.strip() or not nickname.strip() or not secret.strip():
+            self.error.setText("Informe provedor, apelido e chave.")
+            return
+        if any(ord(char) < 32 or ord(char) == 127 for char in provider + nickname):
+            self.error.setText("Provedor e apelido devem conter texto simples.")
+            return
+        if "\n" in secret or "\r" in secret:
+            self.error.setText("A chave deve ocupar uma única linha.")
+            return
+        self.accept()
+
+
+class _CredentialWorkerSignals(QObject):
+    finished = Signal(str, object, str)
+
+
+class _CredentialWorker(QRunnable):
+    """Run potentially blocking Secret Service calls off the UI thread."""
+
+    def __init__(self, vault: CredentialVault, operation: str, values: tuple[str, ...]) -> None:
+        super().__init__()
+        self.vault = vault
+        self.operation = operation
+        self.values = values
+        self.signals = _CredentialWorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        result: object = None
+        error = ""
+        try:
+            if self.operation == "add":
+                result = self.vault.add(*self.values)
+            elif self.operation == "remove":
+                result = self.vault.remove(self.values[0])
+            else:
+                raise CredentialVaultError("unsupported credential operation")
+        except (CredentialVaultError, SecretStoreUnavailable, ValueError) as exc:
+            error = str(exc)
+        except Exception:
+            error = "Falha inesperada ao acessar o cofre seguro."
+        finally:
+            if self.operation == "add":
+                self.values = (self.values[0], self.values[1], "")
+        self.signals.finished.emit(self.operation, result, error)
+
+
 def _grant_ledger_path() -> Path:
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     return data_home / "phasezero" / "ai-accounts" / "grants.json"
+
+
+def _credential_vault_path() -> Path:
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return data_home / "phasezero" / "ai-accounts" / "credentials.json"
 
 
 class AccountsPage(BasePage):
@@ -154,6 +258,13 @@ class AccountsPage(BasePage):
         self.summary: QLabel | None = None
         self._probe_ids: dict[str, tuple[int, str]] = {}
         self._grant_load_error = False
+        self._credential_load_error = False
+        self._credential_busy = False
+        self._credential_confirmed_ids: set[str] = set()
+        self._credential_worker: _CredentialWorker | None = None
+        self._credential_status: QLabel | None = None
+        self._credentials_layout: QVBoxLayout | None = None
+        self._add_credential_button: QPushButton | None = None
         self.preferences = UiPreferences(self)
         self._privacy_toggle: QCheckBox | None = None
         try:
@@ -161,6 +272,11 @@ class AccountsPage(BasePage):
         except (OSError, ValueError, TypeError):
             self.grant_ledger = GrantLedger()
             self._grant_load_error = True
+        try:
+            self.credential_vault: CredentialVault | None = CredentialVault(_credential_vault_path())
+        except (OSError, ValueError, TypeError, CredentialVaultError):
+            self.credential_vault = None
+            self._credential_load_error = True
 
     @property
     def redacted_export(self) -> dict[str, object]:
@@ -191,6 +307,30 @@ class AccountsPage(BasePage):
         add_connection.setObjectName("addAccountConnection")
         add_connection.clicked.connect(self._show_channel_catalog)
         layout.addWidget(add_connection)
+        credential_heading = QLabel("Chaves de API")
+        credential_heading.setObjectName("accountCredentialsHeading")
+        layout.addWidget(credential_heading)
+        credential_note = QLabel(
+            "Chaves ficam no cofre seguro local. Guardar não valida nem conecta o provedor; "
+            "nenhum aplicativo recebe permissão automaticamente."
+        )
+        credential_note.setObjectName("accountCredentialsNote")
+        credential_note.setWordWrap(True)
+        layout.addWidget(credential_note)
+        self._add_credential_button = QPushButton("Armazenar chave de API")
+        self._add_credential_button.setObjectName("addApiCredential")
+        self._add_credential_button.clicked.connect(self._show_add_api_credential)
+        layout.addWidget(self._add_credential_button)
+        self._credential_status = QLabel("")
+        self._credential_status.setObjectName("credentialVaultStatus")
+        self._credential_status.setWordWrap(True)
+        layout.addWidget(self._credential_status)
+        credentials = QWidget()
+        self._credentials_layout = QVBoxLayout(credentials)
+        self._credentials_layout.setContentsMargins(0, 0, 0, 0)
+        self._credentials_layout.setSpacing(6)
+        layout.addWidget(credentials)
+        self._render_credentials()
         self._privacy_toggle = QCheckBox("Ocultar identidade das contas")
         self._privacy_toggle.setObjectName("hideAccountIdentity")
         self._privacy_toggle.setAccessibleName("Ocultar identidade das contas nesta tela")
@@ -215,9 +355,165 @@ class AccountsPage(BasePage):
     def _show_channel_catalog(self) -> None:
         AccountChannelsDialog(self).exec()
 
+    def _show_add_api_credential(self) -> None:
+        if self.credential_vault is None or self._credential_busy:
+            return
+        dialog = AddApiCredentialDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        values = dialog.values()
+        dialog.secret.clear()
+        self._start_credential_operation("add", values)
+
+    def _start_credential_operation(self, operation: str, values: tuple[str, ...]) -> None:
+        if self.credential_vault is None or self._credential_busy:
+            return
+        self._credential_busy = True
+        if self._add_credential_button is not None:
+            self._add_credential_button.setEnabled(False)
+        if self._credential_status is not None:
+            self._credential_status.setText("Aguardando resposta do cofre seguro…")
+        worker = _CredentialWorker(self.credential_vault, operation, values)
+        worker.signals.finished.connect(self._credential_operation_finished)
+        self._credential_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        self._render_credentials()
+
+    @Slot(str, object, str)
+    def _credential_operation_finished(self, operation: str, result: object, error: str) -> None:
+        self._credential_busy = False
+        self._credential_worker = None
+        if not error and operation == "add" and isinstance(result, CredentialEntry):
+            self._credential_confirmed_ids.add(result.account_id)
+        if not error and operation == "remove" and self.credential_vault is not None:
+            self._credential_confirmed_ids.intersection_update(
+                entry.account_id for entry in self.credential_vault.entries
+            )
+        if self._add_credential_button is not None:
+            self._add_credential_button.setEnabled(self.credential_vault is not None)
+        if self._credential_status is not None:
+            if error:
+                if "backend is unavailable" in error:
+                    message = (
+                        "Cofre seguro indisponível; nenhuma chave foi guardada."
+                        if operation == "add" else
+                        "Cofre seguro indisponível; referência mantida para nova tentativa."
+                    )
+                elif "cleanup" in error or "uncertain" in error:
+                    message = (
+                        "Gravação incerta; referência mantida para limpeza segura. "
+                        "Nenhum aplicativo recebeu acesso."
+                    )
+                elif "could not store" in error or "could not save" in error:
+                    message = "O cofre não guardou a chave; nenhuma conexão foi criada."
+                elif "could not delete" in error:
+                    message = "O cofre não confirmou a remoção; referência foi mantida."
+                else:
+                    message = "Falha segura ao atualizar o cofre de credenciais."
+            elif operation == "add" and isinstance(result, CredentialEntry):
+                message = (
+                    "Chave guardada no cofre local. Sessão, validade e cota não verificadas; "
+                    "nenhum aplicativo autorizado."
+                )
+            elif operation == "remove" and result is True:
+                message = "Cópia local removida do cofre; a chave do provedor não foi revogada."
+            else:
+                message = "Referência local removida; a chave do provedor não foi revogada."
+            self._credential_status.setText(message)
+        self._render_credentials()
+
+    def _render_credentials(self) -> None:
+        if self._credentials_layout is None:
+            return
+        while self._credentials_layout.count():
+            item = self._credentials_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if self.credential_vault is None:
+            if self._credential_status is not None:
+                self._credential_status.setText(
+                    "Cofre de credenciais indisponível ou registro inválido; ações bloqueadas."
+                )
+            if self._add_credential_button is not None:
+                self._add_credential_button.setEnabled(False)
+            return
+
+        if self._credential_status is not None and not self._credential_status.text():
+            self._credential_status.setText(
+                "Nenhuma chave de API armazenada." if not self.credential_vault.entries else
+                "Referências locais registradas; presença atual no cofre, validade e uso por apps não verificados."
+            )
+
+        hidden = self.preferences.hide_account_identity
+        for index, entry in enumerate(self.credential_vault.entries, start=1):
+            card = QFrame()
+            card.setObjectName("storedApiCredential")
+            row = QHBoxLayout(card)
+            details = QVBoxLayout()
+            label = QLabel(
+                f"Chave {index}" if hidden else f"{entry.provider} · {entry.nickname}"
+            )
+            label.setObjectName("storedApiCredentialLabel")
+            presence = (
+                "Gravação não confirmada · referência mantida para limpeza" if entry.state == "pending"
+                else "Cofre confirmou gravação nesta sessão"
+                if entry.account_id in self._credential_confirmed_ids else
+                "Registro ativo · presença atual no cofre não consultada"
+            )
+            state = QLabel(
+                f"{presence} · sessão e cota não verificadas · nenhum app autorizado"
+            )
+            state.setObjectName("storedApiCredentialState")
+            state.setWordWrap(True)
+            details.addWidget(label)
+            details.addWidget(state)
+            row.addLayout(details, 1)
+            remove = QPushButton("Remover cópia local")
+            remove.setObjectName("removeApiCredential")
+            remove.setAccessibleName(
+                f"Remover chave {index}" if hidden else f"Remover chave de {entry.provider}"
+            )
+            remove.setToolTip(
+                "Apaga somente esta cópia local do cofre; não revoga a chave no provedor."
+            )
+            remove.setEnabled(not self._credential_busy)
+            remove.clicked.connect(
+                lambda _checked=False, account_id=entry.account_id:
+                self._remove_api_credential(account_id)
+            )
+            row.addWidget(remove)
+            self._credentials_layout.addWidget(card)
+
+    def _remove_api_credential(self, account_id: str) -> None:
+        if self.credential_vault is None or self._credential_busy:
+            return
+        entry = next(
+            (candidate for candidate in self.credential_vault.entries
+             if candidate.account_id == account_id),
+            None,
+        )
+        if entry is None or not self._confirm_remove_api_credential(entry):
+            return
+        self._start_credential_operation("remove", (account_id,))
+
+    def _confirm_remove_api_credential(self, entry: CredentialEntry) -> bool:
+        label = "esta chave" if self.preferences.hide_account_identity else entry.nickname
+        answer = QMessageBox.question(
+            self,
+            "Remover cópia local?",
+            f"A cópia segura de {label} será apagada deste sistema. "
+            "A chave não será revogada no provedor e apps não serão alterados.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     def _set_identity_hidden(self, hidden: bool) -> None:
         self.preferences.set_hide_account_identity(hidden)
         self._render_cards()
+        self._render_credentials()
 
     def refresh_accounts(self) -> None:
         self._generation += 1
