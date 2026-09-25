@@ -606,9 +606,15 @@ class ProductRegistryPage(BasePage):
         The primary state CTA remains the path for verified prepare/configure/
         recovery. Secondary legacy rows must not bypass its ownership checks.
         """
-        if not action.mutable:
-            return True
         app_id = str(product.get("appId") or "")
+        if not action.mutable:
+            verbs = set(action.args) | set(action.id.casefold().split("."))
+            if not verbs.intersection({"open", "launch", "dashboard"}):
+                return True
+            if instance is None or instance.next_action not in {"open", "configure"}:
+                return False
+            route = self._action_for_state(instance.next_action)
+            return bool(route is not None and route.id == action.id)
         if instance is None:
             return False
         if action.id in _PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP.get(app_id, ()):

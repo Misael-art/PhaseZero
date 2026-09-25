@@ -205,6 +205,28 @@ def test_external_installation_hides_every_mutating_secondary_app_action(qapp):
         status_patcher.stop()
 
 
+def test_unknown_status_hides_secondary_open_and_dashboard_actions(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        for product in page.products:
+            page.open_product(product["appId"])
+            open_ids = {
+                action_id for action_id in product["actionIds"]
+                if action_id in window.registry.by_id
+                and ({"open", "launch", "dashboard"} & {
+                    *action_id.casefold().split("."),
+                    *(arg.casefold() for arg in window.registry.by_id[action_id].args),
+                })
+            }
+            visible_open_routes = _detail_action_ids(page) & open_ids
+            assert not visible_open_routes, (product["appId"], visible_open_routes)
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_product_search_indexes_purpose_synonyms(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
@@ -312,6 +334,7 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         assert page._primary_button.text() == "Abrir"
         assert page._primary_action is not None
         assert page._primary_action.id == "ai.webui-open"
+        assert "ai.webui-open" in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
@@ -323,6 +346,7 @@ def test_open_webui_status_gates_its_local_dashboard_action(qapp):
         ),))
         assert page._primary_button.text() == "Resolver"
         assert not page._primary_button.isEnabled()
+        assert "ai.webui-open" not in _detail_action_ids(page)
     finally:
         window.close()
         host_patcher.stop()
@@ -715,6 +739,7 @@ def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
         assert instance.origin == "unknown"
         assert page._primary_button.text() == "Abrir"
         assert page._primary_action.id == "ai.9router-dashboard"
+        assert "ai.9router-dashboard" in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
@@ -741,6 +766,7 @@ def test_9router_configure_opens_dashboard_and_offline_resolves_read_only(qapp):
         page._instances_ready(page._status_action_id, (configured,))
         assert page._primary_button.text() == "Configurar"
         assert page._primary_action.id == "ai.9router-dashboard"
+        assert "ai.9router-dashboard" in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
@@ -778,6 +804,7 @@ def test_ready_odysseus_uses_registered_open_route(qapp):
         assert instance.origin == "unknown"
         assert page._primary_button.text() == "Abrir"
         assert page._primary_action.id == "ai.odysseus-open"
+        assert "ai.odysseus-open" in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
