@@ -183,6 +183,11 @@ def test_add_connection_lists_supported_channel_requirements_and_maturity(qapp):
         add.click()
 
         dialog = AccountChannelsDialog()
+        screen = dialog.screen() or qapp.primaryScreen()
+        assert screen is not None
+        available = screen.availableGeometry()
+        assert dialog.width() <= available.width()
+        assert dialog.height() <= available.height()
         cards = dialog.findChildren(QWidget)
         channels = [
             card for card in cards

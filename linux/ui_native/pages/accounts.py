@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QRadioButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -79,7 +79,15 @@ class AccountChannelsDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("accountChannelsDialog")
         self.setWindowTitle("Canais de conexão reconhecidos")
-        self.resize(640, 480)
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(640, 480)
+        else:
+            available = screen.availableGeometry()
+            self.resize(
+                max(1, min(640, available.width() - 24)),
+                max(1, min(480, available.height() - 24)),
+            )
         layout = QVBoxLayout(self)
         intro = QLabel(
             "Estes canais podem aparecer em Contas e conexões. Login continua no app ou manager do provedor; "
