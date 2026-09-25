@@ -231,7 +231,6 @@ class AiProxiesPage(BasePage):
         layout.addStretch()
         scroll.setWidget(inner)
         self._layout.addWidget(scroll, 1)
-        self.reload()
 
     def _install_context_status(self) -> None:
         return

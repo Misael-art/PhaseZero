@@ -25,7 +25,17 @@ def _window(qapp):
 
     host_patcher = patch.object(MainWindow, "_host_summary")
     host_patcher.start()
-    return MainWindow(ROOT), host_patcher
+    # Start on the accounts page. The default dashboard runs a real system
+    # health probe during construction, which would break hermetic UI tests.
+    return MainWindow(ROOT, initial_category="Contas e conexões"), host_patcher
+
+
+@pytest.fixture(autouse=True)
+def reject_unmocked_status_probes(monkeypatch):
+    def reject(*_args, **_kwargs):
+        pytest.fail("account UI test attempted a real status probe")
+
+    monkeypatch.setattr("linux.ui_native.status_loader.StatusLoader.fetch", reject)
 
 
 def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_probe(
@@ -109,6 +119,25 @@ def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_p
             assert "Consulta parcial" in page.summary.text()
             assert "sem resposta: Claude" in page.summary.text()
             assert "0 contas" not in page.summary.text()
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_hidden_ai_dev_page_probes_only_when_opened(qapp):
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("IA & Dev")
+        assert page is not None
+        calls = []
+        with patch.object(
+            page.status_loader, "fetch",
+            side_effect=lambda action_id, args: calls.append((action_id, args)),
+        ):
+            page.block_while_running(False)
+            assert calls == []
+            window.show_category("IA & Dev")
+        assert calls == [("ai.status", ["ai", "status"])]
     finally:
         window.close()
         host_patcher.stop()

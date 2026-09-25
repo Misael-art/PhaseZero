@@ -147,7 +147,6 @@ class AiDevPage(BasePage):
         self._layout.addWidget(scroll, 1)
         self.status_loader.status_ready.connect(self._on_status_ready)
         self.status_loader.status_failed.connect(self._on_status_failed)
-        self.reload()
 
     def _install_context_status(self) -> None:
         return
@@ -380,5 +379,5 @@ class AiDevPage(BasePage):
     def block_while_running(self, running: bool) -> None:
         self.refresh_button.setEnabled(not running)
         self.repair_button.setEnabled(not running)
-        if not running:
+        if not running and self.isVisible():
             self.reload()

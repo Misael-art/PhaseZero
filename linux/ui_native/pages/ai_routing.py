@@ -298,7 +298,6 @@ class AiRoutingPage(BasePage):
         layout.addStretch()
         scroll.setWidget(inner)
         self._layout.addWidget(scroll)
-        self.reload()
 
     def _fact(self, label: str, value: str, layout: QHBoxLayout) -> QLabel:
         box = QVBoxLayout()

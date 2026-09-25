@@ -107,7 +107,6 @@ class ThemesPage(BasePage):
 
         scroll.setWidget(inner)
         self._layout.addWidget(scroll)
-        self.reload()
 
     def _hero_label(self, key: str, text: str) -> QLabel:
         label = QLabel(text)
