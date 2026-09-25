@@ -1185,3 +1185,26 @@ test_ai_session_ui.py. Regressão completa de UI/catálogo/snapshot/servidor —
 6 módulos — passou com 135 testes em 47,08 s, encerramento limpo, exit 0. bash -n e
 git diff --check passaram. Fixtures temporárias; nenhuma conta, credencial real,
 endpoint local, container, serviço, API ou inferência real foi usada.
+
+PXA-003/PXA-008 Open WebUI sem grant por requisição (`f1f21f8`, 2026-09-25):
+manager local só observava container e HTTP, enquanto a [documentação oficial
+Open WebUI](https://github.com/open-webui/docs/blob/main/docs/getting-started/quick-start/index.mdx)
+permite salvar chaves e endpoints OpenAI, Anthropic e compatíveis em Connections.
+O health check não prova vínculo entre conexão escolhida e cada inferência.
+
+`setup-open-webui.sh` e `ai webui open/dashboard` agora falham com exit 69 antes
+de Docker, HTTP ou browser; `status` continua read-only e informa
+`usageBlocked:true` / `connection-grant-not-enforceable`. `ai setup all` registra
+que omitiu WebUI, prossegue outros itens e retorna 69 para sinalizar resultado
+parcial. Catálogo remove WebUI do seletor genérico e oculta atalhos de instalação/
+abertura. `ProductInstance` propaga `usageBlocked`/motivo e não serializa
+`ready:true` quando uso foi bloqueado.
+
+`tests/test_open_webui_manager.py`, `test_product_registry_ui.py`,
+`test_product_inventory.py` e `test_catalog_visibility.py`: 69 passaram em
+40,53 s. Fixtures interceptaram Docker e browser; testes confirmam bloqueio antes
+de qualquer chamada Docker/HTTP/browser e CTA bloqueado mesmo com health online,
+sem fallback para `.desktop`. `bash -n`, ShellCheck nos três scripts tocados e
+`git diff --check` passaram. Nenhuma conta, chave, serviço ou inferência real foi
+consultada. URLs locais diretas e containers já ativos continuam fora do manager;
+enforcement por requisição, cota observável real e PXA-006/G3 permanecem pendentes.
