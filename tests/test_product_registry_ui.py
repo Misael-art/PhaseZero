@@ -577,12 +577,18 @@ def test_offline_managed_opencode_uses_configure_recovery_but_external_is_untouc
 def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
+        from linux.ui_native.product_inventory import instances_from_status_payload
+
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.9router")
-        page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:local:app.9router", "app.9router", "local", "local",
-            installation="present", origin="phasezero", configuration="ready", health="online",
-        ),))
+        assert page._status_action_id == "ai.9router-status"
+        instance = instances_from_status_payload(
+            {"id": "9router", "installed": True, "healthy": True, "service": "active",
+             "providers": {"active": 2, "total": 2}},
+            app_id="app.9router", host_id="local", scope="local",
+        )[0]
+        page._instances_ready(page._status_action_id, (instance,))
+        assert instance.origin == "unknown"
         assert page._primary_button.text() == "Abrir"
         assert page._primary_action.id == "ai.9router-dashboard"
         with patch.object(window.runner, "start") as start:
@@ -596,15 +602,56 @@ def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
         status_patcher.stop()
 
 
+def test_9router_configure_opens_dashboard_and_offline_resolves_read_only(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        from linux.ui_native.product_inventory import instances_from_status_payload
+
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.9router")
+        configured = instances_from_status_payload(
+            {"id": "9router", "installed": True, "healthy": True,
+             "providers": {"active": 0, "total": 0}},
+            app_id="app.9router", host_id="local", scope="local",
+        )[0]
+        page._instances_ready(page._status_action_id, (configured,))
+        assert page._primary_button.text() == "Configurar"
+        assert page._primary_action.id == "ai.9router-dashboard"
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.9router-dashboard"
+
+        offline = instances_from_status_payload(
+            {"id": "9router", "installed": True, "healthy": False, "service": "inactive",
+             "providers": {"active": 0, "total": 0}},
+            app_id="app.9router", host_id="local", scope="local",
+        )[0]
+        page._instances_ready(page._status_action_id, (offline,))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == "ai.9router-doctor"
+        assert not page._primary_action.mutable
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_ready_odysseus_uses_registered_open_route(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
+        from linux.ui_native.product_inventory import instances_from_status_payload
+
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.odysseus")
-        page._instances_ready(page._status_action_id, (ProductInstance(
-            "local:local:app.odysseus", "app.odysseus", "local", "local",
-            installation="present", origin="phasezero", configuration="ready", health="online",
-        ),))
+        assert page._status_action_id == "ai.odysseus-status"
+        instance = instances_from_status_payload(
+            {"id": "odysseus", "installed": True, "configured": True,
+             "healthy": True, "service": "active"},
+            app_id="app.odysseus", host_id="local", scope="local",
+        )[0]
+        page._instances_ready(page._status_action_id, (instance,))
+        assert instance.origin == "unknown"
         assert page._primary_button.text() == "Abrir"
         assert page._primary_action.id == "ai.odysseus-open"
         with patch.object(window.runner, "start") as start:

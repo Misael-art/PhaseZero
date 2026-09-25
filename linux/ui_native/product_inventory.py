@@ -450,6 +450,11 @@ def instances_from_status_payload(
         or raw_configuration not in {"ready", "needed", "unknown"}
     ):
         configured = payload.get("configured")
+        if payload.get("id") == "9router":
+            providers = payload.get("providers")
+            active_providers = providers.get("active") if isinstance(providers, dict) else None
+            if isinstance(active_providers, int) and not isinstance(active_providers, bool):
+                configured = active_providers > 0
         raw_configuration = (
             "ready" if configured is True else
             "needed" if configured is False else "unknown"
@@ -460,6 +465,9 @@ def instances_from_status_payload(
         or raw_health not in {"online", "offline", "failed", "unknown"}
     ):
         active = payload.get("serviceActive", payload.get("active"))
+        healthy = payload.get("healthy")
+        if isinstance(healthy, bool):
+            active = healthy
         if payload.get("id") == "hermes":
             gateway = payload.get("gateway")
             if isinstance(gateway, dict):

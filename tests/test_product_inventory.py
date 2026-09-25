@@ -176,6 +176,34 @@ def test_hermes_status_uses_nested_gateway_health_without_claiming_ownership():
     )
 
 
+def test_9router_and_odysseus_health_use_manager_health_fields():
+    router = instances_from_status_payload(
+        {"id": "9router", "installed": True, "healthy": True, "service": "active",
+         "providers": {"active": 1, "total": 2}},
+        app_id="app.9router", host_id="local", scope="local",
+    )[0]
+    assert (router.installation, router.origin, router.configuration, router.health) == (
+        "present", "unknown", "ready", "online",
+    )
+
+    no_provider = instances_from_status_payload(
+        {"id": "9router", "installed": True, "healthy": True,
+         "providers": {"active": 0, "total": 0}},
+        app_id="app.9router", host_id="local", scope="local",
+    )[0]
+    assert no_provider.next_action == "configure"
+
+    odysseus = instances_from_status_payload(
+        {"id": "odysseus", "installed": True, "configured": True,
+         "healthy": True, "service": "active"},
+        app_id="app.odysseus", host_id="local", scope="local",
+    )[0]
+    assert (odysseus.installation, odysseus.origin, odysseus.configuration, odysseus.health) == (
+        "present", "unknown", "ready", "online",
+    )
+    assert odysseus.next_action == "open"
+
+
 def test_proxy_status_actions_target_exact_product_and_preserve_provenance_contract():
     actions = {action.id: action for action in build_catalog(ROOT)}
     expected = {

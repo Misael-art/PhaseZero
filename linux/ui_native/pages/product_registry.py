@@ -61,6 +61,9 @@ _PROXY_CONFIGURE_TARGET_BY_APP = {
     "app.deepseek-proxy": ("login", "deepsproxy"),
     "app.mimo-proxy": ("set-credentials", "mimo-ai-proxy"),
 }
+_DASHBOARD_CONFIGURE_ACTION_BY_APP = {
+    "app.9router": "ai.9router-dashboard",
+}
 _RECOVERY_IMPACT_BY_APP = {
     "app.ollama": (
         "Ativa ou inicia o serviço Ollama gerenciado; se o pacote estiver ausente, "
@@ -617,6 +620,16 @@ class ProductRegistryPage(BasePage):
                 and configure.args[2:] == route
             ):
                 return configure
+            dashboard_id = _DASHBOARD_CONFIGURE_ACTION_BY_APP.get(self._selected_app_id, "")
+            dashboard = self.by_id.get(dashboard_id)
+            if (
+                dashboard is not None and dashboard_id in product.get("actionIds", [])
+                and self._action_matches_selected_instance(dashboard)
+                and instance is not None and instance.health == "online"
+                and not dashboard.mutable
+                and dashboard.args == ("ai", "9router", "dashboard")
+            ):
+                return dashboard
         terms = {
             "configure": {"configure", "setup"},
             # Resolver may run a read-only diagnostic automatically. Mutable
@@ -686,10 +699,18 @@ class ProductRegistryPage(BasePage):
             return
         state = instance.next_action if instance is not None else "verify"
         product = self._product_by_id[self._selected_app_id]
+        action = self._action_for_state(state) if state != "verify" else None
+        if (
+            state == "configure" and action is None and instance is not None
+            and instance.health in {"offline", "failed"}
+        ):
+            diagnostic = self._action_for_state("resolve")
+            if diagnostic is not None:
+                state, action = "resolve", diagnostic
         labels = {"prepare": "Preparar", "configure": "Configurar",
                   "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
         self._primary_button.setText(labels.get(state, "Verificar"))
-        self._primary_action = self._action_for_state(state) if state != "verify" else None
+        self._primary_action = action
         self._primary_desktop_entry = (
             self._desktop_entry_for_product(product)
             if state == "open" and self._primary_action is None
