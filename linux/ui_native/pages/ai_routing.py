@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -52,6 +53,39 @@ def _first(parsed: object, *keys: str, default=None):
             return default
         node = node.get(key, {})
     return node if node is not None else default
+
+
+def _quota_display_number(value: object, *, percentage: bool = False) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        finite = math.isfinite(value)
+    except (OverflowError, TypeError):
+        return None
+    if not finite or value < 0 or (percentage and value > 100):
+        return None
+    return value
+
+
+def _quota_display_state(connection: dict) -> str:
+    state = connection.get("quotaState")
+    if state not in {"known", "unknown", "unavailable"}:
+        return "unknown"
+    if state != "known":
+        return state
+    quota = connection.get("quota")
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    if not isinstance(buckets, list):
+        return "unknown"
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        if (
+            _quota_display_number(bucket.get("remaining")) is not None
+            or _quota_display_number(bucket.get("remainingPercentage"), percentage=True) is not None
+        ):
+            return "known"
+    return "unknown"
 
 
 
@@ -486,13 +520,13 @@ class AiRoutingPage(BasePage):
             if self._quota_label:
                 states = {}
                 for conn in _first(parsed, "connections", default=[]) or []:
-                    qs = conn.get("quotaState", "?")
+                    qs = _quota_display_state(conn)
                     states[qs] = states.get(qs, 0) + 1
                 text = ", ".join(f"{k}: {v}" for k, v in sorted(states.items())) or _CLEAR
                 self._quota_label.setText(text)
             for conn in _first(parsed, "connections", default=[]) or []:
                 quota = conn.get("quota") if isinstance(conn.get("quota"), dict) else {}
-                state = str(conn.get("quotaState", "unknown"))
+                state = _quota_display_state(conn)
                 label = str(conn.get("provider") or "provedor")
                 source = "9Router Usage API" if quota.get("source") == "9router_usage_api" else "fonte desconhecida"
                 observed = str(quota.get("observedAt") or "horário indisponível")
@@ -501,18 +535,29 @@ class AiRoutingPage(BasePage):
                 for bucket in buckets:
                     if not isinstance(bucket, dict):
                         continue
-                    dimension = str(bucket.get("dimension") or bucket.get("name") or "dimensão desconhecida")
-                    pct = bucket.get("remainingPercentage")
-                    unit = str(bucket.get("unit") or "unknown")
+                    dimension_value = bucket.get("dimension") or bucket.get("name")
+                    dimension = (
+                        dimension_value.strip()
+                        if isinstance(dimension_value, str) and dimension_value.strip()
+                        else "dimensão desconhecida"
+                    )
+                    pct = _quota_display_number(bucket.get("remainingPercentage"), percentage=True)
+                    unit_value = bucket.get("unit")
+                    unit = unit_value.strip() if isinstance(unit_value, str) and unit_value.strip() else "unknown"
                     if unit == "unknown":
                         unit = "unidade desconhecida"
                     value = f"{pct}% restante" if isinstance(pct, (int, float)) else "percentual não informado"
-                    if bucket.get("remaining") is not None:
-                        value += f"; {bucket['remaining']} {unit} restantes"
+                    remaining = _quota_display_number(bucket.get("remaining"))
+                    if remaining is not None:
+                        value += f"; {remaining} {unit} restantes"
+                    elif bucket.get("remaining") is not None:
+                        value += f"; valor restante indisponível; {unit}"
                     else:
                         value += f"; unidade: {unit}"
-                    estimate = bucket.get("estimatedRemainingPercentage")
-                    if isinstance(estimate, (int, float)):
+                    estimate = _quota_display_number(
+                        bucket.get("estimatedRemainingPercentage"), percentage=True,
+                    )
+                    if estimate is not None:
                         value += f"; estimativa local {estimate}%"
                     bucket_parts.append(f"{dimension}: {value}")
                 state_label = {"known": "informada", "unknown": "desconhecida", "unavailable": "indisponível"}.get(state, state)

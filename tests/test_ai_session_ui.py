@@ -451,6 +451,30 @@ def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(r
     assert "50%" not in page._task_cards["code"]["quota"].text()
 
 
+def test_routing_quota_ui_hides_invalid_numeric_metadata(routing_page):
+    page, _actions = routing_page
+    page._routing_status_ready("ai.routing-inventory", "", {
+        "connections": [{
+            "provider": "glm", "quotaState": "known", "quota": {
+                "source": "9router_usage_api", "observedAt": "2026-09-25T06:00:00Z",
+                "buckets": [{
+                    "dimension": "", "unit": 2, "remaining": float("nan"),
+                    "remainingPercentage": True,
+                    "estimatedRemainingPercentage": float("inf"),
+                }],
+            },
+        }],
+    })
+    details = page._quota_details.text()
+    assert "percentual não informado" in details
+    assert "valor restante indisponível" in details
+    assert "dimensão desconhecida" in details
+    assert "unidade desconhecida" in details
+    assert "cota desconhecida" in details
+    assert "nan" not in details.lower()
+    assert "estimativa local inf%" not in details.lower()
+
+
 def test_routing_quota_poll_is_visible_read_only_and_never_calls_recommendation(routing_page, monkeypatch):
     page, _actions = routing_page
     calls = []

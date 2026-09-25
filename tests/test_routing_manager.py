@@ -351,6 +351,29 @@ def test_quota_provenance_and_estimate_are_separate():
     assert rm.quota_remaining_pct(quota) is None
 
 
+def test_quota_parser_rejects_invalid_numbers_and_reset_time():
+    state, quota, _confidence = rm.parse_quota({
+        "quotas": {"session": {
+            "used": 25, "total": 100, "remaining": float("nan"),
+            "remainingPercentage": True, "unit": "calls",
+            "resetAt": "not-a-time", "unlimited": "false",
+        }},
+    }, observed_at="2026-09-25T06:00:00Z")
+    bucket = quota["buckets"][0]
+    assert state == "unknown"
+    assert bucket["remaining"] is None
+    assert bucket["remainingPercentage"] is None
+    assert bucket["estimatedRemainingPercentage"] == 75
+    assert bucket["resetAt"] is None
+    assert bucket["unlimited"] is False
+    assert rm.quota_remaining_pct(quota) is None
+
+    invalid_estimate = rm.parse_quota({
+        "quotas": {"session": {"used": True, "total": 100}},
+    })[1]["buckets"][0]
+    assert invalid_estimate["estimatedRemainingPercentage"] is None
+
+
 def test_quota_probe_exception_preserves_connection_rows(fake, monkeypatch):
     _fake, base = fake
     client = _client_for(fake, base)

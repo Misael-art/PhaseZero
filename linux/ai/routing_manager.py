@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -588,25 +589,32 @@ def parse_quota(payload: dict, *, observed_at: str | None = None) -> tuple[str, 
         for name, bucket in payload["quotas"].items():
             if not isinstance(bucket, dict):
                 continue
-            used = bucket.get("used")
-            total = bucket.get("total")
-            remaining = bucket.get("remaining")
-            pct = bucket.get("remainingPercentage")
+            used = _quota_number(bucket.get("used"))
+            total = _quota_number(bucket.get("total"))
+            remaining = _quota_number(bucket.get("remaining"))
+            pct = _quota_number(bucket.get("remainingPercentage"), percentage=True)
             observed_values = observed_values or remaining is not None or pct is not None
             estimate_pct = None
-            if pct is None and isinstance(total, (int, float)) and isinstance(used, (int, float)) and total:
+            if pct is None and total is not None and total > 0 and used is not None and used <= total:
                 estimate_pct = round((1 - used / total) * 100, 1)
+            dimension = bucket.get("dimension")
+            if not isinstance(dimension, str) or not dimension.strip():
+                dimension = name if isinstance(name, str) and name.strip() else "unknown"
+            unit = bucket.get("unit")
+            if not isinstance(unit, str) or not unit.strip():
+                unit = "unknown"
+            reset_at = _quota_timestamp(bucket.get("resetAt"))
             buckets.append({
                 "name": str(name),
-                "dimension": str(bucket.get("dimension") or name),
-                "unit": str(bucket.get("unit") or "unknown"),
+                "dimension": dimension,
+                "unit": unit,
                 "used": used,
                 "total": total,
                 "remaining": remaining,
                 "remainingPercentage": pct,
                 "estimatedRemainingPercentage": estimate_pct,
-                "resetAt": bucket.get("resetAt"),
-                "unlimited": bool(bucket.get("unlimited", False)),
+                "resetAt": reset_at,
+                "unlimited": bucket.get("unlimited") is True,
             })
         if buckets:
             state = "known" if observed_values else "unknown"
@@ -615,6 +623,29 @@ def parse_quota(payload: dict, *, observed_at: str | None = None) -> tuple[str, 
     if "not implemented" in message.lower() or "not available" in message.lower():
         return "unknown", {**provenance, "error": "not_implemented"}, QUOTA_CONFIDENCE["unknown"]
     return "unavailable", {**provenance, "error": "unavailable"}, QUOTA_CONFIDENCE["unavailable"]
+
+
+def _quota_number(value: object, *, percentage: bool = False) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        if not math.isfinite(value):
+            return None
+    except (OverflowError, TypeError):
+        return None
+    if value < 0 or (percentage and value > 100):
+        return None
+    return value
+
+
+def _quota_timestamp(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if parsed.tzinfo is not None else None
 
 
 def quota_remaining_pct(quota: dict) -> float | None:
