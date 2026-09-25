@@ -367,6 +367,14 @@ def test_quota_parser_rejects_invalid_numbers_and_reset_time():
     assert bucket["resetAt"] is None
     assert bucket["unlimited"] is False
     assert rm.quota_remaining_pct(quota) is None
+    assert rm.quota_remaining_pct({"buckets": [
+        {"remainingPercentage": True},
+        {"remainingPercentage": float("nan")},
+        {"remainingPercentage": 101},
+    ]}) is None
+    assert rm.quota_reset_at({"buckets": [
+        {"resetAt": "tomorrow"}, {"resetAt": "2026-09-25T06:00:00"},
+    ]}) is None
 
     invalid_estimate = rm.parse_quota({
         "quotas": {"session": {"used": True, "total": 100}},

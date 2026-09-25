@@ -649,14 +649,26 @@ def _quota_timestamp(value: object) -> str | None:
 
 
 def quota_remaining_pct(quota: dict) -> float | None:
-    buckets = [b for b in quota.get("buckets", []) if b.get("remainingPercentage") is not None]
-    if not buckets:
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    if not isinstance(buckets, list):
         return None
-    return min(float(b["remainingPercentage"]) for b in buckets)
+    values = [
+        float(value)
+        for bucket in buckets if isinstance(bucket, dict)
+        if (value := _quota_number(bucket.get("remainingPercentage"), percentage=True)) is not None
+    ]
+    return min(values) if values else None
 
 
 def quota_reset_at(quota: dict) -> str | None:
-    resets = [b.get("resetAt") for b in quota.get("buckets", []) if b.get("resetAt")]
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    if not isinstance(buckets, list):
+        return None
+    resets = [
+        reset
+        for bucket in buckets if isinstance(bucket, dict)
+        if (reset := _quota_timestamp(bucket.get("resetAt"))) is not None
+    ]
     return min(resets) if resets else None
 
 
