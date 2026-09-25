@@ -69,6 +69,9 @@ class FakeProvider(Provider):
             return {"downloadBytes": None, "installedBytes": None}
         return {"downloadBytes": 1024, "installedBytes": 4096}
 
+    def estimate_transaction_space(self, _sources):
+        return None
+
     def execute(self, plan):
         self.executed.append(plan.command())
         name = plan.args[-1]
@@ -236,10 +239,40 @@ def test_web_js_recipe_has_no_ai_or_remote_service_dependencies(private_state):
                 "status": "partial", "downloadBytes": 2048,
                 "installedBytes": 8192,
                 "availableBytes": plan["space"]["targets"]["system"]["availableBytes"],
+                "estimateSource": "package-repository-metadata",
+                "estimateCompleteness": "direct-packages-lower-bound",
             },
         },
     }
     assert plan["space"]["availableBytes"] >= 0
+
+
+def test_plan_uses_resolved_package_transaction_estimate(private_state):
+    class AptSimulationProvider(FakeProvider):
+        sources_seen = None
+
+        def estimate_transaction_space(self, sources):
+            self.sources_seen = [source.name for source in sources]
+            return {
+                "downloadBytes": 12_000_000,
+                "installedBytes": 48_000_000,
+                "estimateSource": "apt-transaction-simulation",
+                "estimateCompleteness": "resolved-local-package-indexes",
+            }
+
+    facts = host(distro="debian", package_family="debian", package_manager="apt")
+    provider = AptSimulationProvider(facts)
+    plan = create_plan(
+        profile_ids=["development-web-js"], facts=facts,
+        provider=provider,
+    )
+    assert provider.sources_seen == ["nodejs", "node-pnpm"]
+    target = plan["space"]["targets"]["system"]
+    assert plan["space"]["downloadBytes"] == 12_000_000
+    assert plan["space"]["installedBytes"] == 48_000_000
+    assert target["estimateSource"] == "apt-transaction-simulation"
+    assert target["estimateCompleteness"] == "resolved-local-package-indexes"
+    assert plan["space"]["estimateCompleteness"] == "resolved-local-package-indexes"
 
 
 @pytest.mark.parametrize(
@@ -291,6 +324,81 @@ def test_package_size_parser_handles_binary_and_decimal_units():
     assert Provider._size_bytes("2 MB") == 2_000_000
     assert Provider._size_bytes("128", default_unit="KiB") == 131_072
     assert Provider._size_bytes("unknown") is None
+
+
+def test_apt_transaction_parser_requires_both_totals_and_rejects_removal():
+    output = """Need to get 1,234 kB/2,000 kB of archives.
+After this operation, 5.5 MB of additional disk space will be used.
+"""
+    parsed = Provider.parse_apt_transaction_space(output)
+    assert parsed == {
+        "downloadBytes": 1_234_000,
+        "installedBytes": 5_500_000,
+        "estimateSource": "apt-transaction-simulation",
+        "estimateCompleteness": "resolved-local-package-indexes",
+    }
+    assert Provider.parse_apt_transaction_space("Need to get 1 MB of archives.") is None
+    assert Provider.parse_apt_transaction_space(
+        output + "Remv important-package [1.0]\n"
+    ) is None
+
+
+def test_apt_transaction_estimate_runs_only_simulation(monkeypatch):
+    facts = host(distro="debian", package_family="debian", package_manager="apt")
+    provider = Provider(facts)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Need to get 10 MB of archives.\nAfter this operation, 25 MB of additional disk space will be used.\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("linux.capabilities.providers.subprocess.run", fake_run)
+    result = provider.estimate_transaction_space([
+        SourceSpec("package", "nodejs"), SourceSpec("package", "pnpm"),
+        SourceSpec("package", "nodejs"),
+    ])
+    assert result["downloadBytes"] == 10_000_000
+    assert result["installedBytes"] == 25_000_000
+    command, kwargs = calls[0]
+    assert command[command.index("--") + 1:] == ["nodejs", "pnpm"]
+    assert "--simulate" in command
+    assert "--no-install-recommends" not in command
+    assert kwargs["env"]["LC_ALL"] == "C"
+    assert kwargs["timeout"] <= 30
+
+
+def test_pacman_transaction_includes_resolved_targets_and_installed_sizes(monkeypatch):
+    provider = Provider(host())
+    calls = []
+    packages = {
+        "nodejs": "Name : nodejs\nInstalled Size : 1.00 MiB\n",
+        "node-pnpm": "Name : node-pnpm\nInstalled Size : 2.00 MiB\n",
+        "libfoo": "Name : libfoo\nInstalled Size : 512 KiB\n",
+    }
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "-Sp" in command:
+            return SimpleNamespace(returncode=0, stdout="nodejs\t100\nnode-pnpm\t200\nlibfoo\t300\n", stderr="")
+        body = "\n\n".join(packages[name] for name in ("nodejs", "node-pnpm", "libfoo"))
+        return SimpleNamespace(returncode=0, stdout=body, stderr="")
+
+    monkeypatch.setattr("linux.capabilities.providers.subprocess.run", fake_run)
+    result = provider.estimate_transaction_space([
+        SourceSpec("package", "nodejs"), SourceSpec("package", "node-pnpm"),
+    ])
+    assert result["downloadBytes"] == 600
+    assert result["installedBytes"] == 3_670_016
+    assert result["estimateSource"] == "pacman-resolved-sync-targets"
+    assert len(calls) == 2
+    assert "--needed" in calls[0][0]
+    assert "--print-format" in calls[0][0]
+    assert "-y" not in calls[0][0]
+    assert all(call[1]["env"]["LC_ALL"] == "C" for call in calls)
 
 
 def test_flatpak_space_preview_targets_user_filesystem(private_state):

@@ -298,6 +298,8 @@ def create_plan(
             elif conflict_source is not None and conflict_installed is None:
                 blockers.append(f"conflito não verificável: {capability.id} ↔ {conflict_id}")
     space_by_scope: dict[str, list[dict[str, int | None]]] = {"system": [], "user": []}
+    package_sources_by_scope: dict[str, list[SourceSpec]] = {"system": [], "user": []}
+    estimate_metadata_by_scope: dict[str, dict[str, str]] = {}
     reboot = "no"
     risk = "normal"
     risk_order = {"normal": 0, "elevated": 1, "high": 2}
@@ -339,6 +341,8 @@ def create_plan(
         )
         scope = "user" if source is not None and source.kind == "flatpak" else "system"
         space_by_scope[scope].append(space_estimate)
+        if source is not None and not installed and source.kind == "package":
+            package_sources_by_scope[scope].append(source)
         if status == "blocked":
             blockers.append(f"{capability.title}: {reason}")
         if risk_order[capability.risk] > risk_order[risk]:
@@ -366,6 +370,27 @@ def create_plan(
             "mode": mode_for(capability),
             "rollback": list(rollback_kinds(capability, source, has_recipe=recipe is not None)),
         })
+    estimate_transaction = getattr(package_provider, "estimate_transaction_space", None)
+    if callable(estimate_transaction):
+        for scope, sources in package_sources_by_scope.items():
+            if not sources:
+                continue
+            try:
+                transaction = estimate_transaction(sources)
+            except Exception:
+                transaction = None
+            if (
+                isinstance(transaction, dict)
+                and isinstance(transaction.get("downloadBytes"), int)
+                and isinstance(transaction.get("installedBytes"), int)
+                and transaction["downloadBytes"] >= 0
+                and transaction["installedBytes"] >= 0
+            ):
+                space_by_scope[scope] = [transaction]
+                estimate_metadata_by_scope[scope] = {
+                    "estimateSource": str(transaction.get("estimateSource") or "package-manager-transaction"),
+                    "estimateCompleteness": str(transaction.get("estimateCompleteness") or "transaction-simulation"),
+                }
     max_risk = str(manifest_policy.get("maxRisk", "high"))
     if risk_order[risk] > risk_order[max_risk]:
         blockers.append(f"risco {risk} excede policy.maxRisk={max_risk}")
@@ -381,7 +406,7 @@ def create_plan(
         installs = [item.get("installedBytes") for item in estimates]
         required_download = sum(downloads) if all(value is not None for value in downloads) else None
         required_install = sum(installs) if all(value is not None for value in installs) else None
-        # Repository metadata describes selected packages, not their full dependency closure.
+        # Keep every target partial unless a manager supplies a transaction estimate.
         target_status = "partial"
         if required_install is not None and required_install > available_space:
             target_status = "insufficient"
@@ -394,6 +419,10 @@ def create_plan(
             "downloadBytes": required_download,
             "installedBytes": required_install,
             "availableBytes": available_space,
+            **estimate_metadata_by_scope.get(scope, {
+                "estimateSource": "package-repository-metadata",
+                "estimateCompleteness": "direct-packages-lower-bound",
+            }),
         }
     all_downloads = [item.get("downloadBytes") for estimates in space_by_scope.values() for item in estimates]
     all_installs = [item.get("installedBytes") for estimates in space_by_scope.values() for item in estimates]
@@ -404,6 +433,16 @@ def create_plan(
         "partial"
     )
     available_space = next(iter(space_targets.values()))["availableBytes"] if len(space_targets) == 1 else None
+    target_estimates = [
+        (target.get("estimateSource"), target.get("estimateCompleteness"))
+        for target in space_targets.values()
+    ]
+    if target_estimates and all(item == target_estimates[0] for item in target_estimates):
+        estimate_source, estimate_completeness = target_estimates[0]
+    elif any(source == "apt-transaction-simulation" for source, _complete in target_estimates):
+        estimate_source, estimate_completeness = "mixed-package-estimates", "mixed"
+    else:
+        estimate_source, estimate_completeness = "package-repository-metadata", "direct-packages-lower-bound"
     plan_id = state.new_id("plan")
     confirmation = state.token()
     record = {
@@ -426,8 +465,8 @@ def create_plan(
             "installedBytes": required_install,
             "availableBytes": available_space,
             "targets": space_targets,
-            "estimateSource": "package-repository-metadata",
-            "estimateCompleteness": "direct-packages-lower-bound",
+            "estimateSource": estimate_source,
+            "estimateCompleteness": estimate_completeness,
         },
         "policy": manifest_policy,
         "confirmToken": confirmation,
