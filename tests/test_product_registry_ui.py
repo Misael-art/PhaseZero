@@ -589,6 +589,7 @@ def test_multiple_instances_require_explicit_local_scope_selection(qapp):
         selector.setCurrentIndex(remote_index)
         assert page._primary_button.text() == "Abrir"
         assert not page._primary_button.isEnabled()
+        assert "executor vinculado" in page._primary_button.toolTip()
         assert not _detail_action_rows(page)
         notice = page.findChild(QLabel, "productInstanceActionNotice")
         assert notice is not None and "remotas" in notice.text()
@@ -621,6 +622,7 @@ def test_duplicate_instances_in_same_scope_block_unscoped_actions(qapp):
         selector.setCurrentIndex(index)
         assert page._primary_button.text() == "Preparar"
         assert not page._primary_button.isEnabled()
+        assert "mesmo host e escopo" in page._primary_button.toolTip()
         notice = page.findChild(QLabel, "productInstanceActionNotice")
         assert notice is not None and "várias instâncias neste escopo" in notice.text()
         assert not _detail_action_rows(page)

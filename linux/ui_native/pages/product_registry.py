@@ -793,6 +793,11 @@ class ProductRegistryPage(BasePage):
             self._primary_button.setEnabled(False)
             self._primary_button.setToolTip("Escolha qual instância do aplicativo este detalhe representa.")
             return
+        context_tooltip = ""
+        if instance is not None and instance.host_id != "local":
+            context_tooltip = "Ações remotas indisponíveis: este host ainda não tem executor vinculado."
+        elif instance is not None and self._same_scope_instance_count(instance) > 1:
+            context_tooltip = "Ação bloqueada: executor ainda não distingue instâncias no mesmo host e escopo."
         state = instance.next_action if instance is not None else "verify"
         product = self._product_by_id[self._selected_app_id]
         action = self._action_for_state(state) if state != "verify" else None
@@ -818,7 +823,9 @@ class ProductRegistryPage(BasePage):
         )
         enabled = enabled and self._selected_context_is_actionable()
         self._primary_button.setEnabled(enabled)
-        if state == "verify":
+        if context_tooltip:
+            self._primary_button.setToolTip(context_tooltip)
+        elif state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
         else:
             self._primary_button.setToolTip(

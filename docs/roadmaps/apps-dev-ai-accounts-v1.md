@@ -324,6 +324,14 @@ grant permanece também no executor/launcher. `tests/test_product_registry_ui.py
 passaram com Qt offscreen, incluindo status desconhecido e instância managed online;
 fixtures não provam conta real nem G3.
 
+PXA-003 contexto remoto/ambíguo (2026-09-25): CTA desabilitado agora explica se
+instância selecionada está em host remoto sem executor ou se há múltiplas instâncias
+no mesmo host/escopo sem executor que as distinga. Detalhe já ocultava suas ações; o
+tooltip do CTA não diferenciava esses bloqueios. `tests/test_product_registry_ui.py`,
+`tests/test_product_inventory.py`, `tests/test_product_status_loader.py`: 52 passaram
+com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta mudança
+melhora feedback e não fecha execução remota nem PXA-003.
+
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 74 passaram. Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
 | PXA-010 | `in_progress` | `608b28e`: spike documental fixou `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`, checksums publicados Linux/Windows e mapa setup/removal, bridge, autostart e modos. Checksum não foi verificado contra download. Gate de habilitação automática falho: isolamento Codex e política de aprovação não provados; upstream tem opção auto-approve. Arch/Windows descartáveis, conta real e falhas/rollback pendentes. Nenhuma integração implementada ou pacote executado. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
