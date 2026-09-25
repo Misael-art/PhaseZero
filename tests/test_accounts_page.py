@@ -7,14 +7,14 @@ from unittest.mock import patch
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRadioButton, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QRadioButton, QWidget
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 from linux.ai.account_adapters import router_provider_accounts
 from linux.ai.account_contract import Connection, Evidence
-from linux.ui_native.pages.accounts import AccountsPage
+from linux.ui_native.pages.accounts import AccountChannelsDialog, AccountsPage
 
 
 @pytest.fixture(scope="module")
@@ -162,6 +162,43 @@ def test_account_without_photo_uses_accessible_initials(qapp):
         page = window.registry.page_for("Contas e conexões")
         assert page._initials("Account Two") == "AT"
         assert page._initials("") == "?"
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_add_connection_lists_supported_channel_requirements_and_maturity(qapp):
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        add = page.findChild(QPushButton, "addAccountConnection")
+        assert add is not None
+        with patch.object(AccountChannelsDialog, "exec", return_value=QDialog.Accepted) as open_dialog:
+            add.click()
+        open_dialog.assert_called_once()
+
+        dialog = AccountChannelsDialog()
+        cards = dialog.findChildren(QWidget)
+        channels = [
+            card for card in cards
+            if card.objectName().startswith("accountChannel_")
+            and card.objectName() not in {
+                "accountChannelName", "accountChannel_requirements",
+                "accountChannel_login", "accountChannel_maturity",
+            }
+        ]
+        assert len(channels) == 4
+        copy = " ".join(label.text() for label in dialog.findChildren(QLabel))
+        assert "Requisitos:" in copy
+        assert "Tipo de login:" in copy
+        assert "Maturidade:" in copy
+        assert "esta lista não inicia login nem recebe credenciais" in copy
+        assert "Provedores no 9Router" in copy
+
+        dialog.show()
+        qapp.processEvents()
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        assert not dialog.isVisible()
     finally:
         window.close()
         host_patcher.stop()

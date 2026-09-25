@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QRadioButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QRadioButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from linux.ai.account_adapters import adapt_account_sources
@@ -32,6 +33,92 @@ _CONSUMER_LABELS = {
     "app.claude-code": "Claude Code",
     "app.opencode": "OpenCode",
 }
+
+
+@dataclass(frozen=True)
+class AccountChannel:
+    channel_id: str
+    name: str
+    requirements: str
+    login_method: str
+    maturity: str
+
+
+ACCOUNT_CHANNELS = (
+    AccountChannel(
+        "claude-code", "Claude Code",
+        "Claude Code instalado no host; status vem do comando oficial de autenticação.",
+        "Sessão gerida dentro do Claude Code; esta tela não inicia login.",
+        "Somente leitura. Credencial e identidade não são expostas; uso gerenciado aguarda grant aplicado.",
+    ),
+    AccountChannel(
+        "proxy-browser", "Kimi, Qwen e DeepSeek Proxy",
+        "Proxy e perfil de sessão mantidos pelo manager do proxy.",
+        "Login de navegador no fluxo próprio do proxy.",
+        "Inventário local. Artefato de sessão salvo não prova sessão válida agora.",
+    ),
+    AccountChannel(
+        "mimo-api", "MiMo API oficial",
+        "Configuração oficial do MiMo concluída pelo manager do proxy.",
+        "Chave configurada no fluxo do MiMo; não há entrada de segredo nesta tela.",
+        "Configuração local apenas; validade de sessão e cota não verificadas aqui.",
+    ),
+    AccountChannel(
+        "9router-provider", "Provedores no 9Router",
+        "Registro de provedor já existente na configuração do 9Router.",
+        "Cadastro e autenticação geridos pelo dashboard do 9Router.",
+        "Status do provider apenas. Identidade, isolamento por consumidor e grants efetivos não comprovados.",
+    ),
+)
+
+
+class AccountChannelsDialog(QDialog):
+    """Explain known account channels without starting provider login flows."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("accountChannelsDialog")
+        self.setWindowTitle("Canais de conexão reconhecidos")
+        self.resize(640, 480)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Estes canais podem aparecer em Contas e conexões. Login continua no app ou manager do provedor; "
+            "esta lista não inicia login nem recebe credenciais."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        cards = QVBoxLayout(content)
+        cards.setContentsMargins(0, 0, 0, 0)
+        for channel in ACCOUNT_CHANNELS:
+            card = QFrame()
+            card.setObjectName(f"accountChannel_{channel.channel_id}")
+            details = QVBoxLayout(card)
+            name = QLabel(channel.name)
+            name.setObjectName("accountChannelName")
+            name.setAccessibleName(channel.name)
+            details.addWidget(name)
+            for key, heading, value in (
+                ("requirements", "Requisitos", channel.requirements),
+                ("login", "Tipo de login", channel.login_method),
+                ("maturity", "Maturidade", channel.maturity),
+            ):
+                line = QLabel(f"{heading}: {value}")
+                line.setObjectName(f"accountChannel_{key}")
+                line.setWordWrap(True)
+                details.addWidget(line)
+            cards.addWidget(card)
+        cards.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        close = QPushButton("Fechar")
+        close.setObjectName("closeAccountChannels")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close, 0, Qt.AlignRight)
 
 
 def _grant_ledger_path() -> Path:
@@ -91,6 +178,10 @@ class AccountsPage(BasePage):
         refresh.clicked.connect(self.refresh_accounts)
         row.addWidget(refresh)
         layout.addLayout(row)
+        add_connection = QPushButton("Adicionar conexão")
+        add_connection.setObjectName("addAccountConnection")
+        add_connection.clicked.connect(self._show_channel_catalog)
+        layout.addWidget(add_connection)
         self._privacy_toggle = QCheckBox("Ocultar identidade das contas")
         self._privacy_toggle.setObjectName("hideAccountIdentity")
         self._privacy_toggle.setAccessibleName("Ocultar identidade das contas nesta tela")
@@ -111,6 +202,9 @@ class AccountsPage(BasePage):
         self._layout.addWidget(scroll, 1)
         self.status_loader.status_ready.connect(self._source_ready)
         self.status_loader.status_failed.connect(self._source_failed)
+
+    def _show_channel_catalog(self) -> None:
+        AccountChannelsDialog(self).exec()
 
     def _set_identity_hidden(self, hidden: bool) -> None:
         self.preferences.set_hide_account_identity(hidden)
