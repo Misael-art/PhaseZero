@@ -645,7 +645,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("9router-tui", "Abrir painel técnico do 9Router", "Abre a tela técnica avançada; para o dia a dia use os cards acima.", ("ai", "9router", "tui"), None),
         ("9router-repair", "Reparar 9Router", "Migra units para caminhos estáveis e valida serviço, bridge e watchdog.", ("ai", "9router", "repair"), ("ai", "9router", "status")),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
-        ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
+        ("9router-dashboard", "Dashboard 9Router bloqueado", "Testes de provider podem enviar inferência fora do ledger de grants e consumir cota.", ("ai", "9router", "dashboard"), None),
         ("9router-test", "Testar 9Router", "Valida saúde e /v1/models; chat de inferência bloqueado até grant por requisição.", ("ai", "9router", "test"), None),
         ("9router-secrets", "Importação de credenciais bloqueada", "Não copia credenciais para o 9Router sem referência segura e grant por requisição.", ("ai", "9router", "provider", "sync-secrets"), ("ai", "9router", "provider", "status")),
         ("9router-combos", "Combos com fallback bloqueados", "Não cria, sincroniza ou ativa combos sem grant por requisição e política de fallback comprovada.", ("ai", "9router", "combo", "sync"), ("ai", "9router", "combo", "list")),

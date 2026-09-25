@@ -81,6 +81,10 @@ jq -e '
   .webValidation.status == "missing-credentials" and
   .webValidation.missing == ["api-key"]
 ' <<< "$auth" >/dev/null
+jq -e '
+  .[] | select(.id == "9router") |
+  .webValidation.command == "blocked:connection-grant-not-enforceable"
+' <<< "$auth" >/dev/null
 if grep -Eq 'SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|API_KEY|phasezero-qwen' <<< "$auth"; then
     echo "FAIL: credentials leaked into proxies auth output"
     exit 1

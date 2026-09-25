@@ -259,6 +259,22 @@ def test_proxies_page_integrates_hermes_and_safe_odysseus_plan(proxies_page):
     assert odysseus["use"].text() == "Ver plano"
 
 
+def test_proxies_page_blocks_9router_dashboard_when_healthy(proxies_page):
+    page, _actions = proxies_page
+    page._proxy_status_ready("ai.9router-status", "", {
+        "installed": True, "healthy": True, "service": "active",
+    })
+    router = page._gateway_rows["9router"]
+    assert router["use"].text() == "Bloqueado"
+    assert not router["use"].isEnabled()
+    assert "sem grant por requisição" in router["use"].toolTip()
+    with patch.object(page, "run_action") as run_action:
+        router["use"].click()
+        page._gateway_use("9router")
+    run_action.assert_not_called()
+    assert not any(button.text() == "Gerenciar providers" for button in page.findChildren(QPushButton))
+
+
 def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_page):
     page, _actions = proxies_page
     page._proxy_status_ready("ai.auth-registry", "", {

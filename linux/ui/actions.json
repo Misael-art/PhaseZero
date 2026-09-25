@@ -2828,7 +2828,7 @@
     },
     {
       "name": "ai.9router-dashboard",
-      "label": "Abrir dashboard 9Router",
+      "label": "Dashboard 9Router bloqueado",
       "command": "linux/pz ai 9router dashboard",
       "mutable": false,
       "require_plan": false,

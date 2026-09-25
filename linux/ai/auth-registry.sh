@@ -115,7 +115,8 @@ registry="$(jq -cn \
       status:(if $healthy > 0 then "ready" elif $active > 0 then "attention" else "disabled" end),
       method:"9router-managed",accountCount:($accounts|length),activeAccounts:$active,healthyAccounts:$healthy,
       expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
-      nextAction:"linux/pz ai 9router dashboard",secretsRedacted:true
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     }
   ]) as $providerEntries |
   ([{
@@ -125,7 +126,8 @@ registry="$(jq -cn \
       status:(if $r.healthy then "ready" elif $r.installed then "attention" else "missing" end),
       method:"provider-vault",accountCount:($r.providers.total // 0),expiresAt:null,
       lastVerifiedAt:null,observedAt:$observedAt,
-      nextAction:"linux/pz ai 9router dashboard",secretsRedacted:true
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     },{
       id:"client:opencode",label:"OpenCode",kind:"client",scope:"9router",required:true,
       installed:($o.cli.installed == true),configured:($o.configuration.configured == true),

@@ -806,7 +806,7 @@ def test_opencode_recovery_never_offers_unbound_9router_setup(qapp):
         status_patcher.stop()
 
 
-def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
+def test_ready_9router_dashboard_is_blocked_from_simple_open_route(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
         from linux.ui_native.product_inventory import instances_from_status_payload
@@ -821,21 +821,21 @@ def test_ready_9router_uses_dashboard_as_simple_open_route(qapp):
         )[0]
         page._instances_ready(page._status_action_id, (instance,))
         assert instance.origin == "unknown"
-        assert page._primary_button.text() == "Abrir"
-        assert page._primary_action.id == "ai.9router-dashboard"
-        assert "ai.9router-dashboard" in _detail_action_ids(page)
+        assert page._primary_button.text() == "Uso bloqueado"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+        assert "ai.9router-dashboard" not in _detail_action_ids(page)
+        assert "podem enviar inferência" in page._account_grant_notice.text()
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.9router-dashboard"
-        assert start.call_args.kwargs["preview"] is False
+        start.assert_not_called()
     finally:
         window.close()
         host_patcher.stop()
         status_patcher.stop()
 
 
-def test_9router_configure_opens_dashboard_and_offline_resolves_read_only(qapp):
+def test_9router_configuration_dashboard_is_blocked_and_offline_resolves_read_only(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
         from linux.ui_native.product_inventory import instances_from_status_payload
@@ -848,13 +848,13 @@ def test_9router_configure_opens_dashboard_and_offline_resolves_read_only(qapp):
             app_id="app.9router", host_id="local", scope="local",
         )[0]
         page._instances_ready(page._status_action_id, (configured,))
-        assert page._primary_button.text() == "Configurar"
-        assert page._primary_action.id == "ai.9router-dashboard"
-        assert "ai.9router-dashboard" in _detail_action_ids(page)
+        assert page._primary_button.text() == "Uso bloqueado"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+        assert "ai.9router-dashboard" not in _detail_action_ids(page)
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.9router-dashboard"
+        start.assert_not_called()
 
         offline = instances_from_status_payload(
             {"id": "9router", "installed": True, "healthy": False, "service": "inactive",

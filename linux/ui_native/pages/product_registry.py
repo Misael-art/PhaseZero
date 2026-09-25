@@ -34,8 +34,8 @@ _RECOVERY_ACTION_BY_APP = {
     "app.opencode": "ai.opencode-install",
 }
 
-# These managed-session routes remain unavailable until a supported account
-# adapter can bind the selected connection to an enforceable consumer grant.
+# These managed-session and dashboard routes remain unavailable until a
+# supported adapter can bind each inference request to an enforceable grant.
 _ACCOUNT_GRANT_GATED_ACTIONS = frozenset({
     "ai.claude-bonsai-run", "ai.opencode-install",
     "ai.proxies-ensure-kimi", "ai.proxies-ensure-qwen",
@@ -46,7 +46,7 @@ _ACCOUNT_GRANT_GATED_ACTIONS = frozenset({
     "ai.proxies-open-deeps", "ai.proxies-open-mimo",
     "ai.proxies-credentials-mimo", "ai.proxies-ides", "ai.proxies-test",
     "ai.proxies.restart-one", "ai.proxies.test-one",
-    "ai.9router-combos", "ai.9router-secrets",
+    "ai.9router-dashboard", "ai.9router-combos", "ai.9router-secrets",
 })
 _PROXY_CONFIGURE_ACTION_BY_APP = {
     "app.kimiproxy": "ai.proxies-login-kimi",
@@ -437,10 +437,18 @@ class ProductRegistryPage(BasePage):
         self.status_loader.cancel_all()
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
-        self._account_grant_notice.setVisible(app_id in {
+        grant_gated_app = app_id in {
             "app.claude-code", "app.opencode", "app.9router", "app.kimiproxy", "app.qwen-proxy",
             "app.deepseek-proxy", "app.mimo-proxy",
-        })
+        }
+        self._account_grant_notice.setText(
+            "Dashboard 9Router bloqueado: testes de provider podem enviar inferência e consumir cota "
+            "sem grant por requisição. O painel direto ainda fica fora do ledger PhaseZero."
+            if app_id == "app.9router" else
+            "Execução gerenciada bloqueada: a rota não vincula cada requisição à conexão aprovada. "
+            "Login, status online ou grant registrado, isoladamente, não provam qual conta será usada."
+        )
+        self._account_grant_notice.setVisible(grant_gated_app)
         self._instances.clear()
         self._instance_id_collision = False
         self._populate_instance_selector()
@@ -713,7 +721,8 @@ class ProductRegistryPage(BasePage):
             dashboard_id = _DASHBOARD_CONFIGURE_ACTION_BY_APP.get(self._selected_app_id, "")
             dashboard = self.by_id.get(dashboard_id)
             if (
-                dashboard is not None and dashboard_id in product.get("actionIds", [])
+                dashboard is not None and dashboard_id not in _ACCOUNT_GRANT_GATED_ACTIONS
+                and dashboard_id in product.get("actionIds", [])
                 and self._action_matches_selected_instance(dashboard)
                 and instance is not None and instance.health == "online"
                 and not dashboard.mutable
@@ -796,7 +805,13 @@ class ProductRegistryPage(BasePage):
                 state, action = "resolve", diagnostic
         labels = {"prepare": "Preparar", "configure": "Configurar",
                   "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
-        self._primary_button.setText(labels.get(state, "Verificar"))
+        dashboard_blocked = (
+            self._selected_app_id == "app.9router" and state in {"configure", "open"}
+            and action is None
+        )
+        self._primary_button.setText(
+            "Uso bloqueado" if dashboard_blocked else labels.get(state, "Verificar")
+        )
         self._primary_action = action
         self._primary_desktop_entry = (
             self._desktop_entry_for_product(product)
@@ -811,6 +826,11 @@ class ProductRegistryPage(BasePage):
         self._primary_button.setEnabled(enabled)
         if context_tooltip:
             self._primary_button.setToolTip(context_tooltip)
+        elif dashboard_blocked:
+            self._primary_button.setToolTip(
+                "Dashboard bloqueado: testes do painel podem enviar inferência sem grant vinculado "
+                "à requisição e consumir cota."
+            )
         elif state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")
         else:

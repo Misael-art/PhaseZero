@@ -114,6 +114,11 @@ def test_auth_registry_v1_redaction_and_probe_failure_semantics(tmp_path):
     assert registry["secretsRedacted"] is True
     assert registry["probes"]["providers"] == "ok"
     assert registry["summary"]["accounts"] == 1
+    router = next(entry for entry in registry["entries"] if entry["id"] == "gateway:9router")
+    assert router["ready"] is True  # Service health is separate from consumer permission.
+    assert router["usageBlocked"] is True
+    assert router["blockedReason"] == "connection-grant-not-enforceable"
+    assert router["nextAction"] == "blocked:connection-grant-not-enforceable"
     assert "Private person" not in result.stdout
     assert "Private profile" not in result.stdout
     assert "provider-record-1" not in result.stdout

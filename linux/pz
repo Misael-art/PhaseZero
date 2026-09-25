@@ -211,7 +211,7 @@ Usage:
   pz ai backup restore --plan  Prévia obrigatória da restauração e rollback
   pz ai 9router status         Router health and redacted providers; clients stay blocked
   pz ai 9router install        Install loopback service; consumer use still requires grants
-  pz ai 9router dashboard      Open local 9Router dashboard
+  pz ai 9router dashboard      Blocked until per-request connection grants are enforceable
   pz ai 9router test           Check health/models; inference probe stays blocked
   pz ai 9router tui            Attach to existing service without restarting it
   pz ai 9router repair         Migrate stable units and verify watchdog

@@ -96,6 +96,11 @@ case "$*" in
     *) printf '{}\n' ;;
 esac
 EOF
+cat > "$stub_bin/xdg-open" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$XDG_STATE_HOME/phasezero"
+printf '%s\n' "$*" > "$XDG_STATE_HOME/phasezero/dashboard-opened"
+EOF
 chmod +x "$stub_bin"/*
 for stub in "$stub_bin"/*; do
     bash -n "$stub"
@@ -130,10 +135,12 @@ expect_grant_block "$ROOT/linux/pz" ai 9router client run /usr/bin/touch "$clien
 expect_grant_block "$HOME/.local/bin/phasezero-9router-run" /usr/bin/touch "$client_target"
 expect_grant_block "$ROOT/linux/pz" ai 9router provider sync-secrets
 expect_grant_block "$ROOT/linux/pz" ai 9router provider remove fixture-account
+expect_grant_block "$ROOT/linux/pz" ai 9router dashboard
 expect_grant_block "$ROOT/linux/pz" ai 9router combo sync
 expect_grant_block "$ROOT/linux/pz" ai 9router combo create fixture fixture-model
 expect_grant_block "$ROOT/linux/pz" ai 9router combo switch Default
 [ ! -e "$client_target" ]
+[ ! -e "$XDG_STATE_HOME/phasezero/dashboard-opened" ]
 [ ! -e "$XDG_STATE_HOME/phasezero/managed-write-called" ]
 [ "$(sha256sum "$XDG_CONFIG_HOME/phasezero/9router/settings.json" | awk '{print $1}')" = "$settings_hash" ]
 after_pid="$listener_pid"
@@ -148,6 +155,8 @@ jq -e '(.listener.pid == (env.PZ_TEST_LISTENER_PID | tonumber)) and
 service_unit="$XDG_CONFIG_HOME/systemd/user/phasezero-9router.service"
 watch_unit="$XDG_CONFIG_HOME/systemd/user/phasezero-9router-watch.service"
 grep -Fq 'ExecStart='"$HOME/.local/bin/phasezero-9router-server" "$service_unit"
+grep -Fq 'Name=9Router dashboard (uso bloqueado)' "$XDG_DATA_HOME/applications/phasezero-9router.desktop"
+grep -Fq 'Terminal=true' "$XDG_DATA_HOME/applications/phasezero-9router.desktop"
 grep -Fq "$ROOT/linux/ai/9router-server-runner.js" "$HOME/.local/bin/phasezero-9router-server"
 if grep -Rq '/current/' "$XDG_CONFIG_HOME/systemd/user" "$HOME/.local/share/applications"; then
     echo "stale current symlink path found in managed launchers" >&2

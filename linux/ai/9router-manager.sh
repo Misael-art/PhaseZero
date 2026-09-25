@@ -246,11 +246,11 @@ EOF
     pz_write_managed_file "$DASHBOARD_ENTRY" user <<EOF
 [Desktop Entry]
 Type=Application
-Name=9Router
-Comment=PhaseZero AI routing dashboard
+Name=9Router dashboard (uso bloqueado)
+Comment=Bloqueado: testes de provider podem consumir cota sem grant por requisição.
 Exec=$managed_pz ai 9router dashboard
 Icon=applications-science
-Terminal=false
+Terminal=true
 Categories=X-PhaseZero-WebApp;
 X-PHZ-Group=ia
 X-PhaseZero-MenuGroup=web.ai
@@ -935,9 +935,8 @@ doctor_9router() {
 }
 
 dashboard() {
-    command -v xdg-open >/dev/null 2>&1 || { pz_error "xdg-open missing"; return 1; }
-    xdg-open "$BASE_URL/dashboard" >/dev/null 2>&1 &
-    pz_info "9Router dashboard opened: $BASE_URL/dashboard"
+    connection_grant_blocked
+    return 69
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

@@ -243,8 +243,9 @@ class AiProxiesPage(BasePage):
         ))
         layout.addWidget(self._gateway_card(
             "9router", "9Router",
-            "Painel local de modelos, cotas e fallbacks",
+            "Dashboard bloqueado: testes de provider podem enviar inferência sem grant por requisição.",
             "ai.9router-install", "ai.9router-repair", "ai.9router-dashboard",
+            open_label="Bloqueado",
         ))
         layout.addWidget(self._gateway_card(
             "odysseus", "Odysseus",
@@ -308,11 +309,14 @@ class AiProxiesPage(BasePage):
         buttons = QHBoxLayout()
         buttons.addStretch()
         doctor = self._action_button("ai.auth-doctor", "Diagnosticar")
-        dashboard = self._action_button("ai.9router-dashboard", "Gerenciar providers")
+        dashboard_notice = QLabel(
+            "Dashboard 9Router bloqueado: testes de provider podem consumir cota sem grant por requisição."
+        )
+        dashboard_notice.setObjectName("accountGrantNotice")
+        dashboard_notice.setWordWrap(True)
         if doctor is not None:
             buttons.addWidget(doctor)
-        if dashboard is not None:
-            buttons.addWidget(dashboard)
+        buttons.addWidget(dashboard_notice, 1)
         layout.addLayout(buttons)
         return card
 
@@ -499,6 +503,14 @@ class AiProxiesPage(BasePage):
         if not state.healthy:
             self.run_action(str(refs.get("repair") or refs.get("install") or ""))
             return
+        if gateway_id == "9router":
+            detail = refs.get("detail")
+            if isinstance(detail, QLabel):
+                detail.setText(
+                    "Dashboard bloqueado: testes de provider podem enviar inferência e consumir cota "
+                    "sem grant por requisição."
+                )
+            return
         self.run_action(str(refs.get("open") or ""))
 
     def reload(self) -> None:
@@ -669,7 +681,12 @@ class AiProxiesPage(BasePage):
                 use.setText(str(refs.get("repair_label") or "Reparar"))
             else:
                 use.setText(str(refs.get("open_label") or "Abrir"))
-            use.setEnabled(True)
+            dashboard_blocked = state.id == "9router" and state.installed and state.healthy
+            use.setEnabled(not dashboard_blocked)
+            use.setToolTip(
+                "Bloqueado: o dashboard pode enviar inferência sem grant por requisição."
+                if dashboard_blocked else ""
+            )
 
     def _apply_provenance(self, parsed: object) -> None:
         if not isinstance(parsed, dict):

@@ -1445,10 +1445,10 @@ auth_status_json() {
         elif [ "$id" = "9router" ]; then
             required=true
             web_kind="dashboard-provider"
-            command="linux/pz ai 9router dashboard"
+            command="blocked:connection-grant-not-enforceable"
             if ! $installed; then web_status="not-installed"
             elif [ "$service" != active ]; then web_status="start-required"
-            else web_status="dashboard-ready"
+            else web_status="grant-required"
             fi
         elif [ "$id" = "qwen-worker-proxy" ]; then
             web_kind="external-deploy"
