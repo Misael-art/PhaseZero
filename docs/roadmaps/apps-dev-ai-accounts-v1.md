@@ -571,3 +571,11 @@ contexto; após status absent, action fica acessível. Suíte completa `tests/te
 `git diff --check` passou. Commits `a64a453`, `b5a7752`. Fixtures não iniciaram processos,
 serviços nem contas. PXA-003 segue `in_progress`; rotas remotas e IDs múltiplos no mesmo
 escopo continuam sem executor contextual.
+
+PXA-003 prova de host remoto: auditoria mostrou `StatusLoader` executava `linux/pz`
+local e confiava em `host_id` informado pelo chamador; teste antigo rotulava esse resultado
+como `homelab-a`, sem executor remoto. Loader agora recusa qualquer host diferente de
+`local` antes de executar ação e não cria instância da resposta. `tests/test_product_status_loader.py`:
+5 passaram; seleção de múltiplas instâncias, bloqueio de escopo ambíguo e Verify local:
+3 passaram; `git diff --check` passou. Commit `543e8fc`. PXA-003 permanece `in_progress`;
+executor host-bound e validação em appliance/admin real ainda faltam.
