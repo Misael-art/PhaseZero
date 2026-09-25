@@ -601,3 +601,9 @@ disponíveis quando o estado permite. Regressão `tests/test_product_registry_ui
 `compileall` e `git diff --check` passaram. Nenhum browser, serviço, pacote ou host foi
 iniciado. PXA-003 continua `in_progress` por executor remoto contextual e instâncias
 ambíguas sem suporte.
+
+PXA-003 regressão transversal após fechar mutações e aberturas secundárias:
+`tests/test_product_inventory.py`, `tests/test_native_navigation.py` e
+`tests/test_linux_native_ui.py`: 55 passaram em Qt offscreen. Catálogo, rotas canônicas,
+links laterais e páginas públicas permanecem funcionais. Sem serviço, pacote, browser,
+conta ou host real. Evidência hermética não altera o gate remoto nem G2/G4.
