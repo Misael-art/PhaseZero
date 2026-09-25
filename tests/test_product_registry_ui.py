@@ -436,6 +436,26 @@ def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
         status_patcher.stop()
 
 
+def test_external_proxy_instances_hide_every_manager_control(qapp):
+    from linux.ui_native.pages.product_registry import _PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP
+
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        for app_id, controls in _PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP.items():
+            page.open_product(app_id)
+            page._instances_ready(page._status_action_id, (ProductInstance(
+                f"external:{app_id}", app_id, "local", "local",
+                manager="external", installation="present", origin="external",
+                configuration="unknown", health="unknown",
+            ),))
+            assert not _detail_action_ids(page).intersection(controls), app_id
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_multiple_instances_require_explicit_local_scope_selection(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
