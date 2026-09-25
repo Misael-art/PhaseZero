@@ -951,3 +951,16 @@ consumindo CPU após o resumo; interrompi somente esse runner (exit 130), então
 esse lote não conta como execução limpa. `git diff --check` passou. Sem ações
 reais; PXA-003 permanece `in_progress`, com executor remoto e rotas restantes
 sem comprovação.
+
+PXA-008 ledger/grants estritos (`03d2e0c`, 2026-09-25): regressões provaram que
+`enabled: "false"` virava grant ativo; schema booleano era aceito como versão 1;
+raiz/lista/registros malformados escapavam como `AttributeError`/`KeyError`. A
+leitura agora valida estrutura, booleano exato, IDs, escopos, timestamps com fuso,
+contradição revogado+ativo e IDs duplicados; UI falha fechado sem controles. O
+filtro de recomendações rejeita booleanos coercíveis, escopo em string e grant
+sem timestamp de consentimento. `tests/test_account_grants.py` +
+`tests/test_accounts_page.py`: 22 passaram em 11,29 s; `tests/test_routing_manager.py`:
+44 passaram em 29,32 s; regressões adversariais direcionadas: 12 passaram;
+`git diff --check` passou. Nenhuma inferência, conta, API ou quota real executada.
+Isso endurece validação local; não prova que 9Router vincule execução à conexão
+concedida nem elimina fallback. PXA-008 e G3 continuam `in_progress`.
