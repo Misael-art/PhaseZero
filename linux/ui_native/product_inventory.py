@@ -184,6 +184,8 @@ def inventory(actions: list[ActionSpec]) -> tuple[ProductTarget, ...]:
 def _is_install_route(row: ProductTarget, action: ActionSpec) -> bool:
     if row.target_kind != "app":
         return False
+    if action.id.startswith("hub.capability.install."):
+        return True
     if action.id.startswith("capability.plan."):
         return True
     if "watchdog" in action.id:
@@ -194,6 +196,10 @@ def _is_install_route(row: ProductTarget, action: ActionSpec) -> bool:
 def _installation_authority(row: ProductTarget, action: ActionSpec) -> str | None:
     if not _is_install_route(row, action):
         return None
+    if action.id.startswith("hub.capability.install."):
+        # Generated Hub action applies a reviewed plan through the capability
+        # engine; its generic argv does not contain an install/setup verb.
+        return "linux/capabilities/engine.py"
     if row.action_id in _INSTALL_AUTHORITY_BY_ACTION:
         return _INSTALL_AUTHORITY_BY_ACTION[row.action_id]
     if row.action_id.startswith("capability.plan."):

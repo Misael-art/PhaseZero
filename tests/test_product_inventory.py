@@ -110,6 +110,31 @@ def test_generated_hub_actions_resolve_same_app_as_static_capability():
     assert target_for(replace(action, id="hub.capabilities.status")).target_id == "journey.capabilities"
 
 
+def test_dynamic_hub_install_routes_reuse_canonical_capability_authority():
+    from dataclasses import replace
+
+    from linux.capabilities.catalog import CAPABILITIES
+    from linux.ui_native.product_inventory import _installation_authority
+
+    template = build_catalog(ROOT)[0]
+    manifest = inventory_manifest(ROOT)
+    assert manifest["dynamicInstallationAuthorities"] == [
+        {"pattern": "hub.capability.install.<capabilityId>",
+         "authorityId": "linux/capabilities/engine.py"}
+    ]
+    static_rows = {row.action_id: row for row in inventory(build_catalog(ROOT))}
+    for capability in CAPABILITIES:
+        dynamic = replace(template, id=f"hub.capability.install.{capability.id}",
+                          args=("capabilities", "apply", "--plan-id", "{plan_id}",
+                                "--confirm", "{confirm}"))
+        row = target_for(dynamic)
+        canonical = static_rows[f"capability.plan.{capability.id}"]
+        assert row.target_id == canonical.target_id
+        assert row.role == "shortcut"
+        assert row.instance_scope == canonical.instance_scope == "host"
+        assert _installation_authority(row, dynamic) == "linux/capabilities/engine.py"
+
+
 def test_two_instances_share_one_product_without_merging_host_or_owner():
     local = ProductInstance("local:ollama", "app.ollama", "local", "user",
                             installation="present", origin="external", configuration="unknown")
