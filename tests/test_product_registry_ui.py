@@ -38,6 +38,16 @@ def _detail_action_rows(page):
     return rows
 
 
+def _detail_action_ids(page):
+    row_ids = [row.action.id for row in _detail_action_rows(page)]
+    advanced_ids = [
+        str(button.property("actionId"))
+        for button in page._detail_page.findChildren(QPushButton)
+        if button.objectName() == "advancedAction" and button.property("actionId")
+    ]
+    return set(row_ids + advanced_ids)
+
+
 @pytest.mark.parametrize("action_id", ["ai.ollama", "server.llm"])
 def test_legacy_app_routes_open_same_product_and_preserve_context(qapp, action_id):
     window, host_patcher, status_patcher = _window(qapp)
@@ -90,6 +100,12 @@ def test_legacy_page_action_routes_to_detail_and_detail_keeps_execute_path(qapp)
         assert window.stack.currentWidget() is products
         assert products.selected_app_id == "app.ollama"
         assert products.context_action_id == "server.llm"
+        assert products._primary_button.text() == "Verificar"
+        assert not any(row.action.id == "server.llm" for row in _detail_action_rows(products))
+        products._instances_ready(products._status_action_id, (ProductInstance(
+            "local:host:app.ollama", "app.ollama", "local", "host",
+            installation="absent",
+        ),))
         row = next(row for row in products.findChildren(ActionListRow) if row.action.id == "server.llm")
         with patch.object(window.runner, "start") as start:
             row.selected.emit(row.action)
@@ -139,6 +155,7 @@ def test_registry_has_all_manifest_products_and_unknown_is_not_absent(qapp):
         assert not page.instances
         assert "desconhecidas" in page._status_label.text()
         assert page._detail_layout.indexOf(page._status_label) >= 0
+        assert "ai.ollama" not in _detail_action_ids(page)
     finally:
         window.close()
         host_patcher.stop()
@@ -281,6 +298,9 @@ def test_resolve_uses_read_only_diagnostic_and_never_starts_external_proxy(qapp)
         assert page._primary_button.text() == "Resolver"
         assert page._primary_action.id == "ai.9router-doctor"
         assert not page._primary_action.mutable
+        assert not _detail_action_ids(page).intersection({
+            "ai.9router-install", "ai.9router-repair",
+        })
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
@@ -396,6 +416,11 @@ def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
         ),))
         assert page._primary_action is None
         assert not page._primary_button.isEnabled()
+        visible_ids = _detail_action_ids(page)
+        assert not visible_ids.intersection({
+            "ai.proxies-ensure-qwen", "ai.proxies-start-qwen",
+            "ai.proxies-stop-qwen", "ai.proxies-login-qwen",
+        })
 
         page._instances_ready(page._status_action_id, (ProductInstance(
             "unknown-manager:local:app.qwen-proxy", "app.qwen-proxy", "local", "local",

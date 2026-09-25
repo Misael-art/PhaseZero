@@ -61,6 +61,24 @@ _PROXY_CONFIGURE_TARGET_BY_APP = {
     "app.deepseek-proxy": ("login", "deepsproxy"),
     "app.mimo-proxy": ("set-credentials", "mimo-ai-proxy"),
 }
+_PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP = {
+    "app.kimiproxy": frozenset({
+        "ai.proxies-ensure-kimi", "ai.proxies-stop-kimi", "ai.proxies-login-kimi",
+        "ai.proxies-start-kimi",
+    }),
+    "app.qwen-proxy": frozenset({
+        "ai.proxies-ensure-qwen", "ai.proxies-stop-qwen", "ai.proxies-login-qwen",
+        "ai.proxies-start-qwen",
+    }),
+    "app.deepseek-proxy": frozenset({
+        "ai.proxies-ensure-deeps", "ai.proxies-stop-deeps", "ai.proxies-login-deeps",
+        "ai.proxies-start-deeps",
+    }),
+    "app.mimo-proxy": frozenset({
+        "ai.proxies-ensure-mimo", "ai.proxies-stop-mimo", "ai.proxies-credentials-mimo",
+        "ai.proxies-start-mimo",
+    }),
+}
 _DASHBOARD_CONFIGURE_ACTION_BY_APP = {
     "app.9router": "ai.9router-dashboard",
 }
@@ -476,9 +494,15 @@ class ProductRegistryPage(BasePage):
                     action for action in all_actions
                     if (target := self._targets.get(action.id)) is not None
                     and target.instance_scope == instance.scope
+                    and self._detail_action_allowed(action, product, instance)
                 ]
                 if not actions:
                     context_message = "Nenhuma ação disponível para este escopo."
+        else:
+            actions = [
+                action for action in all_actions
+                if self._detail_action_allowed(action, product, None)
+            ]
         if context_message:
             notice = QLabel(context_message)
             notice.setObjectName("productInstanceActionNotice")
@@ -570,6 +594,51 @@ class ProductRegistryPage(BasePage):
             and instance is not None and target is not None
             and target.instance_scope == instance.scope
         )
+
+    def _detail_action_allowed(
+        self,
+        action: ActionSpec,
+        product: dict[str, object],
+        instance: ProductInstance | None,
+    ) -> bool:
+        """Hide mutating routes until selected instance proves ownership/state.
+
+        The primary state CTA remains the path for verified prepare/configure/
+        recovery. Secondary legacy rows must not bypass its ownership checks.
+        """
+        if not action.mutable:
+            return True
+        app_id = str(product.get("appId") or "")
+        if action.id in _PROXY_INSTANCE_CONTROL_ACTIONS_BY_APP.get(app_id, ()):
+            return bool(
+                instance is not None
+                and instance.installation == "present"
+                and instance.origin == "phasezero"
+                and instance.manager == "phasezero-ai-proxy-suite"
+            )
+        if action.id == _RECOVERY_ACTION_BY_APP.get(app_id):
+            return self._action_for_state("resolve") is not None
+        if action.id in _PROXY_CONFIGURE_ACTION_BY_APP.values():
+            return self._action_for_state("configure") is not None
+
+        verbs = set(action.args)
+        if verbs & {"start", "restart", "stop", "repair"}:
+            authority = self._manifest_action(action.id).get("installationAuthorityId")
+            return bool(
+                instance is not None and instance.installation == "present"
+                and instance.origin == "phasezero" and authority
+                and authority in product.get("installationAuthorityIds", [])
+            )
+
+        authority = self._manifest_action(action.id).get("installationAuthorityId")
+        if authority:
+            if instance is None:
+                return False
+            if instance.installation == "present" and instance.origin != "phasezero":
+                return False
+            if instance.installation == "unknown":
+                return False
+        return True
 
     def _manifest_action(self, action_id: str) -> dict[str, object]:
         return next((row for row in self.manifest["actions"] if row.get("actionId") == action_id), {})
