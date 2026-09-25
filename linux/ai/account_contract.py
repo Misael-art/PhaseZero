@@ -33,9 +33,18 @@ class Evidence:
             raise ValueError("invalid account evidence")
         if self.verified_at and not self.observed_at:
             raise ValueError("verified evidence needs observation time")
-        for value in (self.observed_at, self.verified_at, self.expires_at):
+        for name, value in (
+            ("observed_at", self.observed_at),
+            ("verified_at", self.verified_at),
+            ("expires_at", self.expires_at),
+        ):
             if value:
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid evidence {name}") from exc
+                if parsed.tzinfo is None:
+                    raise ValueError(f"invalid evidence {name}: timezone required")
         if self.error in {"timeout", "backend-unavailable", "network", "unknown"} and self.state != "unknown":
             raise ValueError("probe failure cannot prove a negative state")
 

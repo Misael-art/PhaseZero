@@ -33,6 +33,23 @@ def test_credential_session_service_and_quota_are_independent():
         Evidence("no", error="timeout")
 
 
+def test_evidence_timestamps_require_iso_timezone():
+    evidence = Evidence(
+        "yes", "provider-check", "2026-09-25T06:00:00Z",
+        "2026-09-25T06:00:01+00:00", "2026-09-26T06:00:00Z",
+    )
+    assert evidence.verified_at.endswith("+00:00")
+    for field in ("observed_at", "verified_at", "expires_at"):
+        values = {field: "tomorrow"}
+        if field == "verified_at":
+            values["observed_at"] = "2026-09-25T06:00:00Z"
+        with pytest.raises(ValueError, match=f"invalid evidence {field}"):
+            Evidence(**values)
+        values[field] = "2026-09-25T06:00:00"
+        with pytest.raises(ValueError, match="timezone required"):
+            Evidence(**values)
+
+
 def test_quota_requires_dimension_unit_and_valid_timestamps():
     observed = "2026-09-25T06:00:00Z"
     quota = Quota(
