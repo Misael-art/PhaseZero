@@ -896,6 +896,13 @@ público, valida quatro canais, requisitos/login/maturidade e fechamento por Esc
 se ajusta à área lógica e passou com `QT_SCALE_FACTOR=1`, `1.5` e `2` em offscreen; isso não
 prova hit-test físico, leitor de tela ou G4 com participantes.
 
+PXA-009 exibição de cota em Contas (2026-09-25, `6172ca4`): cada registro agora mostra cota restante
+“não informada” quando ausente/desconhecida, zero somente quando fonte a informa, fonte
+oficial separada de estimativa local e horário de observação. `tests/test_accounts_page.py`:
+9 passaram, cobrindo desconhecida, saldo oficial zero e estimativa local. Nenhuma fonte nova
+foi consultada: adapters atuais não fornecem cota individual confiável; G3 e semântica real
+seguem pendentes.
+
 PXA-004/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO indicada pelo operador:
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 (8.172.068.864 bytes; `stat` somente, sem hash, montagem ou boot). Nova avaliação
