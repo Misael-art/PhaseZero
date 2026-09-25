@@ -579,7 +579,7 @@ def parse_quota(payload: dict, *, observed_at: str | None = None) -> tuple[str, 
     Values inferred from used/total stay in separate estimate fields and never
     become observed quota or routing-filter input.
     """
-    observed_at = observed_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    observed_at = _quota_timestamp(observed_at) or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     provenance = {"source": "9router_usage_api", "observedAt": observed_at}
     if payload.get("_unavailable"):
         return "unavailable", {**provenance, "error": "unavailable"}, QUOTA_CONFIDENCE["unavailable"]

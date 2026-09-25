@@ -434,7 +434,8 @@ def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(r
                 "source": "9router_usage_api", "observedAt": "2026-09-24T12:00:00Z",
                 "buckets": [{"dimension": "session", "unit": "unknown",
                              "remainingPercentage": None,
-                             "estimatedRemainingPercentage": 75}],
+                             "estimatedRemainingPercentage": 75,
+                             "resetAt": "2026-09-26T12:00:00Z"}],
             },
         }],
     })
@@ -442,6 +443,7 @@ def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(r
     assert "consultada em: 2026-09-24T12:00:00Z" in page._quota_details.text()
     assert "unidade desconhecida" in page._quota_details.text()
     assert "estimativa local 75%" in page._quota_details.text()
+    assert "reinicia em 2026-09-26T12:00:00Z" in page._quota_details.text()
 
     recommendation = [{"model_id": "provider/model-a", "score": 0.9,
                        "quota_state": "unknown", "quota": 0.5,
@@ -456,11 +458,12 @@ def test_routing_quota_ui_hides_invalid_numeric_metadata(routing_page):
     page._routing_status_ready("ai.routing-inventory", "", {
         "connections": [{
             "provider": "glm", "quotaState": "known", "quota": {
-                "source": "9router_usage_api", "observedAt": "2026-09-25T06:00:00Z",
+                "source": "9router_usage_api", "observedAt": "yesterday",
                 "buckets": [{
                     "dimension": "", "unit": 2, "remaining": float("nan"),
                     "remainingPercentage": True,
                     "estimatedRemainingPercentage": float("inf"),
+                    "resetAt": "tomorrow",
                 }],
             },
         }],
@@ -471,6 +474,8 @@ def test_routing_quota_ui_hides_invalid_numeric_metadata(routing_page):
     assert "dimensão desconhecida" in details
     assert "unidade desconhecida" in details
     assert "cota desconhecida" in details
+    assert "horário indisponível" in details
+    assert "tomorrow" not in details
     assert "nan" not in details.lower()
     assert "estimativa local inf%" not in details.lower()
 

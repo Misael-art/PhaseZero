@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -86,6 +87,16 @@ def _quota_display_state(connection: dict) -> str:
         ):
             return "known"
     return "unknown"
+
+
+def _quota_display_timestamp(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if parsed.tzinfo is not None else None
 
 
 
@@ -529,7 +540,7 @@ class AiRoutingPage(BasePage):
                 state = _quota_display_state(conn)
                 label = str(conn.get("provider") or "provedor")
                 source = "9Router Usage API" if quota.get("source") == "9router_usage_api" else "fonte desconhecida"
-                observed = str(quota.get("observedAt") or "horário indisponível")
+                observed = _quota_display_timestamp(quota.get("observedAt")) or "horário indisponível"
                 buckets = quota.get("buckets") if isinstance(quota.get("buckets"), list) else []
                 bucket_parts = []
                 for bucket in buckets:
@@ -559,6 +570,9 @@ class AiRoutingPage(BasePage):
                     )
                     if estimate is not None:
                         value += f"; estimativa local {estimate}%"
+                    reset_at = _quota_display_timestamp(bucket.get("resetAt"))
+                    if reset_at is not None:
+                        value += f"; reinicia em {reset_at}"
                     bucket_parts.append(f"{dimension}: {value}")
                 state_label = {"known": "informada", "unknown": "desconhecida", "unavailable": "indisponível"}.get(state, state)
                 bucket_text = " · " + "; ".join(bucket_parts) if bucket_parts else ""

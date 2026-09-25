@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -380,6 +381,9 @@ def test_quota_parser_rejects_invalid_numbers_and_reset_time():
         "quotas": {"session": {"used": True, "total": 100}},
     })[1]["buckets"][0]
     assert invalid_estimate["estimatedRemainingPercentage"] is None
+    malformed_time = rm.parse_quota({"message": "Usage not available"}, observed_at="tomorrow")[1]
+    parsed_time = datetime.fromisoformat(malformed_time["observedAt"].replace("Z", "+00:00"))
+    assert parsed_time.tzinfo is not None
 
 
 def test_quota_probe_exception_preserves_connection_rows(fake, monkeypatch):
