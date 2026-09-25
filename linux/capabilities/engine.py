@@ -37,6 +37,15 @@ class CapabilityError(RuntimeError):
     """Expected user-facing capability error."""
 
 
+def _step_cancel_requested(cancel_file: Path | None) -> bool:
+    if cancel_file is None:
+        return False
+    try:
+        return not cancel_file.is_symlink() and cancel_file.is_file()
+    except OSError:
+        return False
+
+
 def _source_dict(source: SourceSpec | None) -> dict | None:
     if source is None:
         return None
@@ -503,6 +512,7 @@ def apply_plan(
     dry_run: bool = False,
     facts: HostFacts | None = None,
     provider: Provider | None = None,
+    cancel_file: Path | None = None,
 ) -> dict:
     plan = state.load("plans", plan_id)
     if plan.get("schema") != SCHEMA or plan.get("kind") != "plan":
@@ -524,7 +534,12 @@ def apply_plan(
     installed_by_operation: list[dict] = []
     recipes_by_operation: list[dict] = []
     failed = False
-    for action in plan.get("actions", ()): 
+    cancelled = False
+    actions = list(plan.get("actions", ()))
+    for action_index, action in enumerate(actions):
+        if _step_cancel_requested(cancel_file):
+            cancelled = True
+            break
         if action.get("status") == "installed":
             results.append({"capabilityId": action["capabilityId"], "status": "preexisting"})
             continue
@@ -546,6 +561,9 @@ def apply_plan(
             continue
         code, stdout, stderr = (0, "", "")
         if needs_install:
+            if _step_cancel_requested(cancel_file):
+                cancelled = True
+                break
             code, stdout, stderr = package_provider.execute(command)
         item = {
             "capabilityId": capability.id,
@@ -555,6 +573,10 @@ def apply_plan(
             "stderr": _clean_output(stderr),
         }
         results.append(item)
+        if _step_cancel_requested(cancel_file) and code != 0:
+            item["status"] = "cancelled"
+            cancelled = True
+            break
         if code == 0:
             if needs_install:
                 installed_by_operation.append({
@@ -562,6 +584,9 @@ def apply_plan(
                     "source": _source_dict(source),
                 })
             if recipe_command:
+                if _step_cancel_requested(cancel_file):
+                    cancelled = True
+                    break
                 recipe_code, recipe_stdout, recipe_stderr = package_provider.execute(recipe_command)
                 item["recipeExitCode"] = recipe_code
                 item["recipeStdout"] = _clean_output(recipe_stdout)
@@ -575,6 +600,9 @@ def apply_plan(
                     item["status"] = "failed"
                     failed = True
                     break
+            if _step_cancel_requested(cancel_file) and action_index + 1 < len(actions):
+                cancelled = True
+                break
         else:
             failed = True
             break
@@ -587,13 +615,21 @@ def apply_plan(
         "planId": plan_id,
         "createdAt": int(time.time()),
         "dryRun": dry_run,
-        "status": "failed" if failed else ("preview" if dry_run else "complete"),
+        "status": (
+            "cancelled" if cancelled else
+            "failed" if failed else
+            "preview" if dry_run else
+            "complete"
+        ),
         "results": results,
         "installedByOperation": installed_by_operation,
         "recipesByOperation": recipes_by_operation,
         "rollbackToken": rollback_token,
         "reboot": plan.get("reboot", "no"),
     }
+    if cancelled:
+        record["summary"] = "Etapas concluídas preservadas; instalação pausada entre pacotes."
+        record["nextAction"] = "Gere novo preview para continuar sem repetir etapas concluídas."
     state.save("operations", operation_id, record)
     return record
 

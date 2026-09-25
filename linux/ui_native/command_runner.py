@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +81,10 @@ class CommandRunner(QObject):
         self.started_at = ""
         self.operation_id = ""
         self._cancel_requested = False
+        self._safe_cancel_supported = False
+        self._safe_cancel_pending = False
+        self._cancel_file: Path | None = None
+        self.cancel_error = ""
         self.ledger = OperationLedger()
         try:
             self.ledger.recover_interrupted()
@@ -94,6 +99,14 @@ class CommandRunner(QObject):
     @property
     def running(self) -> bool:
         return self.process is not None and self.process.state() != QProcess.NotRunning
+
+    @property
+    def safe_cancel_pending(self) -> bool:
+        return self._safe_cancel_pending
+
+    @property
+    def safe_cancel_supported(self) -> bool:
+        return self._safe_cancel_supported
 
     def timeout_for(self, action: ActionSpec, *, preview: bool) -> int:
         """LUX-022: leituras e prévias não esperam 30 min para falhar."""
@@ -122,6 +135,20 @@ class CommandRunner(QObject):
             stdin_data = (values or {}).get(action.stdin_parameter, "")
         self.action = action
         self.preview = preview
+        self._safe_cancel_supported = bool(
+            not preview and action.mutable
+            and action.args[:2] == ("capabilities", "apply")
+        )
+        self._safe_cancel_pending = False
+        self._cancel_file = None
+        self.cancel_error = ""
+        if self._safe_cancel_supported:
+            try:
+                cancel_dir = secure_directory(state_dir() / "cancel-requests")
+                self._cancel_file = cancel_dir / f"{secrets.token_hex(16)}.request"
+                args.extend(("--cancel-file", str(self._cancel_file)))
+            except OSError:
+                self._safe_cancel_supported = False
         self.command = [program, *args]
         self.stdout_parts = []
         self.stderr_parts = []
@@ -171,6 +198,20 @@ class CommandRunner(QObject):
         if not self.running or self.process is None:
             return
         process = self.process
+        self.cancel_error = ""
+        if self._safe_cancel_supported and self._cancel_file is not None:
+            try:
+                secure_file(self._cancel_file, "cancel\n")
+                self._safe_cancel_pending = True
+                self._cancel_requested = True
+                try:
+                    self.ledger.update(status="cancelling")
+                except OSError:
+                    pass
+                return
+            except OSError as exc:
+                self.cancel_error = f"Não foi possível pedir cancelamento seguro: {exc}"
+                return
         self._cancel_requested = True
         try:
             self.ledger.update(status="cancelling")
@@ -293,14 +334,28 @@ class CommandRunner(QObject):
         except OSError as exc:
             result.stderr += f"\nfailed to persist result: {exc}\n"
         try:
+            cancelled = bool(
+                self._cancel_requested and (
+                    code != 0
+                    or isinstance(parsed, dict) and parsed.get("status") == "cancelled"
+                )
+            )
             self.ledger.finish(
                 exit_code=code,
                 result_path=result.result_path,
-                cancelled=self._cancel_requested,
+                cancelled=cancelled,
             )
         except OSError as exc:
             result.stderr += f"\nfailed to persist operation ledger: {exc}\n"
         self.operation_id = ""
         self._cancel_requested = False
+        self._safe_cancel_pending = False
+        self._safe_cancel_supported = False
+        if self._cancel_file is not None:
+            try:
+                self._cancel_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._cancel_file = None
         self.process = None
         self.completed.emit(result)

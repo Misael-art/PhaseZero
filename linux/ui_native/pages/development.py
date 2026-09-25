@@ -157,11 +157,20 @@ class DevelopmentPage(BasePage):
         if self.status is None or action is None or result.preview:
             return
         if action.id.startswith(("capability.profile.development-", "development.recipe.")):
-            self.status.setText(
-                "Preparação concluída. Valide o ambiente para conferir cada ferramenta."
-                if result.ok else
-                "Preparação interrompida ou incompleta. Revise o erro; você pode gerar novo plano e tentar novamente."
+            cancelled = bool(
+                isinstance(result.parsed, dict) and result.parsed.get("status") == "cancelled"
             )
+            if cancelled:
+                self.status.setText(
+                    "Preparação pausada entre etapas. O que terminou foi preservado; "
+                    "gere novo preview para retomar."
+                )
+            else:
+                self.status.setText(
+                    "Preparação concluída. Valide o ambiente para conferir cada ferramenta."
+                    if result.ok else
+                    "Preparação interrompida ou incompleta. Revise o erro; você pode gerar novo plano e tentar novamente."
+                )
         elif action.id == "capability.status":
             self.status.setText(
                 "Validação consultada. Confira estados desconhecidos e ferramentas ausentes no resultado."

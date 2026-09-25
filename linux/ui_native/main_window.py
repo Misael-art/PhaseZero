@@ -829,6 +829,11 @@ class MainWindow(QMainWindow):
         self.command_label.setText(command)
         self.command_label.setVisible(self.preferences.advanced_mode)
         self.cancel_button.setEnabled(True)
+        self.cancel_button.setToolTip(
+            "O pacote atual termina; o cancelamento ocorre entre etapas seguras."
+            if self.runner.safe_cancel_supported else
+            "Interrompe processo em andamento (pede confirmação)."
+        )
         self._operation_started_at = time.monotonic()
         self._elapsed_timer.start()
         self._update_elapsed()
@@ -883,9 +888,16 @@ class MainWindow(QMainWindow):
         self.show_progress_button.setVisible(False)
         action = self.pending_action
         is_mutable = bool(action and action.mutable)
-        severity = severity_for(result.parsed, result.exit_code, mutable=is_mutable)
+        is_cancelled = bool(
+            isinstance(result.parsed, dict) and result.parsed.get("status") == "cancelled"
+        )
+        severity = "warning" if is_cancelled else severity_for(
+            result.parsed, result.exit_code, mutable=is_mutable
+        )
         status_map = {"success": "Concluído", "warning": "Concluído com avisos", "error": "Falhou"}
         status_label = status_map.get(severity, "Falhou")
+        if is_cancelled:
+            status_label = "Cancelado após etapa segura; pronto para retomar"
         if restart_required(result.parsed):
             status_label = "Reinício necessário"
         self.status_text.setText(status_label)
@@ -894,7 +906,7 @@ class MainWindow(QMainWindow):
         self.status_dot.style().polish(self.status_dot)
         self.registry.block_all(False)
         self.inspector.setEnabled(True)
-        if not result.ok:
+        if not result.ok and not is_cancelled:
             self._failure_count += 1
         elif not result.preview:
             # A confirmed operation that succeeded clears the pending-failure
@@ -953,7 +965,7 @@ class MainWindow(QMainWindow):
             dialog.retry_requested.connect(lambda _a: self.request_action(action))
             dialog.exec()
             verb_map = {"success": "concluída", "warning": "concluída com avisos", "error": "falhou"}
-            verb = verb_map.get(severity, "falhou")
+            verb = "cancelada; pronta para retomar" if is_cancelled else verb_map.get(severity, "falhou")
             self._toast(f"{action_title} {verb}", severity)
         self.pending_action = None
         self.pending_value = ""
@@ -1068,15 +1080,22 @@ class MainWindow(QMainWindow):
             self.search.clear()
 
     def _ask_cancel(self, title: str, elevated: bool) -> bool:
-        text = f"Parar agora pode deixar “{title}” incompleto."
-        if elevated:
+        if self.runner.safe_cancel_supported:
+            text = (
+                f"O pacote atual de “{title}” termina sem interrupção. "
+                "A instalação para antes da próxima etapa e pode ser retomada."
+            )
+        else:
+            text = f"Parar agora pode deixar “{title}” incompleto."
+        if elevated and not self.runner.safe_cancel_supported:
             text += " Pode exigir reparo depois."
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle("Parar operação?")
         box.setText(text)
         keep = box.addButton("Continuar operação", QMessageBox.RejectRole)
-        stop = box.addButton("Parar mesmo assim", QMessageBox.DestructiveRole)
+        stop_label = "Parar após pacote atual" if self.runner.safe_cancel_supported else "Parar mesmo assim"
+        stop = box.addButton(stop_label, QMessageBox.DestructiveRole)
         box.setDefaultButton(keep)
         box.setEscapeButton(keep)
         box.exec()
@@ -1090,6 +1109,11 @@ class MainWindow(QMainWindow):
         title = action.title if action is not None else "a operação"
         if self._ask_cancel(title, bool(action and action.elevated)):
             self.runner.cancel()
+            if self.runner.safe_cancel_pending:
+                self.status_text.setText("Aguardando etapa segura…")
+                self.cancel_button.setEnabled(False)
+            elif self.runner.cancel_error:
+                QMessageBox.warning(self, "Cancelamento indisponível", self.runner.cancel_error)
 
     def _show_progress_dialog(self) -> None:
         self.show_progress_button.setVisible(False)
@@ -1131,6 +1155,23 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.runner.running:
+            if self.runner.safe_cancel_supported:
+                answer = QMessageBox.question(
+                    self,
+                    "Etapa de pacote em andamento",
+                    "Para preservar o pacote em execução, solicite cancelamento seguro e feche depois que esta etapa terminar?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer == QMessageBox.Yes:
+                    self.runner.cancel()
+                    if self.runner.safe_cancel_pending:
+                        self.status_text.setText("Aguardando etapa segura; feche depois da conclusão.")
+                        self.cancel_button.setEnabled(False)
+                    elif self.runner.cancel_error:
+                        QMessageBox.warning(self, "Cancelamento indisponível", self.runner.cancel_error)
+                event.ignore()
+                return
             answer = QMessageBox.question(
                 self,
                 "Operação em andamento",

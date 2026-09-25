@@ -86,6 +86,33 @@ def test_development_python_recipe_preserves_os_runtime_copy(qapp):
         status_patcher.stop()
 
 
+def test_cancelled_development_apply_explains_safe_resume(qapp):
+    from linux.ui_native.models import OperationResult
+
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.show_category("Desenvolvimento")
+        page = window.registry.page_for("Desenvolvimento")
+        action = page.by_id["capability.profile.development-web-js"]
+        result = OperationResult(
+            action_id=action.id, command=["linux/pz", "capabilities", "apply"],
+            preview=False, exit_code=130, started_at="", finished_at="",
+            stdout='{"status":"cancelled"}', stderr="", parsed={
+                "kind": "operation", "status": "cancelled",
+                "summary": "Etapas concluídas preservadas.",
+            },
+        )
+        page.on_operation_result(action, result)
+        status = page.findChild(QLabel, "developmentStatus")
+        assert status is not None
+        assert "pausada entre etapas" in status.text()
+        assert "gere novo preview para retomar" in status.text()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 @pytest.mark.parametrize(
     ("objective_index", "profile_id", "app_id"),
     (

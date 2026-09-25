@@ -337,6 +337,16 @@ usa filesystem do usuário; pacotes de SO usam `/`. Prova live Arch consultou ap
 `pacman -Sp`/`-Si`, sem apply. G1 parcial; snapshots Arch/Windows
 e G2 continuam pendentes.
 
+PXA-005 cancelamento seguro: `CommandRunner` passa um arquivo de solicitação privado
+ao `capabilities apply`; backend só observa a solicitação entre instalações e receitas,
+deixando pacote corrente terminar. Operação salva as etapas concluídas e informa como
+retomar com novo preview; a janela permanece aberta enquanto etapa segura termina.
+Fixture cancela após Node, confirma pnpm não iniciou e retoma sem reinstalar Node.
+Cobertura conjunta de capabilities, cancelamento, Development, runner, navegação e
+diálogos: 100 testes passaram. `bash -n linux/pz`, `linux/pz capabilities apply
+--help` e `git diff --check` passaram. ShellCheck não está instalado. Prova hermética;
+nenhum pacote, serviço ou bridge admin real foi acionado. G2/Arch e Windows seguem pendentes.
+
 PXA-003 continuação: 32 testes focados (`test_product_registry_ui.py`,
 `test_product_inventory.py`, `test_native_navigation.py`) passaram. Desktop entry
 fixture e navegação de Abrir via `gio launch` passaram junto com snapshot regenerado

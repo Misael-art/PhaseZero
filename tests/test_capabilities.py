@@ -456,6 +456,46 @@ def test_partial_profile_apply_can_resume_without_reinstalling_completed_steps(p
     assert sum(command[-1] == "nodejs" for command in provider.executed) == 1
 
 
+def test_cooperative_cancel_stops_between_package_steps_and_resumes(private_state):
+    class CancelAfterFirstPackageProvider(FakeProvider):
+        def execute(self, plan):
+            result = super().execute(plan)
+            if len(self.executed) == 1:
+                cancel_file.touch()
+            return result
+
+    facts = host()
+    provider = CancelAfterFirstPackageProvider(facts)
+    plan = create_plan(profile_ids=["development-web-js"], facts=facts, provider=provider)
+    cancel_file = private_state / "cancel.request"
+
+    cancelled = apply_plan(
+        plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider,
+        cancel_file=cancel_file,
+    )
+    assert cancelled["status"] == "cancelled"
+    assert "continuar" in cancelled["nextAction"]
+    assert provider.installed_names == {"nodejs"}
+    assert len(provider.executed) == 1
+
+    cancel_file.unlink()
+    resumed = apply_plan(
+        plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider,
+    )
+    assert resumed["status"] == "complete"
+    assert provider.installed_names == {"nodejs", "pnpm"}
+    assert sum(command[-1] == "nodejs" for command in provider.executed) == 1
+
+
+def test_capability_cli_reports_cooperative_cancel_as_interrupt(capsys, monkeypatch):
+    from linux.capabilities import __main__ as cli
+
+    monkeypatch.setattr(cli, "apply_plan", lambda *_args, **_kwargs: {"status": "cancelled"})
+    code = cli.main(["apply", "--plan-id", "plan-id", "--confirm", "confirmation"])
+    assert code == 130
+    assert json.loads(capsys.readouterr().out)["status"] == "cancelled"
+
+
 def test_apply_rechecks_space_after_preview(private_state, monkeypatch):
     facts = host()
     provider = FakeProvider(facts)
