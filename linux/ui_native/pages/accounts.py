@@ -334,7 +334,10 @@ class AccountsPage(BasePage):
             provider.setObjectName("accountProvider")
             state = QLabel(self._connection_state(connection))
             state.setObjectName("accountEvidence")
-            for label in (name, provider, state):
+            quota = QLabel(self._quota_state(connection))
+            quota.setObjectName("accountQuota")
+            quota.setTextFormat(Qt.PlainText)
+            for label in (name, provider, state, quota):
                 label.setWordWrap(True)
                 details.addWidget(label)
             row.addLayout(details, 1)
@@ -439,6 +442,28 @@ class AccountsPage(BasePage):
             f"serviço {status(connection.service)}",
             f"acesso {status(connection.access)}",
         ))
+
+    @staticmethod
+    def _quota_state(connection: Connection) -> str:
+        quota = connection.quota
+        if quota is None or quota.source == "unknown":
+            return "Cota restante: não informada"
+
+        source = "Fonte oficial" if quota.source == "official" else "Estimativa local"
+        if quota.remaining is None:
+            amount = "restante não informado"
+            if quota.total is not None:
+                amount += f"; total {quota.total:g} {quota.unit}"
+        else:
+            amount = f"{quota.remaining:g} {quota.unit} restantes"
+            if quota.total is not None:
+                amount += f" (total {quota.total:g})"
+
+        observed = ""
+        if quota.observed_at:
+            timestamp = datetime.fromisoformat(quota.observed_at.replace("Z", "+00:00"))
+            observed = f" · observado {timestamp.astimezone().strftime('%d/%m %H:%M')}"
+        return f"{source}: {amount}{observed}"
 
     def block_while_running(self, running: bool) -> None:
         self.setEnabled(not running)

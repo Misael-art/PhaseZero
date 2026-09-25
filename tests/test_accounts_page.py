@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRad
 ROOT = Path(__file__).resolve().parents[1]
 
 from linux.ai.account_adapters import router_provider_accounts
-from linux.ai.account_contract import Connection, Evidence
+from linux.ai.account_contract import Connection, Evidence, Quota
 from linux.ui_native.pages.accounts import AccountChannelsDialog, AccountsPage
 
 
@@ -135,6 +136,43 @@ def test_account_screen_labels_expired_evidence_explicitly():
     )
 
     assert "sessão expirada" in AccountsPage._connection_state(connection)
+
+
+def test_account_quota_shows_unknown_official_zero_and_local_estimate(qapp):
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        account, connection = router_provider_accounts({"connections": [{
+            "id": "quota-account", "provider": "openai", "name": "Quota account", "active": True,
+        }]})[0]
+
+        def render_quota(value):
+            page._accounts = ((account, value),)
+            page._render_cards()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            return page.findChild(QLabel, "accountQuota").text()
+
+        assert render_quota(connection) == "Cota restante: não informada"
+
+        timestamp = "2026-09-25T10:00:00Z"
+        official = replace(connection, quota=Quota(
+            "messages", "mensagens", remaining=0, total=500,
+            source="official", observed_at=timestamp,
+        ))
+        official_label = render_quota(official)
+        assert "Fonte oficial: 0 mensagens restantes (total 500)" in official_label
+        assert "observado" in official_label
+
+        estimate = replace(connection, quota=Quota(
+            "tokens", "tokens", remaining=2.5, source="local_estimate",
+            observed_at=timestamp,
+        ))
+        estimate_label = render_quota(estimate)
+        assert "Estimativa local: 2.5 tokens restantes" in estimate_label
+        assert "Fonte oficial" not in estimate_label
+    finally:
+        window.close()
+        host_patcher.stop()
 
 
 def test_hidden_ai_dev_page_probes_only_when_opened(qapp):
