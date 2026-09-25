@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,6 +123,65 @@ def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_p
             assert "Consulta parcial" in page.summary.text()
             assert "sem resposta: Claude" in page.summary.text()
             assert "0 contas" not in page.summary.text()
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
+def test_accounts_page_records_per_probe_local_observation_time(
+    qapp, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        calls = []
+        with patch.object(page.status_loader, "fetch", side_effect=lambda key, args: calls.append((key, args))):
+            page.refresh_accounts()
+            probe_ids = {key.rsplit(":", 1)[-1]: key for key, _args in calls}
+            moments = iter(datetime(2026, 9, 25, 11, minute, tzinfo=timezone.utc) for minute in range(4))
+
+            class SequentialDateTime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    value = next(moments)
+                    return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+            with patch("linux.ui_native.pages.accounts.datetime", SequentialDateTime):
+                page.status_loader.status_ready.emit(
+                    probe_ids["claude"], "", {"auth": {"loggedIn": True, "apiProvider": "firstParty"}},
+                )
+                page.status_loader.status_ready.emit(
+                    probe_ids["proxies"], "", {"proxies": [{
+                        "id": "qwenproxy", "credentialStatus": "present",
+                        "sessionStatus": "authenticated", "service": "active",
+                    }]},
+                )
+                page.status_loader.status_ready.emit(
+                    probe_ids["router-providers"], "", {"connections": [{
+                        "id": "router-id", "provider": "openai", "active": True, "status": "success",
+                    }]},
+                )
+                page.status_loader.status_ready.emit(
+                    probe_ids["router-status"], "", {"healthy": True},
+                )
+
+        expected = {
+            "claude": "2026-09-25T11:00:00+00:00",
+            "proxies": "2026-09-25T11:01:00+00:00",
+            "router-providers": "2026-09-25T11:02:00+00:00",
+            "router-status": "2026-09-25T11:03:00+00:00",
+        }
+        assert page._source_observed_at == expected
+        observation = page.findChild(QLabel, "accountObservation")
+        assert observation is not None
+        assert "Consulta local mais recente" in observation.text()
+        assert "não comprova sessão válida" in observation.toolTip()
+        by_adapter = {connection.adapter_id: connection for _account, connection in page._accounts}
+        assert by_adapter["claude-code-auth-status"].session.observed_at == expected["claude"]
+        assert by_adapter["proxy-auth-status"].credential.observed_at == expected["proxies"]
+        assert by_adapter["9router-provider-status"].access.observed_at == expected["router-providers"]
+        assert by_adapter["9router-provider-status"].service.observed_at == expected["router-status"]
     finally:
         window.close()
         host_patcher.stop()

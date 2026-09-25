@@ -145,6 +145,7 @@ class AccountsPage(BasePage):
         self._generation = 0
         self._pending: set[str] = set()
         self._results: dict[str, object] = {}
+        self._source_observed_at: dict[str, str] = {}
         self._outcomes: dict[str, str] = {}
         self._accounts: tuple[tuple[Account, Connection], ...] = ()
         self._selected_by_provider: dict[str, str] = {}
@@ -224,6 +225,7 @@ class AccountsPage(BasePage):
         self.status_loader.cancel_all()
         self._pending = set(_SOURCES)
         self._results = {}
+        self._source_observed_at = {}
         self._outcomes = {source: "loading" for source in _SOURCES}
         if self.summary is not None:
             self.summary.setText("Verificando provedores disponíveis…")
@@ -245,6 +247,7 @@ class AccountsPage(BasePage):
             return
         _generation, source = identity
         self._results[source] = parsed
+        self._source_observed_at[source] = datetime.now(timezone.utc).isoformat()
         self._outcomes[source] = "ok" if isinstance(parsed, dict) else "invalid"
         self._pending.discard(source)
         self._render_if_ready()
@@ -254,6 +257,7 @@ class AccountsPage(BasePage):
         if identity is None or identity[0] != self._generation:
             return
         _generation, source = identity
+        self._source_observed_at[source] = datetime.now(timezone.utc).isoformat()
         self._outcomes[source] = "unavailable"
         self._pending.discard(source)
         self._render_if_ready()
@@ -261,16 +265,17 @@ class AccountsPage(BasePage):
     def _render_if_ready(self) -> None:
         if self._pending:
             return
-        observed_at = datetime.now(timezone.utc).isoformat()
         proxy_payload = self._results.get("proxies")
         proxies = proxy_payload.get("proxies", []) if isinstance(proxy_payload, dict) else []
         router_payload = self._results.get("router-providers")
         router_status = self._results.get("router-status")
-        router_health = Evidence(source="9router-health", observed_at=observed_at)
+        router_health = Evidence(
+            source="9router-health", observed_at=self._source_observed_at.get("router-status", ""),
+        )
         if isinstance(router_status, dict) and isinstance(router_status.get("healthy"), bool):
             router_health = Evidence(
                 "yes" if router_status["healthy"] else "no",
-                "9router-health", observed_at,
+                "9router-health", self._source_observed_at.get("router-status", ""),
             )
         try:
             self._accounts = adapt_account_sources(
@@ -279,7 +284,12 @@ class AccountsPage(BasePage):
                     "proxies": proxies if isinstance(proxies, list) else [],
                     "routerProviders": router_payload,
                 },
-                host_id="local", router_health=router_health, observed_at=observed_at,
+                host_id="local", router_health=router_health,
+                observed_at_by_source={
+                    "claude": self._source_observed_at.get("claude", ""),
+                    "proxies": self._source_observed_at.get("proxies", ""),
+                    "routerProviders": self._source_observed_at.get("router-providers", ""),
+                },
             )
         except (TypeError, ValueError):
             self._accounts = ()
@@ -337,7 +347,12 @@ class AccountsPage(BasePage):
             quota = QLabel(self._quota_state(connection))
             quota.setObjectName("accountQuota")
             quota.setTextFormat(Qt.PlainText)
-            for label in (name, provider, state, quota):
+            observation = QLabel(self._observation_state(connection))
+            observation.setObjectName("accountObservation")
+            observation.setWordWrap(True)
+            observation.setToolTip(self._observation_tooltip(connection))
+            observation.setAccessibleDescription(observation.toolTip())
+            for label in (name, provider, state, quota, observation):
                 label.setWordWrap(True)
                 details.addWidget(label)
             row.addLayout(details, 1)
@@ -464,6 +479,45 @@ class AccountsPage(BasePage):
             timestamp = datetime.fromisoformat(quota.observed_at.replace("Z", "+00:00"))
             observed = f" · observado {timestamp.astimezone().strftime('%d/%m %H:%M')}"
         return f"{source}: {amount}{observed}"
+
+    @staticmethod
+    def _format_observation_time(value: str) -> str:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return timestamp.astimezone().strftime("%d/%m/%Y %H:%M %Z").strip()
+
+    @classmethod
+    def _observation_state(cls, connection: Connection) -> str:
+        observed = [
+            evidence.observed_at
+            for evidence in (
+                connection.credential, connection.session, connection.service, connection.access,
+            )
+            if evidence.observed_at
+        ]
+        if not observed:
+            return "Consulta local: horário não informado"
+        latest = max(
+            observed,
+            key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")),
+        )
+        return f"Consulta local mais recente: {cls._format_observation_time(latest)}"
+
+    @classmethod
+    def _observation_tooltip(cls, connection: Connection) -> str:
+        fields = (
+            ("Credencial", connection.credential),
+            ("Sessão", connection.session),
+            ("Serviço", connection.service),
+            ("Acesso", connection.access),
+        )
+        details = [
+            f"{label}: {evidence.source} · {cls._format_observation_time(evidence.observed_at)}"
+            for label, evidence in fields if evidence.observed_at
+        ]
+        return (
+            "Cada horário indica resposta de consulta local; isso não comprova sessão válida, acesso ou cota."
+            + ("\n" + "\n".join(details) if details else "")
+        )
 
     def block_while_running(self, running: bool) -> None:
         self.setEnabled(not running)

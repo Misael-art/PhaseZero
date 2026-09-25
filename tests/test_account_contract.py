@@ -256,3 +256,36 @@ def test_account_source_adapter_joins_supported_sources_without_faking_missing_o
     assert "Private Name" not in str(exported)
     assert all(account.account_id not in str(exported) for account, _ in results)
     assert adapt_account_sources({"claude": {"error": "backend-unavailable"}}) == ()
+
+
+def test_account_source_adapter_preserves_each_probe_observation_time():
+    observed_at = {
+        "claude": "2026-09-25T11:00:00+00:00",
+        "proxies": "2026-09-25T11:01:00+00:00",
+        "routerProviders": "2026-09-25T11:02:00+00:00",
+        "routerHealth": "2026-09-25T11:03:00+00:00",
+    }
+    results = adapt_account_sources(
+        {
+            "claude": {"auth": {"loggedIn": True, "apiProvider": "firstParty"}},
+            "proxies": [{
+                "id": "qwenproxy", "credentialStatus": "present",
+                "sessionStatus": "authenticated", "service": "active",
+            }],
+            "routerProviders": {"connections": [{
+                "id": "router-id", "provider": "openai", "active": True, "status": "success",
+            }]},
+        },
+        observed_at_by_source=observed_at,
+        router_health=Evidence("yes", "9router-health", observed_at["routerHealth"]),
+    )
+    by_adapter = {connection.adapter_id: connection for _account, connection in results}
+
+    assert by_adapter["claude-code-auth-status"].session.observed_at == observed_at["claude"]
+    proxy = by_adapter["proxy-auth-status"]
+    assert {proxy.credential.observed_at, proxy.session.observed_at, proxy.service.observed_at} == {
+        observed_at["proxies"]
+    }
+    router = by_adapter["9router-provider-status"]
+    assert router.access.observed_at == observed_at["routerProviders"]
+    assert router.service.observed_at == observed_at["routerHealth"]

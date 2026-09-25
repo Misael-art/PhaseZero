@@ -225,26 +225,37 @@ def adapt_account_sources(
     host_id: str = "local",
     router_health: Evidence | None = None,
     observed_at: str = "",
+    observed_at_by_source: Mapping[str, str] | None = None,
 ) -> tuple[tuple[Account, Connection], ...]:
     """Join independently probed status payloads without inventing missing rows.
 
     Expected keys are ``claude``, ``proxies`` and ``routerProviders``. Absent
     or malformed sources contribute no accounts; callers retain probe outcomes
     separately so unavailable never looks like an empty account list.
+    ``observed_at_by_source`` records each probe's local response time;
+    ``observed_at`` remains a compatibility fallback for existing callers.
     """
     results: list[tuple[Account, Connection]] = []
-    claude = claude_code_account(sources.get("claude"), host_id=host_id, observed_at=observed_at)
+    source_times = observed_at_by_source or {}
+    claude = claude_code_account(
+        sources.get("claude"), host_id=host_id,
+        observed_at=source_times.get("claude", observed_at),
+    )
     if claude is not None:
         results.append(claude)
     proxies = sources.get("proxies")
     if isinstance(proxies, list):
         for proxy in proxies:
-            adapted = proxy_auth_account(proxy, host_id=host_id, observed_at=observed_at)
+            adapted = proxy_auth_account(
+                proxy, host_id=host_id,
+                observed_at=source_times.get("proxies", observed_at),
+            )
             if adapted is not None:
                 results.append(adapted)
     results.extend(router_provider_accounts(
         sources.get("routerProviders"), host_id=host_id,
-        router_health=router_health, observed_at=observed_at,
+        router_health=router_health,
+        observed_at=source_times.get("routerProviders", observed_at),
     ))
     account_ids = [account.account_id for account, _ in results]
     if len(set(account_ids)) != len(account_ids):
