@@ -767,7 +767,7 @@ confirmaram Node.js e pnpm ausentes. Prova em
 `~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-signature-failure/signature-events.jsonl`.
 O pacote oficial staged permaneceu intacto; somente cópia de teste foi adulterada.
 
-PXA-004/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO fornecida:
+PXA-004/PXA-005/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO fornecida:
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 (8.172.068.864 bytes; apenas `stat`, sem montagem ou boot). Avaliação read-only
 do host encontrou 2,8 GiB disponíveis, abaixo do mínimo de 4 GiB guest registrado
@@ -918,7 +918,7 @@ explícita equivalente. `test_account_contract.py`, `test_auth_registry.py`,
 `test_account_grants.py`, `test_accounts_page.py`: 28 passaram. Provas herméticas; nenhum
 probe real, login ou cota foi consultado; PXA-006/G3 continua externo.
 
-PXA-004/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO indicada pelo operador:
+PXA-004/PXA-005/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO indicada pelo operador:
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 (8.172.068.864 bytes; `stat` somente, sem hash, montagem ou boot). Nova avaliação
 read-only às 08:17 -03:00 encontrou 3,2 GiB disponíveis, 11 GiB de swap em uso e
