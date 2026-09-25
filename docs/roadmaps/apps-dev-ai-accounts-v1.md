@@ -649,9 +649,10 @@ Repetição de remoção Arch em 2026-09-25 no mesmo guest live efêmero, já co
 correção `pacman -Rs`: `development-web-js` instalou Node.js `26.8.1-2` e pnpm
 `11.3.0-1` pelo apply PhaseZero. Remoção PhaseZero de `development.pnpm` concluiu
 com exit code 0; a saída de pacman removeu pnpm, `node-gyp`, `nodejs-nopt` e
-`semver`, enquanto `node --version` continuou retornando `v26.8.1` e `pnpm --version`
-retornou comando ausente. Isso observa a remoção da dependência não mais usada e a
-preservação de Node.js ainda instalado explicitamente. A tentativa seguinte de
+`semver`, enquanto `node --version` continuou retornando `v26.8.1`. Isso observa a
+remoção da dependência não mais usada e a preservação de Node.js ainda instalado
+explicitamente. A digitação da verificação `pnpm --version` também ficou corrompida;
+não atribuir resultado a ela. A tentativa seguinte de
 remover `development.nodejs` não chegou ao apply: entrada manual no console alterou
 o ID e o plano ficou bloqueado por capacidade desconhecida. Não há evidência nova
 de `verify-removal`, reativação ou remoção PhaseZero de Node.js; não elevar a G2.
