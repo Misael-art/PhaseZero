@@ -607,3 +607,13 @@ PXA-003 regressão transversal após fechar mutações e aberturas secundárias:
 `tests/test_linux_native_ui.py`: 55 passaram em Qt offscreen. Catálogo, rotas canônicas,
 links laterais e páginas públicas permanecem funcionais. Sem serviço, pacote, browser,
 conta ou host real. Evidência hermética não altera o gate remoto nem G2/G4.
+
+PXA-004 sondagem G2 Arch: usei `archlinux:latest` em container Docker descartável,
+com `/workspace` read-only e rede desligada durante a tentativa. `capabilities plan
+--profile development-web-js` detectou `container: true` e retornou `blocked` para Node.js
+e pnpm; nenhum pacote da capability foi aplicado. Isso confirma o bloqueio seguro do
+planner, mas container não satisfaz snapshot Arch nem prova install/use/remove. Container
+e imagem temporária `pxa-g2-arch:20260925` foram removidos; imagem base Arch pré-existente
+foi preservada. Build efêmero teve aviso de assinatura do hook `archlinux-keyring` sem chave
+privada, não tratado como prova. Nenhum pacote/serviço do host foi alterado. PXA-004 G2
+segue pendente para VM/snapshot Arch real e Windows descartável.
