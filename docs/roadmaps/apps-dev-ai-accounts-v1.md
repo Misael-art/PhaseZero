@@ -544,6 +544,35 @@ segurança falho para habilitação automática e nenhuma tela/rota deve oferece
 provas independentes. Próximo passo seguro: spike hermético do contrato esperado e buscar
 execução em snapshots/conta autorizada; não adaptar setup upstream no host de trabalho.
 
+Auditoria complementar das fontes oficiais do mesmo tag (2026-09-25): `Full` mantém o
+gateway bruto e irrestrito de orquestração `exec`. Codex continua responsável por sandbox
+e aprovações, mas o daemon de Responses em loopback não tem bearer próprio e outro processo
+do mesmo usuário pode alcançá-lo. Loopback, portanto, não prova isolamento entre processos
+locais. O modelo de segurança declara esse usuário/processos como parte da fronteira
+confiável. [README v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/README.md),
+[modelo de segurança](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/security-model.md).
+
+O setup mantém o provider `openai`, grava `openai_base_url` e rota Voice, e usa journal
+para restauração; launcher supervisiona daemon/túnel opcional e pode instalar autostart
+de usuário. Remoção segura precisa restaurar a rota na UI, reiniciar todo Codex, encerrar
+e remover launcher; connector, túnel e chave da conta são limpeza separada. Apagar o app
+antes de restaurar deixa rota local inválida. [Arquitetura
+v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/architecture.md),
+[procedimento de remoção](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/TROUBLESHOOTING.md).
+
+A validação de release diz que CI não prova sessão ChatGPT autenticada, connector MCP vivo
+nem turno Codex completo; Windows requer conta real e qualquer item não executado bloqueia
+release estável. O medidor Pro opcional é estimativa local em janelas móveis, conta apenas
+mensagens enviadas pelo launcher e não informa saldo/reset oficial. Não pode preencher
+PXA-006/G3 nem ser rotulado como quota do provedor. [Validação
+v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/release-validation.md),
+[release v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.0.0).
+
+Esses limites reforçam o gate já registrado: sem prova externa de fronteira local,
+aprovação e ciclo real, o produto não expõe instalação nem ativação. Esta auditoria foi
+somente leitura; nenhum pacote, conta, API, ferramenta, túnel ou processo upstream foi
+usado.
+
 PXA-003 recuperação: auditoria encontrou fallback perigoso em `Resolver`: procurar `start`
 em argumentos podia escolher `ai.proxies-start-qwen` para instância externa offline, apesar
 de não haver autoridade de instalação declarada. Agora o CTA só aceita diagnóstico
