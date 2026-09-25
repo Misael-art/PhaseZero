@@ -445,6 +445,13 @@ class ProductRegistryPage(BasePage):
         product = self._product_by_id.get(app_id)
         if product is None or self._stack is None or self._detail_layout is None:
             return
+        context_target = self._targets.get(context_action_id) if context_action_id else None
+        if (
+            context_action_id
+            and (context_target is None or context_target.target_kind != "app"
+                 or context_target.target_id != app_id)
+        ):
+            context_action_id = ""
         self.status_loader.cancel_all()
         self._selected_app_id = app_id
         self._context_action_id = context_action_id

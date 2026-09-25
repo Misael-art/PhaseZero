@@ -68,6 +68,26 @@ def test_legacy_app_routes_open_same_product_and_preserve_context(qapp, action_i
         status_patcher.stop()
 
 
+def test_product_detail_discards_context_action_for_another_app(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        unrelated_action_id = next(
+            action_id for action_id, target in page._targets.items()
+            if target.target_kind == "app" and target.target_id != "app.ollama"
+        )
+
+        page.open_product("app.ollama", unrelated_action_id)
+
+        assert page.selected_app_id == "app.ollama"
+        assert page.context_action_id == ""
+        assert page._context_label.text() == "Catálogo de aplicativos"
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_product_detail_back_returns_to_search_context(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
