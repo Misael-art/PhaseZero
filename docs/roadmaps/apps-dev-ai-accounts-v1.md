@@ -726,6 +726,15 @@ cada pacote. `verify` e ambos executáveis passaram nas duas etapas. Evidência:
 `~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-idempotent/idempotent-events.jsonl`.
 Nenhum pacote ou serviço do host foi alterado.
 
+PXA-004 assinatura Arch corrompida: em novo overlay limpo, alterei um byte
+somente na cópia efêmera do pacote `ada`, mantendo `.sig` original.
+`pacman-conf SigLevel` retornou `PackageRequired` e `PackageTrustedOnly`; `pacman-key --verify`
+retornou `BAD signature`. Plano permaneceu `ready`, apply PhaseZero retornou
+`failed` por assinatura PGP inválida, sem upgrade de pacotes; queries finais
+confirmaram Node.js e pnpm ausentes. Prova em
+`~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-signature-failure/signature-events.jsonl`.
+O pacote oficial staged permaneceu intacto; somente cópia de teste foi adulterada.
+
 PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
 vazias e validar `observed_at`/`reset_at` como timestamps ISO com fuso; `2dbb1eb`
 rejeita também booleano, texto, `NaN` e infinito nos valores numéricos. Teste novo
