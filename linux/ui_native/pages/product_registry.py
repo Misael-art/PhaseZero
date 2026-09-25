@@ -134,6 +134,7 @@ class ProductRegistryPage(BasePage):
         self._compare_checks: dict[str, QCheckBox] = {}
         self._compare_selected: set[str] = set()
         self._instances: dict[str, ProductInstance] = {}
+        self._instance_id_collision = False
         self._selected_app_id = ""
         self._context_action_id = ""
         self._status_action_id = ""
@@ -435,6 +436,7 @@ class ProductRegistryPage(BasePage):
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
         self._instances.clear()
+        self._instance_id_collision = False
         self._populate_instance_selector()
         self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
         self._product_summary.setText(self._display_value(product.get("description")))
@@ -837,8 +839,14 @@ class ProductRegistryPage(BasePage):
         if action_id != self._status_action_id:
             # StatusLoader discards replaced contexts; keep this guard for same-app refreshes.
             return
-        rows = tuple(item for item in instances if isinstance(item, ProductInstance)) if isinstance(instances, tuple) else ()
-        self._instances = {item.instance_id: item for item in rows}
+        rows = tuple(
+            item for item in instances if isinstance(item, ProductInstance)
+        ) if isinstance(instances, tuple) else ()
+        instance_ids = [item.instance_id for item in rows]
+        self._instance_id_collision = len(instance_ids) != len(set(instance_ids))
+        self._instances = {} if self._instance_id_collision else {
+            item.instance_id: item for item in rows
+        }
         self._populate_instance_selector()
         self._render_status()
         self._render_detail_actions()
@@ -846,12 +854,19 @@ class ProductRegistryPage(BasePage):
     def _status_failed(self, action_id: str, _message: str) -> None:
         if action_id == self._status_action_id:
             self._instances.clear()
+            self._instance_id_collision = False
             self._populate_instance_selector()
             self._status_label.setText("Status indisponível · instalação, configuração e saúde desconhecidas")
             self._render_primary_action()
             self._render_detail_actions()
 
     def _render_status(self) -> None:
+        if self._instance_id_collision:
+            self._status_label.setText(
+                "Status ambíguo · IDs de instância repetidos; ações mutáveis bloqueadas"
+            )
+            self._render_primary_action()
+            return
         if not self._instances:
             self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
             self._render_primary_action()

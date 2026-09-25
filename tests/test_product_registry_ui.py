@@ -606,6 +606,39 @@ def test_duplicate_instances_in_same_scope_block_unscoped_actions(qapp):
         status_patcher.stop()
 
 
+def test_duplicate_instance_ids_are_reported_ambiguous_and_block_actions(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.qwen-proxy")
+        duplicate_id = "local:host:app.qwen-proxy"
+        page._instances_ready(page._status_action_id, (
+            ProductInstance(
+                duplicate_id, "app.qwen-proxy", "local", "host",
+                manager="phasezero-ai-proxy-suite", installation="present",
+                origin="phasezero", configuration="ready", health="offline",
+            ),
+            ProductInstance(
+                duplicate_id, "app.qwen-proxy", "local", "host",
+                manager="external", installation="present",
+                origin="external", configuration="unknown", health="offline",
+            ),
+        ))
+
+        assert "IDs de instância repetidos" in page._status_label.text()
+        assert page._primary_action is None
+        assert page._primary_button.text() == "Verificar"
+        assert page._primary_button.isEnabled()  # Only retrying read-only status remains.
+        assert not _detail_action_ids(page).intersection({
+            "ai.proxies-ensure-qwen", "ai.proxies-start-qwen",
+            "ai.proxies-stop-qwen", "ai.proxies-login-qwen",
+        })
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_verify_uses_selected_instance_scope(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
