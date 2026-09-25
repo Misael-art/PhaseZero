@@ -677,6 +677,26 @@ de `verify-removal`, reativação ou remoção PhaseZero de Node.js; não elevar
 Guest foi encerrado e `/tmp/pxa-g2-rs-arch-20260925` (4,9 GiB) removido após
 confirmar ausência de processo QEMU e de arquivos root-owned nesse diretório.
 
+PXA-004 repetição completa do ciclo pelo fluxo PhaseZero em 2026-09-25: no mesmo
+Arch Linux 2026.09.01 live ISO, QEMU/KVM reportou `kvm`, `none` para container e
+somente `lo` após iniciar com `-nic none`. O primeiro apply sem os pacotes
+dependentes staged falhou fechado por falta de rede; não instalou parcialmente.
+Com os três pacotes Arch Archive assinados (`ada 4.0.0-1`, `c-ares 1.34.8-1`,
+`simdjson 1:4.6.9-1`) copiados para cache efêmero do guest, mantendo verificação
+de assinatura, o ciclo de duas passagens completou: apply de
+`development-web-js`, uso real de `node --version` (`v26.8.1`), `pnpm --version`
+(`11.3.0`) e execução JS; remoção PhaseZero de pnpm removeu também
+`node-gyp`, `nodejs-nopt` e `semver`, preservando Node.js; reapply e novo uso
+passaram; remoção PhaseZero de pnpm e Node.js concluiu, e `verify-removal`
+confirmou ambos ausentes. JSONL detalhado ficou em
+`~/.cache/pz-pxa004-g2-arch-20260925/run-cycle-03/events.jsonl`; ISO SHA-256
+continua `be8458032f8105e60ee2a3067f950b6e3c007ee51b38dac50e8b48e765561c91`.
+Esta evidência fecha a lacuna do fluxo PhaseZero de remoção e reativação nesse
+guest, mas não certifica G2: ISO live com estado efêmero ainda não é snapshot
+limpo persistente, falhas simuladas não cobrem crash/cancelamento, e Windows
+descartável segue pendente. Nenhum pacote/serviço do host foi instalado ou
+alterado; QEMU encerrado após exit 0.
+
 PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
 vazias e validar `observed_at`/`reset_at` como timestamps ISO com fuso; `2dbb1eb`
 rejeita também booleano, texto, `NaN` e infinito nos valores numéricos. Teste novo
