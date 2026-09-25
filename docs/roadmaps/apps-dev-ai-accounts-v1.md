@@ -903,6 +903,13 @@ oficial separada de estimativa local e horário de observação. `tests/test_acc
 foi consultada: adapters atuais não fornecem cota individual confiável; G3 e semântica real
 seguem pendentes.
 
+PXA-009 elegibilidade por cota (2026-09-25, `ddbfa1a`): teste red mostrou que
+`Connection.usable` bloqueava restante zero de `local_estimate`, apesar de estimativa não
+ser filtro de disponibilidade. Agora somente restante zero com fonte `official` bloqueia;
+estimativa local zero e saldo oficial desconhecido não bloqueiam nem fingem saldo conhecido.
+`test_account_contract.py`, `test_account_grants.py`, `test_accounts_page.py`: 26 passaram;
+`git diff --check` passou. Nenhuma API ou conta real consultada.
+
 PXA-004/PXA-014 Windows G2 — **não executado em 2026-09-25**. ISO indicada pelo operador:
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 (8.172.068.864 bytes; `stat` somente, sem hash, montagem ou boot). Nova avaliação
