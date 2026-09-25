@@ -1129,3 +1129,34 @@ Limite: isto bloqueia rotas PhaseZero verificadas, mas não controla dashboard, 
 cliente ou configuração usados diretamente fora do manager nem prova pin de conexão por
 requisição. PXA-008 e PXA-003 seguem `in_progress`; PXA-006/G3 continua gate externo,
 sem sessão/cota de conta real. Não marcar fixtures como conclusão.
+
+PXA-003/PXA-008 dashboard 9Router (2026-09-25, `f592919`): fonte upstream do
+[endpoint de teste](https://github.com/decolua/9router/blob/master/src/app/api/models/test/route.js)
+usa `pingModelByKind`; [issue #3010](https://github.com/decolua/9router/issues/3010)
+relata que o teste envia request de completion e pode consumir cota. Dashboard
+PhaseZero agora retorna `connection-grant-not-enforceable` (exit 69); o shortcut
+gerenciado abre terminal com razão explícita. `Aplicativos` bloqueia CTA e ação
+do dashboard; IA & Dev desabilita Abrir/Gerenciar providers; resumo de autenticação
+separa saúde (`ready`) de permissão (`usageBlocked:true` e `blockedReason`). O proxy
+suite deixa de anunciar `dashboard-ready` e não publica comando executável para esse
+próximo passo. Sentinel
+confirma que `xdg-open` não roda. Dashboard aberto diretamente pela URL e o serviço
+fora das rotas PhaseZero continuam fora do controle local; esta mudança não prova
+enforcement por requisição nem fecha PXA-008.
+
+`tests/linux-9router.sh`, `tests/linux-ai-proxies.sh` e `tests/test_auth_registry.py`
+passaram; casos focados de `test_product_registry_ui.py` (2) e
+`test_ai_session_ui.py` (1) passaram. Regressão de páginas/catálogo/snapshots/servidor
+(`test_ai_session_ui.py`, `test_product_registry_ui.py`, `test_product_inventory.py`,
+`test_catalog_visibility.py`, `test_linux_native_ui.py`, `test_linux_ui_server.py`):
+134 passaram em 54,01 s, processo encerrou com exit 0. Regressões vieram antes da
+última atualização aditiva do auth registry; seus dois testes e o smoke suite foram
+executados depois. `bash -n` e `git diff --check` passaram. Fixtures temporárias;
+nenhum dashboard, provider, inferência, conta ou cota real foi acionado.
+
+PXA-004/PXA-005/PXA-014 Windows G2 — **não realizada**; reavaliação read-only às
+14:35 -03:00 em 2026-09-25: 2,5 GiB disponíveis, 11 GiB de swap em uso e load average
+6,55/8,71/9,54. Guest requer pelo menos 4 GiB; sem margem. ISO indicada continua
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`, sem hash,
+montagem ou boot. Nenhum QEMU iniciado ou processo interrompido. G2 Windows segue
+pendente para janela de host com memória acima do mínimo e carga menor.
