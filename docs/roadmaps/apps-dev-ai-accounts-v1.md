@@ -1016,3 +1016,10 @@ Regressão ampla UI após `9598ae5`: `tests/test_product_registry_ui.py` +
 ativo após o resumo (PID 135831, 28,1% CPU, estado R); interrompi somente esse
 runner (exit 130). Não conta como execução limpa. Os 16 testes focados anteriores
 encerraram com exit 0 e seguem como evidência comportamental válida.
+
+PXA-005 reteste G1 (2026-09-25):
+`tests/test_cancel_safety.py`, `tests/test_development_page.py`,
+`tests/test_development_cancel.py` e `tests/test_development_journey_e2e.py`
+passaram novamente: 15 testes em 17,92 s, exit 0. Processo Qt/QProcess encerrou
+normalmente; fixture não executou gerenciador de pacotes. G1 confirmado; runtime
+real do SO, pacote real e G2 Windows continuam pendentes.
