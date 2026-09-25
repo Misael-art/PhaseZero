@@ -852,3 +852,20 @@ horário/reset sem fuso e exibe reset válido. As suítes permanecem 76 aprovada
 `tests/test_routing_manager.py` + `tests/test_ai_session_ui.py`: 76 passaram;
 `compileall` e `git diff --check` passaram. Ruff ausente. Sem chamada real à API;
 PXA-009/G3 segue pendente de semântica e cota observadas em conta real.
+
+PXA-005 jornada pública G1 (2026-09-25): novo `tests/test_development_journey_e2e.py`
+usa a página Desenvolvimento, diálogos reais de plano/resultado, `CommandRunner` e
+QProcess real; somente o provider de pacote é fixture em HOME/XDG temporários. Prova
+ordem Revisar plano → Confirmar e aplicar → Validar ambiente → Abrir ferramenta,
+vincula `plan_id`/`confirmToken` retornados pelo preview, envia `--cancel-file`, valida
+Node.js/pnpm e navega ao detalhe canônico `app.nodejs` sem editor. Provider não invoca
+pacman nem outro gerenciador. A primeira tentativa do fixture omitia o contrato de
+confirmação e parou corretamente no bloqueio de preview; corrigido com os campos do
+contrato. A regressão então revelou `test_development_cancel.py` ainda esperava matar
+process group, comportamento substituído por cancelamento cooperativo. Fixture agora
+recebe o arquivo privado de cancelamento, deixa etapa corrente terminar, confirma
+resultado 130 e ledger retomável; `tests/test_capabilities.py` prova que próxima etapa
+não iniciou e retry não repete pacote já concluído. `test_capabilities.py`: 55 passaram;
+`test_cancel_safety.py`, `test_development_page.py`, `test_development_cancel.py`,
+`test_development_journey_e2e.py`, `test_native_navigation.py`: 27 passaram; total 82.
+G1 hermético; pacote real, runtime do SO limpo e G2 Arch/Windows continuam pendentes.

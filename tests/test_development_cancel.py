@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QEventLoop, QProcess, QTimer
 from PySide6.QtWidgets import QApplication, QPushButton
 
 
@@ -17,7 +17,7 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_development_cancel_kills_process_group_and_keeps_retry_record(qapp, tmp_path, monkeypatch):
+def test_development_cancel_waits_for_safe_step_and_keeps_resume_record(qapp, tmp_path, monkeypatch):
     from linux.ui_native.main_window import MainWindow
 
     home = tmp_path / "home"
@@ -35,15 +35,21 @@ def test_development_cancel_kills_process_group_and_keeps_retry_record(qapp, tmp
     marker = tmp_path / "child-survived-cancel"
     fake = tmp_path / "fake_provider.py"
     fake.write_text(
-        "import signal, subprocess, sys\n"
+        "import json, subprocess, sys\n"
         "from pathlib import Path\n"
-        "pid_file, marker = map(Path, sys.argv[1:])\n"
+        "pid_file, marker = map(Path, sys.argv[1:3])\n"
+        "extra = sys.argv[3:]\n"
+        "cancel_file = Path(extra[extra.index('--cancel-file') + 1])\n"
         "code = 'import time; from pathlib import Path; import sys; time.sleep(1.2); '\n"
-        "code += 'Path(sys.argv[1]).write_bytes(bytes([115,117,114,118,105,118,101,100]))'\n"
+        "code += 'Path(sys.argv[1]).write_bytes(bytes([115,116,101,112,45,102,105,110,105,115,104,101,100]))'\n"
         "child = subprocess.Popen([sys.executable, '-c', code, str(marker)])\n"
         "pid_file.write_text(str(child.pid))\n"
         "print('ready', flush=True)\n"
-        "signal.pause()\n",
+        "child.wait()\n"
+        "if cancel_file.is_file():\n"
+        " print(json.dumps({'status': 'cancelled'}), flush=True)\n"
+        " raise SystemExit(130)\n"
+        "print(json.dumps({'status': 'complete'}), flush=True)\n",
         encoding="utf-8",
     )
 
@@ -81,6 +87,8 @@ def test_development_cancel_kills_process_group_and_keeps_retry_record(qapp, tmp
             cancelled.append(True)
             assert window.cancel_button.isEnabled()
             window.cancel_button.click()
+            assert window.runner.safe_cancel_pending
+            assert window.runner.process.state() != QProcess.NotRunning
 
     window.runner.output.connect(cancel_when_ready)
     try:
@@ -94,12 +102,10 @@ def test_development_cancel_kills_process_group_and_keeps_retry_record(qapp, tmp
         assert cancelled
         assert int(pid_file.read_text(encoding="utf-8")) > 0
 
-        # If cancellation only killed the launcher, its child would write this
-        # marker after its timer expires.
-        child_loop = QEventLoop()
-        QTimer.singleShot(1500, child_loop.quit)
-        child_loop.exec()
-        assert not marker.exists()
+        # The in-flight package step finishes; cancellation prevents later steps.
+        assert marker.read_bytes() == b"step-finished"
+        assert completed[0].exit_code == 130
+        assert completed[0].parsed["status"] == "cancelled"
 
         record = window.runner.ledger.records(limit=1)[0]
         assert record["status"] == "cancelled"
