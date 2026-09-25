@@ -181,6 +181,30 @@ def test_unknown_status_hides_every_mutating_secondary_app_action(qapp):
         status_patcher.stop()
 
 
+def test_claude_detail_explains_grant_gate_and_never_offers_bonsai_run(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.claude-code")
+        notice = page.findChild(QLabel, "accountGrantNotice")
+        assert notice is not None and not notice.isHidden()
+        assert "grant vinculado à conta e à rota" in notice.text()
+        assert "ai.claude-bonsai-run" not in _detail_action_ids(page)
+
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            "local:host:app.claude-code", "app.claude-code", "local", "local",
+            manager="phasezero-claude-code", installation="present", origin="phasezero",
+            configuration="ready", health="online",
+        ),))
+        assert page._primary_action is None or page._primary_action.id != "ai.claude-bonsai-run"
+        assert "ai.claude-bonsai-run" not in _detail_action_ids(page)
+        assert not notice.isHidden()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_external_installation_hides_every_mutating_secondary_app_action(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:

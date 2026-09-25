@@ -37,6 +37,10 @@ _RECOVERY_ACTION_BY_APP = {
     "app.deepseek-proxy": "ai.proxies-start-deeps",
     "app.mimo-proxy": "ai.proxies-start-mimo",
 }
+
+# These managed-session routes remain unavailable until a supported account
+# adapter can bind the selected connection to an enforceable consumer grant.
+_ACCOUNT_GRANT_GATED_ACTIONS = frozenset({"ai.claude-bonsai-run"})
 _PROXY_RECOVERY_AUTHORITY_BY_APP = {
     "app.kimiproxy": "linux/ai/proxy-suite.sh",
     "app.qwen-proxy": "linux/ai/proxy-suite.sh",
@@ -291,6 +295,15 @@ class ProductRegistryPage(BasePage):
         self._status_label.setObjectName("productStatus")
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
+        self._account_grant_notice = QLabel()
+        self._account_grant_notice.setObjectName("accountGrantNotice")
+        self._account_grant_notice.setWordWrap(True)
+        self._account_grant_notice.setText(
+            "Execução de sessões pelo PhaseZero bloqueada: falta grant vinculado à conta e à rota. "
+            "Login ou status online, sozinho, não libera essa ação."
+        )
+        self._account_grant_notice.hide()
+        layout.addWidget(self._account_grant_notice)
         self._primary_button = QPushButton("Verificar")
         self._primary_button.setObjectName("productPrimaryAction")
         self._primary_button.setToolTip("Confere status antes de escolher uma ação.")
@@ -435,6 +448,7 @@ class ProductRegistryPage(BasePage):
         self.status_loader.cancel_all()
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
+        self._account_grant_notice.setVisible(app_id == "app.claude-code")
         self._instances.clear()
         self._instance_id_collision = False
         self._populate_instance_selector()
@@ -609,6 +623,8 @@ class ProductRegistryPage(BasePage):
         recovery. Secondary legacy rows must not bypass its ownership checks.
         """
         app_id = str(product.get("appId") or "")
+        if action.id in _ACCOUNT_GRANT_GATED_ACTIONS:
+            return False
         if not action.mutable:
             verbs = set(action.args) | set(action.id.casefold().split("."))
             if not verbs.intersection({"open", "launch", "dashboard"}):
