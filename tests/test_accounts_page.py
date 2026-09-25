@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QRadioButton, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QRadioButton, QWidget
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -173,9 +173,14 @@ def test_add_connection_lists_supported_channel_requirements_and_maturity(qapp):
         page = window.registry.page_for("Contas e conexões")
         add = page.findChild(QPushButton, "addAccountConnection")
         assert add is not None
-        with patch.object(AccountChannelsDialog, "exec", return_value=QDialog.Accepted) as open_dialog:
-            add.click()
-        open_dialog.assert_called_once()
+
+        def close_public_dialog():
+            active = QApplication.activeModalWidget()
+            assert isinstance(active, AccountChannelsDialog)
+            active.findChild(QPushButton, "closeAccountChannels").click()
+
+        QTimer.singleShot(0, close_public_dialog)
+        add.click()
 
         dialog = AccountChannelsDialog()
         cards = dialog.findChildren(QWidget)
