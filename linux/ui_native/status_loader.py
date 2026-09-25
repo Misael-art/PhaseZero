@@ -117,6 +117,11 @@ class StatusLoader(QObject):
         if not app_id.startswith("app.") or not host_id or not scope or not instance_key:
             self.status_failed.emit(action.id, "invalid product status context")
             return
+        if host_id != "local":
+            self.status_failed.emit(
+                action.id, "remote product status requires a host-bound executor",
+            )
+            return
         args = action.status_args or action.args
         if any(token.startswith("{") and token.endswith("}") for token in args):
             self.status_failed.emit(action.id, "status requires parameters")
