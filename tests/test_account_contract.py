@@ -207,6 +207,9 @@ def test_proxy_adapter_distinguishes_artifact_from_live_session():
     unavailable = proxy_auth_account({
         "id": "mimo-ai-proxy", "credentialStatus": "backend-unavailable",
     })
+    saved_artifact = proxy_auth_account({
+        "id": "qwenproxy", "credentialStatus": "present", "sessionStatus": "present",
+    })
     assert present is not None
     assert present[1].credential.state == "yes"
     assert present[1].session.state == "unknown"
@@ -216,6 +219,9 @@ def test_proxy_adapter_distinguishes_artifact_from_live_session():
     assert unavailable is not None
     assert unavailable[1].credential.state == "unknown"
     assert unavailable[1].credential.error == "backend-unavailable"
+    assert saved_artifact is not None
+    assert saved_artifact[1].credential.state == "yes"
+    assert saved_artifact[1].session.state == "unknown"
 
 
 def test_router_provider_adapter_uses_opaque_ids_and_never_infers_credentials():

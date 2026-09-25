@@ -26,7 +26,7 @@ def router_provider_connection_id(provider: str, source_id: object) -> str:
 
 
 def _evidence_from_status(
-    value: object, *, source: str, observed_at: str = "",
+    value: object, *, source: str, observed_at: str = "", present_is_positive: bool = True,
 ) -> Evidence:
     """Map explicit auth result markers; do not turn transport failure into no."""
     if isinstance(value, bool):
@@ -34,6 +34,8 @@ def _evidence_from_status(
     if not isinstance(value, str):
         return Evidence(source=source, observed_at=observed_at)
     status = value.strip().lower()
+    if status == "present" and not present_is_positive:
+        return Evidence(source=source, observed_at=observed_at)
     if status in {"yes", "present", "authenticated", "valid", "ok", "success", "200"}:
         return Evidence("yes", source, observed_at)
     if status in {"no", "missing", "absent", "logged-out", "unauthenticated"}:
@@ -144,6 +146,7 @@ def proxy_auth_account(
     session_status = payload.get("sessionStatus")
     session = _evidence_from_status(
         session_status, source="proxy-session-check", observed_at=observed_at,
+        present_is_positive=False,
     )
     service = _service_evidence(payload.get("service"), observed_at=observed_at)
     account = Account(
