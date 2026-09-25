@@ -927,3 +927,15 @@ estavam ativos. O mínimo de memória guest registrado é 4 GiB, sem margem no h
 QEMU foi iniciado e nenhum processo foi interrompido. Windows G2 permanece pendente; a ISO
 não é evidência de instalação/uso e requer verificação de origem/hash quando houver janela
 de host com recursos suficientes.
+
+PXA-006 timestamps por fonte (`fb796f5`, 2026-09-25): a tela antes carimbava todas
+as evidências com um único horário após o último probe. Agora cada callback de
+sucesso/falha registra horário local próprio; adaptadores preservam o horário
+de Claude, proxies, provedores 9Router e saúde do router separadamente. Contas
+mostra a resposta local mais recente; descrição acessível esclarece que isso não
+comprova sessão válida, acesso ou cota. `tests/test_account_contract.py`,
+`tests/test_auth_registry.py`, `tests/test_account_grants.py` e
+`tests/test_accounts_page.py`: 30 passaram em 11,38 s; os dois novos testes
+falharam antes da correção e passaram depois; `git diff --check` passou. `ruff`
+não está instalado. Prova hermética: nenhuma conta, API ou quota real consultada;
+nenhum `verified_at` inferido. PXA-006/G3 continua externo e aberto.
