@@ -275,11 +275,26 @@ def test_proxies_page_blocks_9router_dashboard_when_healthy(proxies_page):
     assert not any(button.text() == "Gerenciar providers" for button in page.findChildren(QPushButton))
 
 
+def test_proxies_page_blocks_odysseus_workspace_when_healthy(proxies_page):
+    page, _actions = proxies_page
+    page._proxy_status_ready("ai.odysseus-status", "", {
+        "installed": True, "configured": True, "healthy": True, "service": "active",
+    })
+    odysseus = page._gateway_rows["odysseus"]
+    assert odysseus["use"].text() == "Bloqueado"
+    assert not odysseus["use"].isEnabled()
+    assert "sem grant por requisição" in odysseus["use"].toolTip()
+    with patch.object(page, "run_action") as run_action:
+        odysseus["use"].click()
+        page._gateway_use("odysseus")
+    run_action.assert_not_called()
+
+
 def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_page):
     page, _actions = proxies_page
     page._proxy_status_ready("ai.auth-registry", "", {
         "summary": {
-            "total": 6, "ready": 3, "attention": 2,
+            "total": 7, "ready": 4, "attention": 2,
             "missingEssential": 0, "accounts": 12,
         },
         "entries": [
@@ -289,12 +304,15 @@ def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_
             {"id": "provider:codex", "label": "CODEX", "ready": False},
             {"id": "proxy:mimo-ai-proxy", "label": "Mimo Proxy", "ready": False},
             {"id": "workspace:hermes", "label": "Hermes", "ready": False},
+            {"id": "workspace:odysseus", "label": "Odysseus", "ready": True,
+             "usageBlocked": True, "blockedReason": "connection-grant-not-enforceable"},
         ],
         "secretsRedacted": True,
     })
     assert "12 contas catalogadas" in page.auth_summary.text()
     assert "CODEX" in page._auth_group_labels["providers"].text()
     assert "Mimo Proxy" in page._auth_group_labels["proxies"].text()
+    assert "uso bloqueado: Odysseus" in page._auth_group_labels["workspaces"].text()
     rendered = " ".join(label.text() for label in page._auth_group_labels.values())
     assert "@" not in rendered and "token" not in rendered.casefold()
 

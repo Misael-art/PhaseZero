@@ -230,8 +230,9 @@ Usage:
    pz ai routing refresh        Refresh quota (scheduler-safe, 5-10 min)
    pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
    pz ai odysseus status        Audit pinned Odysseus workspace deployment
-  pz ai odysseus install       Protected deploy; requires provenance and release gate
-  pz ai odysseus update        Protected update with allowlist and rollback
+  pz ai odysseus install       Blocked until workspace inference enforces per-request grants
+  pz ai odysseus open          Blocked until workspace inference enforces per-request grants
+  pz ai odysseus update        Blocked until workspace inference enforces per-request grants
   pz ai hermes status          Redacted Hermes readiness and authentication state
   pz ai hermes doctor          Read-only Hermes integrity and policy diagnostic
   pz ai hermes route           Force+self-heal Hermes through 9Router (apply|status|doctor|models|bai|model <id>|heal)

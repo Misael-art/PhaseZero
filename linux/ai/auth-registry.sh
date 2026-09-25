@@ -164,7 +164,8 @@ registry="$(jq -cn \
       installed:($d.installed == true),configured:($d.configured == true),authenticated:($d.routerCredential.configured == true),ready:($d.ready == true),
       status:(if $d.ready then "ready" elif $d.installed then "attention" else "blocked" end),method:"canonical-9router-reference",
       accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
-      nextAction:"linux/pz ai workspaces plan",secretsRedacted:true
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     }]) as $coreEntries |
   ([$coreEntries[] |
     if .id == "gateway:9router" then degrade($routerProbe)

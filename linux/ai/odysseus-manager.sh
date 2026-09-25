@@ -266,11 +266,11 @@ EOF
     pz_write_managed_file "$DASHBOARD_ENTRY" user <<EOF
 [Desktop Entry]
 Type=Application
-Name=Odysseus
-Comment=PhaseZero agnostic AI workspace
+Name=Odysseus (uso bloqueado)
+Comment=Bloqueado: inferência compartilhada do 9Router sem grant por requisição.
 Exec=$HOME/.local/share/phasezero/current/linux/pz ai odysseus open
 Icon=applications-science
-Terminal=false
+Terminal=true
 Categories=X-PhaseZero-WebApp;
 X-PHZ-Group=ia
 X-PhaseZero-MenuGroup=web.ai
@@ -498,6 +498,8 @@ wait_ready() {
 }
 
 provision() {
+    odysseus_usage_blocked
+    return 69
     require_workload_release_gate
     local expected expected_tree
     expected="$(remote_sha)"
@@ -584,6 +586,7 @@ status_json() {
         --argjson dependencyImagesLocked "$lock_valid" --argjson pathsSafe "$paths_safe" \
         --argjson routerCredentialReference "$router_credential" \
         '{schemaVersion:1,id:"odysseus",installed:$installed,configured:$configured,ready:$ready,
+          usageBlocked:true,blockedReason:"connection-grant-not-enforceable",
           service:$service,healthy:$healthy,endpoint:$endpoint,commit:$commit,releaseModel:"pinned-commit",
           podmanRootless:$podmanRootless,
           provenance:{manifestValid:$manifestValid,commitTrusted:$commitTrusted,trustedCommitsPath:$trustedCommits,
@@ -593,6 +596,13 @@ status_json() {
             trustedBuildBasesPath:$trustedBuildBases,semanticAudit:false},pathsSafe:$pathsSafe,envMode:$envMode,
           routerCredential:{source:"canonical-9router-env",configured:$routerCredentialReference,secretsRedacted:true},
           containers:$containers,manifestPath:$manifest,credentialsPath:$credentials,secretsRedacted:true}'
+}
+
+odysseus_usage_blocked() {
+    jq -nc '{schemaVersion:1,ok:false,status:"blocked",
+      blockedReason:"connection-grant-not-enforceable",
+      summary:"Uso Odysseus bloqueado: workspace encaminha inferência pela credencial compartilhada do 9Router.",
+      next:"Aguarde grant por requisição aplicado ao workspace e rejeição de fallback."}'
 }
 
 check_update() {
@@ -609,6 +619,8 @@ check_update() {
 }
 
 update_odysseus() {
+    odysseus_usage_blocked
+    return 69
     local before latest latest_tree
     before="$(current_sha)"; latest="$(remote_sha)"
     [ -n "$before" ] || { provision; return; }
@@ -777,6 +789,8 @@ require_runtime_provenance() {
 }
 
 open_ui() {
+    odysseus_usage_blocked
+    return 69
     curl -fsS --max-time 2 "$ENDPOINT" >/dev/null 2>&1 || {
         pz_error "Odysseus is not healthy; run: pz ai odysseus doctor"
         return 69
@@ -786,14 +800,12 @@ open_ui() {
 }
 
 case "$ACTION" in
-    install|setup|provision) provision ;;
+    install|setup|provision|update|upgrade|start|restart|open|dashboard)
+        odysseus_usage_blocked
+        exit 69 ;;
     status) status_json ;;
     check|check-update) check_update ;;
-    update|upgrade) require_workload_release_gate; update_odysseus ;;
-    start) require_workload_release_gate; require_runtime_provenance; systemctl --user enable --now "$SERVICE"; wait_ready 600 ;;
     stop) systemctl --user disable --now "$SERVICE" ;;
-    restart) require_workload_release_gate; require_runtime_provenance; systemctl --user restart "$SERVICE"; wait_ready 600 ;;
-    open|dashboard) open_ui ;;
     logs) "$COMPOSE_WRAPPER" logs --tail "${1:-150}" ;;
     backup) backup_data ;;
     doctor|health) doctor_odysseus ;;

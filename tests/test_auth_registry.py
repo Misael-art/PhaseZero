@@ -119,6 +119,9 @@ def test_auth_registry_v1_redaction_and_probe_failure_semantics(tmp_path):
     assert router["usageBlocked"] is True
     assert router["blockedReason"] == "connection-grant-not-enforceable"
     assert router["nextAction"] == "blocked:connection-grant-not-enforceable"
+    odysseus = next(entry for entry in registry["entries"] if entry["id"] == "workspace:odysseus")
+    assert odysseus["usageBlocked"] is True
+    assert odysseus["blockedReason"] == "connection-grant-not-enforceable"
     assert "Private person" not in result.stdout
     assert "Private profile" not in result.stdout
     assert "provider-record-1" not in result.stdout

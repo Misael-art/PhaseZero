@@ -871,7 +871,7 @@ def test_9router_configuration_dashboard_is_blocked_and_offline_resolves_read_on
         status_patcher.stop()
 
 
-def test_ready_odysseus_uses_registered_open_route(qapp):
+def test_ready_odysseus_blocks_unbound_workspace_open(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
         from linux.ui_native.product_inventory import instances_from_status_payload
@@ -886,14 +886,16 @@ def test_ready_odysseus_uses_registered_open_route(qapp):
         )[0]
         page._instances_ready(page._status_action_id, (instance,))
         assert instance.origin == "unknown"
-        assert page._primary_button.text() == "Abrir"
-        assert page._primary_action.id == "ai.odysseus-open"
-        assert "ai.odysseus-open" in _detail_action_ids(page)
+        assert page._primary_button.text() == "Uso bloqueado"
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
+        assert "ai.odysseus-open" not in _detail_action_ids(page)
+        assert "ai.odysseus-install" not in _detail_action_ids(page)
+        assert "ai.odysseus-update" not in _detail_action_ids(page)
+        assert "sem grant por requisição" in page._account_grant_notice.text()
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.odysseus-open"
-        assert start.call_args.kwargs["preview"] is False
+        start.assert_not_called()
     finally:
         window.close()
         host_patcher.stop()

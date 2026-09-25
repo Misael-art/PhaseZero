@@ -47,6 +47,7 @@ _ACCOUNT_GRANT_GATED_ACTIONS = frozenset({
     "ai.proxies-credentials-mimo", "ai.proxies-ides", "ai.proxies-test",
     "ai.proxies.restart-one", "ai.proxies.test-one",
     "ai.9router-dashboard", "ai.9router-combos", "ai.9router-secrets",
+    "ai.odysseus-install", "ai.odysseus-update", "ai.odysseus-open",
 })
 _PROXY_CONFIGURE_ACTION_BY_APP = {
     "app.kimiproxy": "ai.proxies-login-kimi",
@@ -439,12 +440,15 @@ class ProductRegistryPage(BasePage):
         self._context_action_id = context_action_id
         grant_gated_app = app_id in {
             "app.claude-code", "app.opencode", "app.9router", "app.kimiproxy", "app.qwen-proxy",
-            "app.deepseek-proxy", "app.mimo-proxy",
+            "app.deepseek-proxy", "app.mimo-proxy", "app.odysseus",
         }
         self._account_grant_notice.setText(
             "Dashboard 9Router bloqueado: testes de provider podem enviar inferência e consumir cota "
             "sem grant por requisição. O painel direto ainda fica fora do ledger PhaseZero."
             if app_id == "app.9router" else
+            "Uso Odysseus bloqueado: workspace encaminha inferência à credencial compartilhada do 9Router "
+            "sem grant por requisição. URL local direta ainda fica fora do ledger PhaseZero."
+            if app_id == "app.odysseus" else
             "Execução gerenciada bloqueada: a rota não vincula cada requisição à conexão aprovada. "
             "Login, status online ou grant registrado, isoladamente, não provam qual conta será usada."
         )
@@ -805,12 +809,15 @@ class ProductRegistryPage(BasePage):
                 state, action = "resolve", diagnostic
         labels = {"prepare": "Preparar", "configure": "Configurar",
                   "verify": "Verificar", "resolve": "Resolver", "open": "Abrir"}
-        dashboard_blocked = (
-            self._selected_app_id == "app.9router" and state in {"configure", "open"}
+        consumer_route_blocked = (
+            (
+                self._selected_app_id == "app.9router" and state in {"configure", "open"}
+                or self._selected_app_id == "app.odysseus" and state in {"prepare", "configure", "open"}
+            )
             and action is None
         )
         self._primary_button.setText(
-            "Uso bloqueado" if dashboard_blocked else labels.get(state, "Verificar")
+            "Uso bloqueado" if consumer_route_blocked else labels.get(state, "Verificar")
         )
         self._primary_action = action
         self._primary_desktop_entry = (
@@ -826,10 +833,15 @@ class ProductRegistryPage(BasePage):
         self._primary_button.setEnabled(enabled)
         if context_tooltip:
             self._primary_button.setToolTip(context_tooltip)
-        elif dashboard_blocked:
+        elif consumer_route_blocked and self._selected_app_id == "app.9router":
             self._primary_button.setToolTip(
                 "Dashboard bloqueado: testes do painel podem enviar inferência sem grant vinculado "
                 "à requisição e consumir cota."
+            )
+        elif consumer_route_blocked:
+            self._primary_button.setToolTip(
+                "Uso Odysseus bloqueado: workspace encaminha inferência pela credencial 9Router "
+                "sem grant por requisição."
             )
         elif state == "verify":
             self._primary_button.setToolTip("Confere status sem alterar instalação, conta ou serviço.")

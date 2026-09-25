@@ -2941,7 +2941,7 @@
     },
     {
       "name": "ai.odysseus-install",
-      "label": "Implantar Odysseus (protegido)",
+      "label": "Implantação Odysseus bloqueada",
       "command": "linux/pz ai odysseus install",
       "mutable": true,
       "require_plan": true,
@@ -2953,7 +2953,7 @@
     },
     {
       "name": "ai.odysseus-open",
-      "label": "Abrir Odysseus",
+      "label": "Uso Odysseus bloqueado",
       "command": "linux/pz ai odysseus open",
       "mutable": false,
       "require_plan": false,
@@ -2975,7 +2975,7 @@
     },
     {
       "name": "ai.odysseus-update",
-      "label": "Atualizar Odysseus",
+      "label": "Update Odysseus bloqueado",
       "command": "linux/pz ai odysseus update",
       "mutable": true,
       "require_plan": true,

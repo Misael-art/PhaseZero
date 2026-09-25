@@ -249,9 +249,9 @@ class AiProxiesPage(BasePage):
         ))
         layout.addWidget(self._gateway_card(
             "odysseus", "Odysseus",
-            "Workspace experimental. Deploy exige Podman rootless, proveniência e release gate.",
+            "Uso bloqueado: workspace encaminha inferência pela credencial 9Router sem grant por requisição.",
             "ai.workspaces-plan", "ai.odysseus-doctor", "ai.odysseus-open",
-            install_label="Ver plano", repair_label="Diagnosticar", open_label="Abrir",
+            install_label="Ver plano", repair_label="Diagnosticar", open_label="Bloqueado",
         ))
         diagnostic_row = QHBoxLayout()
         diagnostic_row.addStretch()
@@ -310,7 +310,7 @@ class AiProxiesPage(BasePage):
         buttons.addStretch()
         doctor = self._action_button("ai.auth-doctor", "Diagnosticar")
         dashboard_notice = QLabel(
-            "Dashboard 9Router bloqueado: testes de provider podem consumir cota sem grant por requisição."
+            "9Router e Odysseus bloqueados: dashboard/workspace podem enviar inferência sem grant por requisição."
         )
         dashboard_notice.setObjectName("accountGrantNotice")
         dashboard_notice.setWordWrap(True)
@@ -503,13 +503,16 @@ class AiProxiesPage(BasePage):
         if not state.healthy:
             self.run_action(str(refs.get("repair") or refs.get("install") or ""))
             return
-        if gateway_id == "9router":
+        if gateway_id in {"9router", "odysseus"}:
             detail = refs.get("detail")
             if isinstance(detail, QLabel):
-                detail.setText(
+                reason = (
                     "Dashboard bloqueado: testes de provider podem enviar inferência e consumir cota "
                     "sem grant por requisição."
+                    if gateway_id == "9router" else
+                    "Uso bloqueado: workspace encaminha inferência pela credencial 9Router sem grant por requisição."
                 )
+                detail.setText(reason)
             return
         self.run_action(str(refs.get("open") or ""))
 
@@ -654,11 +657,16 @@ class AiProxiesPage(BasePage):
                 continue
             group_ready = sum(1 for row in rows if row.get("ready") is True)
             pending = [str(row.get("label") or row.get("id")) for row in rows if row.get("ready") is not True]
-            suffix = ""
+            suffixes = []
             if pending:
                 visible = ", ".join(pending[:4])
                 remaining = len(pending) - 4
-                suffix = f" · revisar: {visible}" + (f" +{remaining}" if remaining > 0 else "")
+                suffixes.append(f"revisar: {visible}" + (f" +{remaining}" if remaining > 0 else ""))
+            blocked = [str(row.get("label") or row.get("id")) for row in rows
+                       if row.get("usageBlocked") is True]
+            if blocked:
+                suffixes.append("uso bloqueado: " + ", ".join(blocked[:4]))
+            suffix = " · " + " · ".join(suffixes) if suffixes else ""
             label.setText(f"{group_ready}/{len(rows)} prontas{suffix}")
 
     def _apply_gateway(self, state: GatewayState) -> None:
@@ -681,12 +689,16 @@ class AiProxiesPage(BasePage):
                 use.setText(str(refs.get("repair_label") or "Reparar"))
             else:
                 use.setText(str(refs.get("open_label") or "Abrir"))
-            dashboard_blocked = state.id == "9router" and state.installed and state.healthy
+            dashboard_blocked = state.id in {"9router", "odysseus"} and state.installed and state.healthy
             use.setEnabled(not dashboard_blocked)
-            use.setToolTip(
-                "Bloqueado: o dashboard pode enviar inferência sem grant por requisição."
-                if dashboard_blocked else ""
-            )
+            if dashboard_blocked:
+                use.setToolTip(
+                    "Bloqueado: o dashboard pode enviar inferência sem grant por requisição."
+                    if state.id == "9router" else
+                    "Bloqueado: o workspace encaminha inferência pela credencial 9Router sem grant por requisição."
+                )
+            else:
+                use.setToolTip("")
 
     def _apply_provenance(self, parsed: object) -> None:
         if not isinstance(parsed, dict):
