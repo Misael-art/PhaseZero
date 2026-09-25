@@ -964,3 +964,13 @@ sem timestamp de consentimento. `tests/test_account_grants.py` +
 `git diff --check` passou. Nenhuma inferência, conta, API ou quota real executada.
 Isso endurece validação local; não prova que 9Router vincule execução à conexão
 concedida nem elimina fallback. PXA-008 e G3 continuam `in_progress`.
+
+PXA-008 revisão upstream (2026-09-25): a [documentação de Smart Routing do
+9Router](https://github.com/decolua/9router/blob/master/gitbook/content/en/features/smart-routing.md)
+descreve fallback automático e controle estrito nas configurações gerais; não
+documenta pin por API key/consumidor. A [issue #1075](https://github.com/decolua/9router/issues/1075)
+continua fechada, mas seu corpo ainda descreve seleção de conta por API key como
+lacuna; metadata não mostra branch nem PR. A [issue #2429](https://github.com/decolua/9router/issues/2429)
+segue aberta para retry entre chaves da mesma origem. Decisão: manter execução
+gerenciada bloqueada; não alterar política compartilhada do 9Router como atalho
+de isolamento. Evidência documental; sem API/provider real.
