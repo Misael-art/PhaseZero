@@ -976,3 +976,12 @@ lacuna; metadata não mostra branch nem PR. A [issue #2429](https://github.com/d
 segue aberta para retry entre chaves da mesma origem. Decisão: manter execução
 gerenciada bloqueada; não alterar política compartilhada do 9Router como atalho
 de isolamento. Evidência documental; sem API/provider real.
+
+PXA-003 limite multi-host (2026-09-25): inspeção de `StatusLoader` confirma que
+`fetch_product_status` recusa `host_id != local` antes de iniciar `QProcess`.
+A bridge existente `pz server homelab --host <alias>` valida alias registrado,
+versão remota e envelope `{hostAlias, rc, payload, error}`, mas encaminha apenas
+`pz server homelab <args>` por `homelab-hosts.sh`; não executa `capabilities status`
+nem ações genéricas do catálogo. Não reutilizar a ponte como shell remoto. Nenhum
+SSH/host remoto foi acionado. PXA-003 continua `in_progress`; suporte remoto exige
+contrato allowlisted próprio e prova em host secundário descartável/autorizado.
