@@ -21,17 +21,19 @@ from typing import Any
 
 from .account_contract import Account, public_account
 from .secret_store import (
-    SecretServiceStore,
     SecretStoreUnavailable,
+    default_secret_store,
     new_secret_reference,
 )
 
 
 _ACCOUNT_ID = re.compile(r"credential:[0-9a-f]{32}\Z")
-_SECRET_REFERENCE = re.compile(r"secret-service:[0-9a-f]{48}\Z")
+_SECRET_REFERENCE = re.compile(r"(?:secret-service|wincred):[0-9a-f]{48}\Z")
 _SCHEMA_VERSION = 1
 _MAX_LABEL_LENGTH = 120
 _MAX_SECRET_BYTES = 64 * 1024
+_IS_WINDOWS = os.name == "nt"
+_WINDOWS_METADATA_PREFIX = b"PZCRED1\x00"
 
 
 class CredentialVaultError(RuntimeError):
@@ -127,9 +129,15 @@ class CredentialEntry:
 class CredentialVault:
     """Store API keys in the OS vault; keep only opaque references on disk."""
 
-    def __init__(self, path: Path, secret_store: Any | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        secret_store: Any | None = None,
+        metadata_protector: Any | None = None,
+    ) -> None:
         self.path = Path(path)
-        self.secret_store = secret_store if secret_store is not None else SecretServiceStore()
+        self.secret_store = secret_store if secret_store is not None else default_secret_store()
+        self._metadata_protector = metadata_protector
         self._lock = threading.RLock()
         self._entries: dict[str, CredentialEntry] = {}
         if self.path.exists():
@@ -144,7 +152,8 @@ class CredentialVault:
         provider = _label(provider, "provider")
         nickname = _label(nickname, "nickname")
         secret = _secret(secret)
-        reference = new_secret_reference()
+        new_reference = getattr(self.secret_store, "new_reference", None)
+        reference = new_reference() if callable(new_reference) else new_secret_reference()
         account = Account(
             account_id="credential:" + os.urandom(16).hex(),
             provider=provider,
@@ -244,18 +253,36 @@ class CredentialVault:
         try:
             fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             file_info = os.fstat(fd)
-            directory_info = self.path.parent.stat()
-            if (
-                not stat.S_ISREG(file_info.st_mode)
-                or file_info.st_uid != os.getuid()
-                or file_info.st_mode & 0o077
-                or directory_info.st_uid != os.getuid()
-                or directory_info.st_mode & 0o077
-            ):
-                raise CredentialVaultError("credential registry permissions are unsafe")
-            with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            if _IS_WINDOWS:
+                reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                path_info = self.path.lstat()
+                directory_info = self.path.parent.lstat()
+                if (
+                    not stat.S_ISREG(file_info.st_mode)
+                    or not stat.S_ISREG(path_info.st_mode)
+                    or getattr(file_info, "st_file_attributes", 0) & reparse
+                    or getattr(path_info, "st_file_attributes", 0) & reparse
+                    or (file_info.st_dev, file_info.st_ino) != (path_info.st_dev, path_info.st_ino)
+                    or not stat.S_ISDIR(directory_info.st_mode)
+                    or getattr(directory_info, "st_file_attributes", 0) & reparse
+                ):
+                    raise CredentialVaultError("credential registry path is unsafe")
+            else:
+                directory_info = self.path.parent.stat()
+                if (
+                    not stat.S_ISREG(file_info.st_mode)
+                    or file_info.st_uid != os.getuid()
+                    or file_info.st_mode & 0o077
+                    or directory_info.st_uid != os.getuid()
+                    or directory_info.st_mode & 0o077
+                ):
+                    raise CredentialVaultError("credential registry permissions are unsafe")
+            with os.fdopen(fd, "rb") as stream:
                 fd = None
-                raw = json.load(stream)
+                payload = stream.read()
+            if _IS_WINDOWS:
+                payload = self._unprotect_metadata(payload)
+            raw = json.loads(payload.decode("utf-8"))
         except CredentialVaultError:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -295,7 +322,10 @@ class CredentialVault:
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
+        if _IS_WINDOWS:
+            self._assert_windows_registry_path()
+        else:
+            os.chmod(self.path.parent, 0o700)
         payload = {
             "schemaVersion": _SCHEMA_VERSION,
             "credentials": [
@@ -310,14 +340,71 @@ class CredentialVault:
                 for entry in self.entries
             ],
         }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        if _IS_WINDOWS:
+            encoded = self._protect_metadata(encoded)
         fd, temp_name = tempfile.mkstemp(prefix=".credentials-", dir=self.path.parent)
         try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, sort_keys=True)
+            if not _IS_WINDOWS:
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp_name, self.path)
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
+
+    def _get_metadata_protector(self) -> Any:
+        if self._metadata_protector is not None:
+            return self._metadata_protector
+        try:
+            from .windows_credential_store import WindowsMetadataProtector
+
+            self._metadata_protector = WindowsMetadataProtector()
+            return self._metadata_protector
+        except Exception:
+            raise CredentialVaultError("Windows metadata protection is unavailable") from None
+
+    def _protect_metadata(self, payload: bytes) -> bytes:
+        try:
+            return _WINDOWS_METADATA_PREFIX + self._get_metadata_protector().protect(payload)
+        except CredentialVaultError:
+            raise
+        except Exception:
+            raise CredentialVaultError("could not protect credential registry") from None
+
+    def _unprotect_metadata(self, payload: bytes) -> bytes:
+        if not payload.startswith(_WINDOWS_METADATA_PREFIX):
+            raise CredentialVaultError("credential registry is not DPAPI protected")
+        try:
+            return self._get_metadata_protector().unprotect(payload[len(_WINDOWS_METADATA_PREFIX):])
+        except CredentialVaultError:
+            raise
+        except Exception:
+            raise CredentialVaultError("could not read protected credential registry") from None
+
+    def _assert_windows_registry_path(self) -> None:
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        try:
+            parent_info = self.path.parent.lstat()
+            if (
+                not stat.S_ISDIR(parent_info.st_mode)
+                or getattr(parent_info, "st_file_attributes", 0) & reparse
+            ):
+                raise CredentialVaultError("credential registry path is unsafe")
+            try:
+                file_info = self.path.lstat()
+            except FileNotFoundError:
+                file_info = None
+            if file_info is not None:
+                if (
+                    not stat.S_ISREG(file_info.st_mode)
+                    or getattr(file_info, "st_file_attributes", 0) & reparse
+                ):
+                    raise CredentialVaultError("credential registry path is unsafe")
+        except CredentialVaultError:
+            raise
+        except OSError:
+            raise CredentialVaultError("credential registry path is unavailable") from None

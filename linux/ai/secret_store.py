@@ -7,6 +7,7 @@ references, logs, or PhaseZero-managed files.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from typing import Any
@@ -18,6 +19,7 @@ _SCHEMA_NAME = "org.phasezero.AccountCredential"
 _ATTRIBUTE_NAME = "reference"
 _ITEM_LABEL = "PhaseZero account credential"
 _MAX_SECRET_BYTES = 64 * 1024
+_IS_WINDOWS = os.name == "nt"
 
 
 class SecretStoreUnavailable(RuntimeError):
@@ -56,6 +58,18 @@ def _validate_secret(secret: object) -> str:
     if size > _MAX_SECRET_BYTES:
         raise ValueError("credential exceeds secure-store limit")
     return secret
+
+
+def default_secret_store() -> Any:
+    """Return the native per-user store for the current operating system.
+
+    Backend absence fails closed. Never substitute an unprotected file store.
+    """
+    if _IS_WINDOWS:
+        from .windows_credential_store import WindowsCredentialManagerStore
+
+        return WindowsCredentialManagerStore()
+    return SecretServiceStore()
 
 
 class SecretServiceStore:

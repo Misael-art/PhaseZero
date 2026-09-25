@@ -233,8 +233,23 @@ def _grant_ledger_path() -> Path:
     return data_home / "phasezero" / "ai-accounts" / "grants.json"
 
 
-def _credential_vault_path() -> Path:
-    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+def _credential_vault_path(
+    *,
+    platform: str | None = None,
+    local_app_data: str | None = None,
+    xdg_data_home: str | None = None,
+) -> Path:
+    current_platform = os.name if platform is None else platform
+    if current_platform == "nt":
+        app_data = local_app_data if local_app_data is not None else os.environ.get("LOCALAPPDATA", "")
+        if not app_data:
+            raise OSError("Windows local application data path is unavailable")
+        return Path(app_data) / "PhaseZero" / "ai-accounts" / "credentials.dpapi"
+    data_home = Path(
+        xdg_data_home
+        if xdg_data_home is not None
+        else os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    )
     return data_home / "phasezero" / "ai-accounts" / "credentials.json"
 
 

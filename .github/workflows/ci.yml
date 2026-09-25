@@ -499,3 +499,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module Pester -RequiredVersion 3.4.0
           Invoke-Pester -Path .\tests -EnableExit
+
+      - name: Setup Python for Windows credential-store fixtures
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Run hermetic Windows credential-store fixtures
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest tests/test_windows_credential_store.py tests/test_credential_vault.py -k windows -q

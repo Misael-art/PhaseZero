@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from linux.ai import credential_vault as credential_vault_module
 from linux.ai.credential_vault import CredentialVault, CredentialVaultError
 from linux.ai.secret_store import SecretStoreUnavailable
 
@@ -24,6 +25,19 @@ class MemorySecretStore:
         if self.fail_delete is not None:
             raise self.fail_delete
         return self.items.pop(reference, None) is not None
+
+
+class WindowsReferenceMemoryStore(MemorySecretStore):
+    def new_reference(self):
+        return "wincred:" + ("a1" * 24)
+
+
+class FakeMetadataProtector:
+    def protect(self, payload):
+        return bytes(byte ^ 0xA5 for byte in payload)
+
+    def unprotect(self, payload):
+        return bytes(byte ^ 0xA5 for byte in payload)
 
 
 def test_vault_stores_secret_only_in_secure_store_and_private_metadata(tmp_path):
@@ -49,6 +63,46 @@ def test_vault_stores_secret_only_in_secure_store_and_private_metadata(tmp_path)
 
     reopened = CredentialVault(path, secure_store)
     assert reopened.entries == (entry,)
+
+
+def test_windows_store_reference_round_trips_through_vault(tmp_path):
+    secure_store = WindowsReferenceMemoryStore()
+    protector = FakeMetadataProtector()
+    path = tmp_path / "credentials.json"
+    vault = CredentialVault(path, secure_store, metadata_protector=protector)
+
+    entry = vault.add("Provider", "Conta", "credential-value")
+    reopened = CredentialVault(path, secure_store, metadata_protector=protector)
+
+    assert entry.secret_ref.startswith("wincred:")
+    assert reopened.entries == (entry,)
+    assert secure_store.items == {entry.secret_ref: "credential-value"}
+
+
+def test_windows_registry_metadata_is_dpapi_enveloped_and_reopens(tmp_path, monkeypatch):
+    monkeypatch.setattr(credential_vault_module, "_IS_WINDOWS", True)
+    protector = FakeMetadataProtector()
+    secure_store = MemorySecretStore()
+    path = tmp_path / "PhaseZero" / "ai-accounts" / "credentials.dpapi"
+    vault = CredentialVault(path, secure_store, metadata_protector=protector)
+
+    entry = vault.add("Provider", "Private nickname", "secret-outside-registry")
+    raw = path.read_bytes()
+
+    assert raw.startswith(credential_vault_module._WINDOWS_METADATA_PREFIX)
+    assert b"Private nickname" not in raw
+    assert b"secret-outside-registry" not in raw
+    reopened = CredentialVault(path, secure_store, metadata_protector=protector)
+    assert reopened.entries == (entry,)
+
+
+def test_windows_registry_rejects_unprotected_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(credential_vault_module, "_IS_WINDOWS", True)
+    path = tmp_path / "credentials.dpapi"
+    path.write_text('{"schemaVersion":1,"credentials":[]}', encoding="utf-8")
+
+    with pytest.raises(CredentialVaultError, match="not DPAPI protected"):
+        CredentialVault(path, MemorySecretStore(), metadata_protector=FakeMetadataProtector())
 
 
 def test_failed_backend_store_clears_reserved_metadata(tmp_path):

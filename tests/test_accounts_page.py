@@ -23,7 +23,7 @@ from linux.ai.credential_vault import CredentialVault
 from linux.ai.grants import GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
 from linux.ai.secret_store import SecretStoreUnavailable
 from linux.ui_native.pages.accounts import (
-    AccountChannelsDialog, AccountsPage, AddApiCredentialDialog,
+    AccountChannelsDialog, AccountsPage, AddApiCredentialDialog, _credential_vault_path,
 )
 
 
@@ -40,6 +40,20 @@ def _window(qapp):
     # Start on the accounts page. The default dashboard runs a real system
     # health probe during construction, which would break hermetic UI tests.
     return MainWindow(ROOT, initial_category="Contas e conexões"), host_patcher
+
+
+def test_credential_vault_path_uses_dpapi_location_on_windows():
+    path = _credential_vault_path(
+        platform="nt", local_app_data=r"C:\Users\User\AppData\Local",
+    )
+    assert str(path).replace("\\", "/") == (
+        "C:/Users/User/AppData/Local/PhaseZero/ai-accounts/credentials.dpapi"
+    )
+
+
+def test_credential_vault_path_fails_closed_without_windows_profile():
+    with pytest.raises(OSError, match="local application data"):
+        _credential_vault_path(platform="nt", local_app_data="")
 
 
 @pytest.fixture(autouse=True)
