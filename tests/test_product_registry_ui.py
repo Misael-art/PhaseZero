@@ -300,6 +300,36 @@ def test_resolve_uses_read_only_diagnostic_and_never_starts_external_proxy(qapp)
         status_patcher.stop()
 
 
+@pytest.mark.parametrize(
+    ("app_id", "diagnostic_id"),
+    (("app.claude-code", "ai.claude-verify"), ("app.codexbar", "ai.codexbar-health")),
+)
+def test_resolve_exposes_read_only_verify_and_health_diagnostics_for_external_apps(
+    qapp, app_id, diagnostic_id,
+):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product(app_id)
+        page._instances_ready(page._status_action_id, (ProductInstance(
+            f"external:local:{app_id}", app_id, "local", "local",
+            manager="external", installation="present", origin="external",
+            configuration="ready", health="failed",
+        ),))
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == diagnostic_id
+        assert not page._primary_action.mutable
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == diagnostic_id
+        assert start.call_args.kwargs["preview"] is False
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_hermes_detail_uses_local_status_and_read_only_recovery(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
@@ -566,8 +596,14 @@ def test_offline_managed_opencode_uses_configure_recovery_but_external_is_untouc
             "external:local:app.opencode", "app.opencode", "local", "local",
             installation="present", origin="external", configuration="ready", health="offline",
         ),))
-        assert page._primary_action is None
-        assert not page._primary_button.isEnabled()
+        assert page._primary_button.text() == "Resolver"
+        assert page._primary_action.id == "ai.opencode-verify"
+        assert not page._primary_action.mutable
+        with patch.object(window.runner, "start") as start:
+            page._primary_button.click()
+        start.assert_called_once()
+        assert start.call_args.args[0].id == "ai.opencode-verify"
+        assert start.call_args.kwargs["preview"] is False
     finally:
         window.close()
         host_patcher.stop()

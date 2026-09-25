@@ -636,7 +636,7 @@ class ProductRegistryPage(BasePage):
             # repair/start actions require an app-specific, ownership-checked
             # recovery route above; matching command arguments here can start
             # an unrelated managed service for an externally observed app.
-            "resolve": {"doctor"},
+            "resolve": {"doctor", "health", "verify"},
             "open": {"open", "launch", "dashboard"},
         }.get(state, set())
         if state == "resolve":

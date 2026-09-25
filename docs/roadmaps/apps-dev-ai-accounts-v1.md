@@ -383,6 +383,15 @@ Backend ausente ou timeout fica unknown; HTTP 5xx fica failed; origem nunca é i
 `test_open_webui_manager.py`, detalhe UI público e inventário: 17 passaram. Wrappers
 falsos para Docker/curl/xdg-open; nenhum Docker, browser, pacote ou serviço do host chamado.
 
+PXA-003 recuperação somente leitura: CTA Resolver agora aceita diagnósticos `doctor`,
+`health` e `verify` apenas quando ação é não mutável. Claude Code externo abre
+`ai.claude-verify`, CodexBar externo abre `ai.codexbar-health`, OpenCode externo usa
+`ai.opencode-verify`; testes confirmam nenhuma instalação ou reparo automático. Qwen
+externo sem diagnóstico próprio continua bloqueado para mutação. `test_product_registry_ui.py`,
+`test_product_inventory.py`, `test_product_status_loader.py`, `test_native_navigation.py`:
+56 passaram. Nenhum serviço, login ou conta real usado; recuperação mutável segue exigindo
+proveniência verificada.
+
 PXA-003 atalhos: `test_every_app_action_resolves_to_canonical_detail_with_source_context`
 passa para todos os 175 actions app-target do catálogo, cobrindo os 103 produtos; cada
 despacho encaminha o mesmo `appId` e preserva `actionId` de origem. Com inventário, 12 testes
