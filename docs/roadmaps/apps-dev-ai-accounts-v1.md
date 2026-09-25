@@ -717,6 +717,15 @@ foram preservados e não contam como prova de falha de pacote. Esse resultado
 fecha a prova limpa Arch de lifecycle + falta de pacote; G2 ainda aguarda
 Windows descartável e outras falhas/cancelamento previstas.
 
+PXA-004 idempotência real no mesmo snapshot Arch: overlay limpo separado executou
+apply de `development-web-js` duas vezes sem remover entre elas. Primeiro apply
+marcou Node.js e pnpm `installed`; segundo marcou ambos `preexisting`, exit 0.
+As versões antes/depois ficaram iguais (`nodejs 26.8.1-2`, `pnpm 11.3.0-1`),
+e `/var/log/pacman.log` manteve exatamente um registro ALPM `installed` para
+cada pacote. `verify` e ambos executáveis passaram nas duas etapas. Evidência:
+`~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-idempotent/idempotent-events.jsonl`.
+Nenhum pacote ou serviço do host foi alterado.
+
 PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
 vazias e validar `observed_at`/`reset_at` como timestamps ISO com fuso; `2dbb1eb`
 rejeita também booleano, texto, `NaN` e infinito nos valores numéricos. Teste novo
