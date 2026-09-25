@@ -1312,3 +1312,23 @@ tests/test_routing_manager.py — 111 passaram em 52,37 s; py_compile e
 git diff --check passaram. CI contém fixtures em runner Windows. Limites: este host
 Linux não executou WinCred nem DPAPI reais; PXA-008 não está fechado. PXA-006/G3 segue
 gate externo, sem sessão/cota observada de conta real.
+
+
+PXA-005 falha parcial na jornada pública — commit b1ebada, 2026-09-25: fixture
+reproduziu operação capability com exit 0 e status failed, depois de Node.js concluir
+e pnpm falhar. OperationResult.ok tratava ausência do campo ok como sucesso; isso
+pintava o fluxo como concluído e permitia avanço da fila. is_failure_report agora
+alinha OperationResult.ok à severidade estruturada. A jornada por botões públicos
+mostra “Falhou” e “incompleta”, exige novo preview/token e permite retry, validação e
+abertura canônica. Regressão: os sete arquivos de UI/resultados listados no commit,
+78 testes passaram; py_compile e git diff --check passaram; E2E final passou isolado.
+Resultado parcial veio de fixture; testes de engine já cobrem interrupção real via
+FakeProvider. Nenhum package manager ou serviço real chamado. Isso prova este caminho
+G1, não conclui PXA-005 nem G2.
+
+PXA-003/PXA-008 evidência upstream — 2026-09-25: o PR oficial 9Router
+[#1332](https://github.com/decolua/9router/pull/1332), que propõe escopo de conexões
+de provider por API key e filtragem no seletor de credenciais, continua aberto. Não
+tratar proposta como recurso lançado nem habilitar consumidores via 9Router até
+versão suportada e teste de request provarem vínculo exato e ausência de fallback.
+Gate PhaseZero permanece fail-closed; execução por consumidor segue pendente.
