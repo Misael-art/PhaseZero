@@ -451,6 +451,26 @@ def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(r
     assert "50%" not in page._task_cards["code"]["quota"].text()
 
 
+def test_routing_quota_poll_is_visible_read_only_and_never_calls_recommendation(routing_page, monkeypatch):
+    page, _actions = routing_page
+    calls = []
+    monkeypatch.setattr(page.status_loader, "fetch_action", lambda action: calls.append(action.id))
+    monkeypatch.setattr(page.status_loader, "running", lambda _action_id: False)
+    monkeypatch.setattr(page, "_fetch_recommendations", lambda: calls.append("recommendation"))
+
+    page.show()
+    page.reload()
+    assert page._quota_poll.isActive()
+    calls.clear()
+    page._poll_quota_inventory()
+    assert calls == ["ai.routing-inventory"]
+    action = page.by_id["ai.routing-inventory"]
+    assert "--refresh-quota" in action.args
+    assert "inference" not in " ".join(action.args).lower()
+    page.hide()
+    assert not page._quota_poll.isActive()
+
+
 def test_routing_dynamic_failure_never_stays_verifying(routing_page):
     page, _actions = routing_page
     page._routing_status_failed("routing.dynamic.analysis.quality", "timeout")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QPushButton, QScrollArea, QStyle,
@@ -41,6 +41,7 @@ POLICY_REASONS = {
     "privacy": "Prefere rotas locais e reduz exposição a provedores externos.",
 }
 
+QUOTA_POLL_MS = 60_000
 _CLEAR = "—"
 
 
@@ -78,6 +79,9 @@ class AiRoutingPage(BasePage):
         self._status_value: QLabel | None = None
         self._quota_label: QLabel | None = None
         self._quota_details: QLabel | None = None
+        self._quota_poll = QTimer(self)
+        self._quota_poll.setInterval(QUOTA_POLL_MS)
+        self._quota_poll.timeout.connect(self._poll_quota_inventory)
         self._task_cards: dict[str, dict] = {}
         self._recommendations: dict[str, list[dict]] = {}
         self._policy_combo: QComboBox | None = None
@@ -157,6 +161,13 @@ class AiRoutingPage(BasePage):
         self._quota_details.setObjectName("cardDescription")
         self._quota_details.setWordWrap(True)
         layout.addWidget(self._quota_details)
+        polling_note = QLabel(
+            "Cotas atualizam a cada minuto enquanto esta página fica aberta. "
+            "Consulta endpoints GET do 9Router; nenhuma inferência é iniciada."
+        )
+        polling_note.setObjectName("cardDescription")
+        polling_note.setWordWrap(True)
+        layout.addWidget(polling_note)
 
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
@@ -293,11 +304,23 @@ class AiRoutingPage(BasePage):
     # ------------------------------------------------------------- fetching
     def reload(self) -> None:
         super().reload()
+        self._quota_poll.start()
         for aid in ("ai.routing-status", "ai.routing-inventory"):
             action = self.by_id.get(aid) if self.by_id else None
             if action and not self.status_loader.running(action.id):
                 self.status_loader.fetch_action(action)
         self._fetch_recommendations()
+
+    def _poll_quota_inventory(self) -> None:
+        if not self.isVisible() or not self.isEnabled():
+            return
+        action = self.by_id.get("ai.routing-inventory") if self.by_id else None
+        if action is not None and not self.status_loader.running(action.id):
+            self.status_loader.fetch_action(action)
+
+    def hideEvent(self, event) -> None:
+        self._quota_poll.stop()
+        super().hideEvent(event)
 
     def _fetch_recommendations(self) -> None:
         for task, _label, _aid in TASKS:
