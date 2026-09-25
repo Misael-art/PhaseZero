@@ -645,8 +645,9 @@ comando exato e a fixture Compose/Kind que preserva Docker compartilhado. Limite
 foi verificada hermeticamente; repetir instalação→remoção e dependência compartilhada numa
 VM/snapshot permanece necessário antes de aceitar o comportamento G2.
 
-Repetição de remoção Arch em 2026-09-25 no mesmo guest live efêmero, já com a
-correção `pacman -Rs`: `development-web-js` instalou Node.js `26.8.1-2` e pnpm
+Commit `ceb245d` altera remoção Arch para `pacman -Rs --noconfirm`; `tests/test_capabilities.py`
+teve 55 aprovações, incluindo o comando exato. Repetição de remoção Arch em 2026-09-25
+no mesmo guest live efêmero: `development-web-js` instalou Node.js `26.8.1-2` e pnpm
 `11.3.0-1` pelo apply PhaseZero. Remoção PhaseZero de `development.pnpm` concluiu
 com exit code 0; a saída de pacman removeu pnpm, `node-gyp`, `nodejs-nopt` e
 `semver`, enquanto `node --version` continuou retornando `v26.8.1`. Isso observa a
