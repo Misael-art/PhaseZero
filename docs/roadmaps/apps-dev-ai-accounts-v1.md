@@ -659,3 +659,12 @@ o ID e o plano ficou bloqueado por capacidade desconhecida. Não há evidência 
 de `verify-removal`, reativação ou remoção PhaseZero de Node.js; não elevar a G2.
 Guest foi encerrado e `/tmp/pxa-g2-rs-arch-20260925` (4,9 GiB) removido após
 confirmar ausência de processo QEMU e de arquivos root-owned nesse diretório.
+
+PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
+vazias, validar `observed_at` e `reset_at` como timestamps ISO com fuso e rejeitar
+valores malformados. Teste novo cobre válidos, vazios, inválidos e sem fuso.
+Regressão `tests/test_account_contract.py`, `tests/test_auth_registry.py`,
+`tests/test_account_grants.py`, `tests/test_accounts_page.py`,
+`tests/test_routing_manager.py` e `tests/test_ai_session_ui.py`: 93 passaram;
+`git diff --check` passou. PXA-006 segue `in_progress`: nenhuma sessão/cota real
+foi observada; fixtures não fecham G3.
