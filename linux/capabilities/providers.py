@@ -117,9 +117,10 @@ class Provider:
 
         Debian uses APT's simulation summary; Arch asks pacman to print the
         resolved sync targets and reads each target's repository installed
-        size; Fedora uses a cache-only DNF simulation. These use existing local
-        package indexes. Missing or unparseable results fall back to direct-
-        package lower bounds in the planner.
+        size; Fedora uses a cache-only DNF simulation; SUSE uses a no-refresh
+        Zypper dry run. These use existing local package indexes. Missing or
+        unparseable results fall back to direct-package lower bounds in the
+        planner.
         """
         if not sources or any(source.kind != "package" for source in sources):
             return None
@@ -128,6 +129,8 @@ class Provider:
             return self._estimate_pacman_transaction_space(names)
         if self.facts.package_family == "fedora":
             return self._estimate_dnf_transaction_space(names)
+        if self.facts.package_family == "suse":
+            return self._estimate_zypper_transaction_space(names)
         if self.facts.package_family != "debian":
             return None
         command = [
@@ -197,6 +200,50 @@ class Provider:
         unit = (raw_unit or "B").casefold()
         short_units = {"k": "kib", "m": "mib", "g": "gib", "t": "tib"}
         return cls._size_bytes(number + " " + short_units.get(unit, unit))
+
+    def _estimate_zypper_transaction_space(self, names: list[str]) -> dict | None:
+        command = [
+            self.facts.package_manager or "zypper", "--no-refresh", "--non-interactive",
+            "install", "--dry-run", "--", *names,
+        ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=60, check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        return self.parse_zypper_transaction_space(output)
+
+    @classmethod
+    def parse_zypper_transaction_space(cls, output: str) -> dict | None:
+        """Parse Zypper's complete dry-run totals; reject package removals."""
+        if re.search(
+            r"(?im)^\s*The following .*\b(?:are|is) going to be (?:REMOVED|uninstalled)\b",
+            output,
+        ):
+            return None
+        size_pattern = r"([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMGT]?i?B)"
+        download = re.search(
+            rf"(?im)^\s*Overall download size:\s*{size_pattern}(?:\.|\s|$)", output,
+        )
+        installed = re.search(
+            rf"(?im)After the operation,\s*additional\s+{size_pattern}\s+will be used\.",
+            output,
+        )
+        download_bytes = cls._size_bytes(download.group(1).replace(",", "")) if download else None
+        installed_bytes = cls._size_bytes(installed.group(1).replace(",", "")) if installed else None
+        if download_bytes is None or installed_bytes is None:
+            return None
+        return {
+            "downloadBytes": download_bytes,
+            "installedBytes": installed_bytes,
+            "estimateSource": "zypper-transaction-dry-run",
+            "estimateCompleteness": "resolved-local-package-indexes",
+        }
 
     def _estimate_pacman_transaction_space(self, names: list[str]) -> dict | None:
         command = [

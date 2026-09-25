@@ -432,6 +432,57 @@ def test_dnf_transaction_estimate_rejects_partial_nonzero_output(monkeypatch):
     assert provider.estimate_transaction_space([SourceSpec("package", "nodejs")]) is None
 
 
+def test_zypper_transaction_parser_handles_summary_and_rejects_removals():
+    output = """The following 2 NEW packages are going to be installed:
+  libfoo foo
+2 new packages to install.
+Overall download size: 42.6 MiB. Already cached: 0 B. After the operation, additional 179.7 MiB will be used.
+"""
+    assert Provider.parse_zypper_transaction_space(output) == {
+        "downloadBytes": int(42.6 * 1024**2),
+        "installedBytes": int(179.7 * 1024**2),
+        "estimateSource": "zypper-transaction-dry-run",
+        "estimateCompleteness": "resolved-local-package-indexes",
+    }
+    assert Provider.parse_zypper_transaction_space(
+        output + "The following package is going to be REMOVED:\n old-lib\n"
+    ) is None
+    assert Provider.parse_zypper_transaction_space(
+        "Overall download size: 42.6 MiB.\n"
+    ) is None
+
+
+def test_zypper_transaction_estimate_uses_no_refresh_dry_run(monkeypatch):
+    facts = host(distro="opensuse-tumbleweed", package_family="suse", package_manager="zypper")
+    provider = Provider(facts)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "Overall download size: 10 MiB. Already cached: 0 B. "
+                "After the operation, additional 25 MiB will be used.\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("linux.capabilities.providers.subprocess.run", fake_run)
+    result = provider.estimate_transaction_space([
+        SourceSpec("package", "nodejs"), SourceSpec("package", "pnpm"),
+        SourceSpec("package", "nodejs"),
+    ])
+    assert result["downloadBytes"] == 10 * 1024**2
+    command, kwargs = calls[0]
+    assert command == [
+        "zypper", "--no-refresh", "--non-interactive", "install", "--dry-run", "--",
+        "nodejs", "pnpm",
+    ]
+    assert kwargs["env"]["LC_ALL"] == "C"
+    assert kwargs["timeout"] <= 60
+
+
 def test_pacman_transaction_includes_resolved_targets_and_installed_sizes(monkeypatch):
     provider = Provider(host())
     calls = []
