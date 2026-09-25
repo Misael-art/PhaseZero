@@ -854,8 +854,9 @@ horário/reset sem fuso e exibe reset válido. As suítes permanecem 76 aprovada
 PXA-009/G3 segue pendente de semântica e cota observadas em conta real.
 
 PXA-005 jornada pública G1 (2026-09-25): novo `tests/test_development_journey_e2e.py`
-usa a página Desenvolvimento, diálogos reais de plano/resultado, `CommandRunner` e
-QProcess real; somente o provider de pacote é fixture em HOME/XDG temporários. Prova
+usa a página Desenvolvimento, `PreviewDialog` e `ResultDialog` em execução modal real,
+botões públicos acionados por QTimer, `CommandRunner` e QProcess real; somente o provider
+de pacote é fixture em HOME/XDG temporários. Prova
 ordem Revisar plano → Confirmar e aplicar → Validar ambiente → Abrir ferramenta,
 vincula `plan_id`/`confirmToken` retornados pelo preview, envia `--cancel-file`, valida
 Node.js/pnpm e navega ao detalhe canônico `app.nodejs` sem editor. Provider não invoca
@@ -865,7 +866,10 @@ contrato. A regressão então revelou `test_development_cancel.py` ainda esperav
 process group, comportamento substituído por cancelamento cooperativo. Fixture agora
 recebe o arquivo privado de cancelamento, deixa etapa corrente terminar, confirma
 resultado 130 e ledger retomável; `tests/test_capabilities.py` prova que próxima etapa
-não iniciou e retry não repete pacote já concluído. `test_capabilities.py`: 55 passaram;
-`test_cancel_safety.py`, `test_development_page.py`, `test_development_cancel.py`,
-`test_development_journey_e2e.py`, `test_native_navigation.py`: 27 passaram; total 82.
+não iniciou e retry não repete pacote já concluído. Uma execução combinada encontrou
+exit 0 no fake apesar do cancelamento observado; fixture agora confirma existência do
+request file no clique e mantém etapa simulada ativa por 2 s. Regressão após ajuste:
+`test_cancel_safety.py`, `test_development_page.py`, `test_development_cancel.py` e
+`test_development_journey_e2e.py`: 15 passaram; `test_native_navigation.py`: 12;
+`test_capabilities.py`: 55. Total 82, em três comandos que terminaram com exit 0.
 G1 hermético; pacote real, runtime do SO limpo e G2 Arch/Windows continuam pendentes.

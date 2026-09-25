@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,28 +69,39 @@ def test_development_public_journey_reviews_applies_validates_and_opens(
     window = MainWindow(ROOT)
     results = []
     dialogs_seen = []
+    dialog_errors = []
     window.runner.completed.connect(results.append)
-    page = None
+    modal_driver = QTimer(window)
 
-    def confirm_public_preview(dialog) -> int:
-        assert isinstance(dialog, PreviewDialog)
-        assert dialog.confirm.isEnabled()
-        assert any(label.text() == "Plano isolado pronto." for label in dialog.findChildren(QLabel))
-        dialogs_seen.append("preview")
-        dialog.confirm.click()
-        assert dialog.result() == QDialog.Accepted
-        return dialog.result()
+    def click_modal_controls() -> None:
+        dialog = qapp.activeModalWidget()
+        if isinstance(dialog, PreviewDialog):
+            if "preview" not in dialogs_seen:
+                dialogs_seen.append("preview")
+                if not dialog.confirm.isEnabled() or not any(
+                    label.text() == "Plano isolado pronto." for label in dialog.findChildren(QLabel)
+                ):
+                    dialog_errors.append("preview não exibiu plano confirmável")
+                    dialog.reject()
+                    return
+            dialog.confirm.click()
+        elif isinstance(dialog, ResultDialog):
+            close = next(
+                (button for button in dialog.findChildren(QPushButton) if button.text() == "Fechar"),
+                None,
+            )
+            if close is None:
+                dialog_errors.append("resultado sem botão Fechar")
+                dialog.reject()
+            else:
+                dialogs_seen.append("result")
+                close.click()
+        elif isinstance(dialog, QMessageBox):
+            dialog_errors.append(dialog.text())
+            dialog.accept()
 
-    def close_public_result(dialog) -> int:
-        assert isinstance(dialog, ResultDialog)
-        close = next(button for button in dialog.findChildren(QPushButton) if button.text() == "Fechar")
-        dialogs_seen.append("result")
-        close.click()
-        assert dialog.result() == QDialog.Accepted
-        return dialog.result()
-
-    monkeypatch.setattr(PreviewDialog, "exec", confirm_public_preview)
-    monkeypatch.setattr(ResultDialog, "exec", close_public_result)
+    modal_driver.timeout.connect(click_modal_controls)
+    modal_driver.start(10)
 
     def wait_for_results(count: int) -> None:
         if len(results) >= count:
@@ -130,6 +141,8 @@ def test_development_public_journey_reviews_applies_validates_and_opens(
         assert window.stack.currentWidget() is window.registry.page_for("Aplicativos")
         assert window.registry.page_for("Aplicativos").selected_app_id == "app.nodejs"
         assert dialogs_seen.count("preview") == 1
+        assert dialogs_seen.count("result") == 2
+        assert not dialog_errors, dialog_errors
         events = [json.loads(line) for line in events_file.read_text(encoding="utf-8").splitlines()]
         assert [(event["phase"], event["action"]) for event in events] == [
             ("preview", "capability.profile.development-web-js"),
@@ -144,6 +157,7 @@ def test_development_public_journey_reviews_applies_validates_and_opens(
         assert cancel_args[4] == "--cancel-file"
         assert not Path(cancel_args[5]).exists()
     finally:
+        modal_driver.stop()
         window.close()
         host_patcher.stop()
         status_patcher.stop()

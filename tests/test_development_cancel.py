@@ -40,7 +40,7 @@ def test_development_cancel_waits_for_safe_step_and_keeps_resume_record(qapp, tm
         "pid_file, marker = map(Path, sys.argv[1:3])\n"
         "extra = sys.argv[3:]\n"
         "cancel_file = Path(extra[extra.index('--cancel-file') + 1])\n"
-        "code = 'import time; from pathlib import Path; import sys; time.sleep(1.2); '\n"
+        "code = 'import time; from pathlib import Path; import sys; time.sleep(2.0); '\n"
         "code += 'Path(sys.argv[1]).write_bytes(bytes([115,116,101,112,45,102,105,110,105,115,104,101,100]))'\n"
         "child = subprocess.Popen([sys.executable, '-c', code, str(marker)])\n"
         "pid_file.write_text(str(child.pid))\n"
@@ -89,6 +89,8 @@ def test_development_cancel_waits_for_safe_step_and_keeps_resume_record(qapp, tm
             window.cancel_button.click()
             assert window.runner.safe_cancel_pending
             assert window.runner.process.state() != QProcess.NotRunning
+            assert window.runner._cancel_file is not None
+            assert window.runner._cancel_file.is_file()
 
     window.runner.output.connect(cancel_when_ready)
     try:
@@ -104,7 +106,9 @@ def test_development_cancel_waits_for_safe_step_and_keeps_resume_record(qapp, tm
 
         # The in-flight package step finishes; cancellation prevents later steps.
         assert marker.read_bytes() == b"step-finished"
-        assert completed[0].exit_code == 130
+        assert completed[0].exit_code == 130, (
+            completed[0].stdout, completed[0].stderr, completed[0].parsed,
+        )
         assert completed[0].parsed["status"] == "cancelled"
 
         record = window.runner.ledger.records(limit=1)[0]
