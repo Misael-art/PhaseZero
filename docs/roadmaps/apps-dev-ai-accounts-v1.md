@@ -661,8 +661,9 @@ Guest foi encerrado e `/tmp/pxa-g2-rs-arch-20260925` (4,9 GiB) removido após
 confirmar ausência de processo QEMU e de arquivos root-owned nesse diretório.
 
 PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
-vazias, validar `observed_at` e `reset_at` como timestamps ISO com fuso e rejeitar
-valores malformados. Teste novo cobre válidos, vazios, inválidos e sem fuso.
+vazias e validar `observed_at`/`reset_at` como timestamps ISO com fuso; `2dbb1eb`
+rejeita também booleano, texto, `NaN` e infinito nos valores numéricos. Teste novo
+cobre válidos, vazios, formatos inválidos, sem fuso e números malformados.
 Regressão `tests/test_account_contract.py`, `tests/test_auth_registry.py`,
 `tests/test_account_grants.py`, `tests/test_accounts_page.py`,
 `tests/test_routing_manager.py` e `tests/test_ai_session_ui.py`: 93 passaram;
