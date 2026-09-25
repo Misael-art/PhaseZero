@@ -460,6 +460,10 @@ def instances_from_status_payload(
         or raw_health not in {"online", "offline", "failed", "unknown"}
     ):
         active = payload.get("serviceActive", payload.get("active"))
+        if payload.get("id") == "hermes":
+            gateway = payload.get("gateway")
+            if isinstance(gateway, dict):
+                active = gateway.get("active")
         raw_health = "online" if active is True else "offline" if active is False else "unknown"
     version = payload.get("version", "")
     instance_id = f"{host_id}:{scope}:{app_id}:{instance_key}"
@@ -476,4 +480,3 @@ def instances_from_status_payload(
         health=raw_health,
         observed_at=str(payload.get("observedAt") or ""),
     ),)
-

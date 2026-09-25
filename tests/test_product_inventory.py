@@ -165,6 +165,17 @@ def test_status_adapter_ignores_malformed_state_fields():
     assert instance.origin == instance.configuration == instance.health == "unknown"
 
 
+def test_hermes_status_uses_nested_gateway_health_without_claiming_ownership():
+    instance = instances_from_status_payload(
+        {"id": "hermes", "installed": True, "configured": True,
+         "gateway": {"active": False}},
+        app_id="app.hermes", host_id="local", scope="local",
+    )[0]
+    assert (instance.installation, instance.origin, instance.configuration, instance.health) == (
+        "present", "unknown", "ready", "offline",
+    )
+
+
 def test_proxy_status_actions_target_exact_product_and_preserve_provenance_contract():
     actions = {action.id: action for action in build_catalog(ROOT)}
     expected = {

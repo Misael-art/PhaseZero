@@ -581,7 +581,7 @@ class ProductRegistryPage(BasePage):
                 and (action.id.endswith("status") or ".status." in action.id)
                 and action.status_args
             ):
-                candidates.append((target.instance_scope != "host", action.id, action))
+                candidates.append((target.instance_scope != "local", action.id, action))
         if candidates:
             return min(candidates)[2]
         if product.get("capabilityId"):

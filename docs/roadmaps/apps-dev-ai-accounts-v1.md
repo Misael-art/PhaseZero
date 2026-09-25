@@ -519,3 +519,19 @@ antes da expansão; no ciclo atual `test_product_inventory.py -k proxy_status` (
 passou com HOME/XDG temporários, resposta exata e target agregado rejeitado; `bash -n`,
 `compileall` e `git diff --check` passaram. Nenhum serviço, pacote, login, conta ou host real
 foi alterado. G2/G4 seguem pendentes; PXA-003 permanece `in_progress`.
+
+PXA-003 Hermes: o registro continha probes `ai.hermes-status` (local) e
+`server.hermes.status` (host), mas a seleção de status preferia host e escondia Doctor local.
+Agora detalhe prioriza probe do escopo local quando existe; adaptador lê `gateway.active`
+do schema Hermes sem inferir ownership. Offline com instalação/configuração observadas oferece
+somente `ai.hermes-doctor` read-only; `server.hermes.start` não aparece como ação local. O
+fixture confirma id/escopo do probe, CTA e ausência de execução mutável. Regressão completa
+`test_product_registry_ui.py`, `test_product_inventory.py`, `test_product_status_loader.py`:
+40 passaram. Nenhuma conta, serviço ou processo real foi consultado ou alterado.
+
+PXA-003 Hermes: registro tinha status local e remoto no mesmo app; seleção de status
+preferia host e ocultava doctor do app local. Detalhe agora consulta `ai.hermes-status`
+local, mapeia `gateway.active` para saúde e oferece `ai.hermes-doctor` read-only como
+Resolver. `server.hermes.start` fica fora do escopo local; nenhuma atuação remota inicia.
+`test_product_inventory.py`: 13 passaram; `test_product_registry_ui.py -k 'hermes_detail or
+proxy_resolver'`: 2 passaram. Fixtures não executaram Hermes nem Tailscale.
