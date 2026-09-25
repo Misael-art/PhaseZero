@@ -259,8 +259,9 @@ class AiRoutingPage(BasePage):
         bonsai_layout = QVBoxLayout(bonsai_box)
         warn = QLabel(
             "Rota explícita e isolada do 9Router: sem token Bonsai no roteador, "
-            "sem fallback silencioso. Snapshot/upload exigem consentimento "
-            "interativo; use preflight antes de iniciar.")
+            "sem fallback silencioso. Preflight verifica workspace e rede; "
+            "consentimento de upload não autoriza inferência. Execução fica "
+            "indisponível até haver grant verificável por conexão.")
         warn.setWordWrap(True)
         warn.setObjectName("cardDescription")
         bonsai_layout.addWidget(warn)
@@ -269,6 +270,8 @@ class AiRoutingPage(BasePage):
         if bonsai_action is not None:
             button = QPushButton("Executar Claude via Bonsai (consentimento)")
             button.setObjectName("primaryButton")
+            button.setEnabled(False)
+            button.setToolTip("Aguardando enforcement de grant por conexão; login não autoriza execução.")
             button.clicked.connect(lambda: self.request_action(bonsai_action))
             bonsai_actions.addWidget(button)
         preflight = self.by_id.get("ai.claude-bonsai-preflight") if self.by_id else None

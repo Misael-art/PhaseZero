@@ -73,6 +73,21 @@ def test_registry_uses_dedicated_ai_pages():
     assert PageRegistry._CATEGORY_PAGES["Roteamento IA"] is AiRoutingPage
 
 
+def test_bonsai_run_waits_for_account_bound_grant(routing_page):
+    page, _actions = routing_page
+    button = next(
+        child for child in page.findChildren(QPushButton)
+        if child.text().startswith("Executar Claude via Bonsai")
+    )
+    assert not button.isEnabled()
+    assert "grant por conexão" in button.toolTip()
+    warning = next(
+        child for child in page.findChildren(QLabel)
+        if "consentimento de upload não autoriza inferência" in child.text()
+    )
+    assert "indisponível" in warning.text()
+
+
 def test_main_window_skips_preview_for_ensure():
     src = (ROOT / "linux/ui_native/main_window.py").read_text(encoding="utf-8")
     assert "ai.proxies-ensure" in src

@@ -186,9 +186,9 @@ Usage:
   pz ai codexbar <action>      CodexBar CLI + optional KodexBar plasmoid (status|setup|health|auth|watchdog|plasmoid|plasmoid-remove|repair)
   pz ai claude status          Audit Claude, Bonsai, routes, hooks and 9Router conflicts
   pz ai claude install         Transactional install/repair with backup and rollback
-  pz ai claude verify          Verify isolated subscription/Bonsai/9Router launchers
+  pz ai claude verify          Verify route configuration and status (no inference)
   pz ai claude preflight bonsai --cwd <dir>  Audit upload target without reading file contents
-  pz ai claude run bonsai --cwd <dir>  Run Bonsai only from an explicitly reviewed project
+  pz ai claude run <route>     Unavailable until account-bound grants are enforced
   pz ai claude rollback <file> Restore a cc-installer transaction manifest
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
