@@ -697,6 +697,26 @@ limpo persistente, falhas simuladas não cobrem crash/cancelamento, e Windows
 descartável segue pendente. Nenhum pacote/serviço do host foi instalado ou
 alterado; QEMU encerrado após exit 0.
 
+PXA-004 G2 Arch em disco persistente: preparei um Arch Linux 2026.09.01 base
+em `~/.cache/pz-pxa004-g2-arch-clean-20260925/arch-base.qcow2` (SHA-256
+`5f90404a13641d28cbb6493dc6386c9cde08bb4457076a8396825722f4b00513`) e rodei
+dois overlays qcow2 separados, ambos derivados do mesmo base sem Node.js/pnpm.
+No overlay de falha, rede ausente + pacote `ada` omitido do cache fez plano
+`ready`, mas apply retornou `failed`; `pacman -Q nodejs` e `pacman -Q pnpm`
+continuaram ausentes. No overlay de ciclo, cache local assinado incluiu
+`ada 4.0.0-1`, `c-ares 1.34.8-1`, `libuv 1.52.1-2`, `simdjson 1:4.6.9-1`,
+`nodejs 26.8.1-2`, `pnpm 11.3.0-1`, `node-gyp 13.0.2-1`, `nodejs-nopt 10.0.1-1`
+e `semver 7.8.5-1`. Com `-nic none`, guest confirmou só `lo`; duas passagens de
+plan/apply/uso passaram, remoção de pnpm preservou Node.js, reapply/uso passou,
+e remoção final mais `verify-removal` confirmou ambos ausentes. Pacman manteve
+verificação da keyring/assinaturas. Logs: `~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-failure-04/failure-events.jsonl`
+e `~/.cache/pz-pxa004-g2-arch-clean-20260925/cycle-success/events.jsonl`.
+Uma falha do harness de bootstrap (`umask 077` criou `/var/cache/pacman` como
+`0700`) foi corrigida no snapshot para `0755`; logs de tentativas anteriores
+foram preservados e não contam como prova de falha de pacote. Esse resultado
+fecha a prova limpa Arch de lifecycle + falta de pacote; G2 ainda aguarda
+Windows descartável e outras falhas/cancelamento previstas.
+
 PXA-006 schema hardening: `8aefde9` faz `Quota` exigir dimensão e unidade não
 vazias e validar `observed_at`/`reset_at` como timestamps ISO com fuso; `2dbb1eb`
 rejeita também booleano, texto, `NaN` e infinito nos valores numéricos. Teste novo
