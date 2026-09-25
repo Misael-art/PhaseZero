@@ -803,17 +803,11 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self.log_view.setVisible(self.preferences.advanced_mode)
         try:
-            # Only the explicit composite "Usar" journey skips its preview.
-            # Login and credential routes still require their own confirmation.
-            skip_preview = (
-                action.id.startswith("ai.proxies-ensure")
-                or action.id.startswith("ai.proxies-open")
-            )
             page = self.registry.page_for(self.current_category)
             extra = getattr(page, "consume_action_values", None)
             if callable(extra):
                 values.update(extra(action) or {})
-            self.runner.start(action, preview=action.mutable and not skip_preview, values=values)
+            self.runner.start(action, preview=action.mutable, values=values)
         except (ValueError, RuntimeError) as exc:
             self.pending_action = None
             self.pending_value = ""

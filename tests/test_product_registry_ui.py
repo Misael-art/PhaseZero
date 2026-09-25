@@ -489,7 +489,7 @@ def test_hermes_detail_uses_local_status_and_read_only_recovery(qapp):
         status_patcher.stop()
 
 
-def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
+def test_proxy_resolver_stays_blocked_until_request_bound_grant(qapp):
     window, host_patcher, status_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Aplicativos")
@@ -500,13 +500,13 @@ def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
             configuration="ready", health="offline",
         ),))
         assert page._primary_button.text() == "Resolver"
-        assert page._primary_action.id == "ai.proxies-start-qwen"
-        assert "serviço Qwen" in page._primary_action.impact
+        assert page._primary_action is None
+        assert not page._primary_button.isEnabled()
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
-        start.assert_called_once()
-        assert start.call_args.args[0].id == "ai.proxies-start-qwen"
-        assert start.call_args.kwargs["preview"] is True
+        start.assert_not_called()
+        warning = page.findChild(QLabel, "accountGrantNotice")
+        assert warning is not None and not warning.isHidden()
 
         page._instances_ready(page._status_action_id, (ProductInstance(
             "local:local:app.qwen-proxy:login", "app.qwen-proxy", "local", "local",
@@ -515,6 +515,7 @@ def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
         ),))
         assert page._primary_button.text() == "Configurar"
         assert page._primary_action.id == "ai.proxies-login-qwen"
+        assert "não testa inferência nem inicia o serviço" in page._primary_action.description
         with patch.object(window.runner, "start") as start:
             page._primary_button.click()
         start.assert_called_once()
@@ -531,7 +532,7 @@ def test_proxy_resolver_starts_only_verified_suite_owned_instance(qapp):
         visible_ids = _detail_action_ids(page)
         assert not visible_ids.intersection({
             "ai.proxies-ensure-qwen", "ai.proxies-start-qwen",
-            "ai.proxies-stop-qwen", "ai.proxies-login-qwen",
+            "ai.proxies-open-qwen", "ai.proxies-credentials-mimo",
         })
 
         page._instances_ready(page._status_action_id, (ProductInstance(

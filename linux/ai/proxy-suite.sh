@@ -53,6 +53,14 @@ EOF
 # experimental (explicit id only) or externally managed (9router).
 SUPPORTED_PROXY_IDS="kimiproxy qwenproxy deepsproxy mimo-ai-proxy"
 
+connection_grant_blocked() {
+    printf '%s\n' '{"schemaVersion":1,"ok":false,"ready":false,"completed":false,
+      "resumable":true,"status":"blocked","blockedReason":"connection-grant-not-enforceable",
+      "summary":"Uso bloqueado: este proxy não vincula cada requisição a uma conta e consumidor autorizados.",
+      "next":"Mantenha consumidores desligados até existir adaptador que aplique o grant por requisição e rejeite fallback.",
+      "needsUser":"none"}'
+}
+
 proxy_tier() {
     case " $SUPPORTED_PROXY_IDS " in
         *" $1 "*) printf 'supported\n' ;;
@@ -665,6 +673,10 @@ repair_runtime_shim() {
 
 service_action() {
     local mode="$1" id repo port kind count=0
+    case "$mode" in
+        stop|disable) ;;
+        *) connection_grant_blocked; return 69 ;;
+    esac
     [ "$mode" = stop ] || repair_runtime_shim
     if [ "$mode" != stop ]; then
         while IFS='|' read -r id repo port kind; do
@@ -802,6 +814,8 @@ mimo_official_provider_values() {
 }
 
 mimo_chat_probe() {
+    connection_grant_blocked
+    return 69
     # PZ-AUD-020: configured != authenticated. A tiny real completion
     # proves key, model, quota and reachability; a stored 200 from setup
     # time proves none of those. The key travels in a header (same as the
@@ -818,6 +832,8 @@ mimo_chat_probe() {
 }
 
 configure_mimo_official_clients() {
+    connection_grant_blocked
+    return 69
     mimo_official_configured || return 0
     local values baseurl model key_ref models store_tmp
     values="$(mimo_official_provider_values)"
@@ -1012,6 +1028,8 @@ configure_zcode_ide() {
 }
 
 configure_ides() {
+    connection_grant_blocked
+    return 69
     [ "${PZ_NO_IDES:-0}" = 1 ] && { pz_info "PZ_NO_IDES=1: skipping IDE configuration"; return 0; }
     command -v jq >/dev/null 2>&1 || { pz_error "jq required for IDE configuration"; return 1; }
     configure_opencode_ide
@@ -1234,6 +1252,8 @@ login_tsx() {
 }
 
 quick_chat_ok() {
+    connection_grant_blocked
+    return 69
     local id="$1" row port model key url code payload
     row="$(proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{print; exit}')"
     [ -n "$row" ] || return 1
@@ -1272,6 +1292,8 @@ wait_for_login_window() {
 }
 
 start_proxy_service() {
+    connection_grant_blocked
+    return 69
     local id="$1" row port i
     row="$(lookup_proxy_row "$id")"
     [ -n "$row" ] || return 1
@@ -1294,6 +1316,8 @@ start_proxy_service() {
 }
 
 wait_proxy_chat() {
+    connection_grant_blocked
+    return 69
     local id="$1" attempts="${2:-8}" i
     for ((i = 0; i < attempts; i++)); do
         quick_chat_ok "$id" && return 0
@@ -1313,8 +1337,8 @@ emit_login_json() {
         --argjson completed "$completed" --argjson resumable "$resumable" \
         '{schemaVersion:1,id:$id,name:$name,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
           status:$status,summary:$summary,next:$next,
-          nextAction:(if $resumable then ("linux/pz ai proxies ensure " + $id) else null end),
-          needsUser:(if $status=="ready" then "none" else "browser-login" end),log:$log}'
+          nextAction:(if $status=="gui-required" then ("linux/pz ai proxies login " + $id) else null end),
+          needsUser:(if $status=="ready" or $status=="authenticated" then "none" else "browser-login" end),log:$log}'
 }
 
 patch_proxy_unit_success_exit() {
@@ -1328,7 +1352,7 @@ patch_proxy_unit_success_exit() {
     systemctl --user daemon-reload >/dev/null 2>&1 || true
 }
 
-watch_login_then_restart() {
+watch_login_completion() {
     local id="$1" pid="$2" log="$PZ_STATE/ai-proxies/$1-login.log"
     (
         login_marker=false
@@ -1345,14 +1369,10 @@ watch_login_then_restart() {
         done
         # Kimi and DeepSeek do not print a success marker. Their supported
         # flow is: user signs in, closes Chromium, then the persistent profile
-        # is validated by a real chat probe before readiness is recorded.
+        # is inspected for a saved session. Login never starts the consumer.
         if [ "$login_marker" = true ] || session_artifact_present "$id"; then
-            if start_proxy_service "$id" >>"$log" 2>&1 && wait_proxy_chat "$id" 15; then
-                record_login_authenticated "$id"
-            else
-                record_login_status "$id" needs-login
-                printf '%s\n' "PhaseZero: sessão encontrada, mas a validação do chat falhou; novo login necessário" >>"$log"
-            fi
+            record_login_authenticated "$id"
+            printf '%s\n' "PhaseZero: sessão local salva; serviço permanece parado até grant por requisição" >>"$log"
         else
             record_login_status "$id" needs-login
             printf '%s\n' "PhaseZero: navegador fechou sem uma sessão detectável" >>"$log"
@@ -1561,15 +1581,16 @@ login_proxy() {
         log="$PZ_STATE/ai-proxies/$id-login.log"
         emit_login_json "$id" false "needs-login" \
             "O login do $name já está aberto no navegador." \
-            "Conclua o login na janela do Chromium. O proxy inicia sozinho depois." "$log"
+            "Conclua o login na janela do Chromium. O serviço não inicia após o login." "$log"
+        return 0
+    fi
+    if saved_login_status "$id"; then
+        emit_login_json "$id" true authenticated \
+            "$name tem uma sessão local salva; nenhum teste de inferência foi executado." \
+            "Uso permanece bloqueado até grant aplicado por requisição." ""
         return 0
     fi
     ensure_node_runtime >/dev/null
-
-    if saved_login_status "$id" && systemctl --user is-active --quiet "phasezero-$id.service" 2>/dev/null && quick_chat_ok "$id"; then
-        emit_login_json "$id" true ready "$name já está autenticado e respondendo." "Pode usar nas IDEs." ""
-        return 0
-    fi
 
     port="$(lookup_proxy_row "$id" | cut -d'|' -f3)"
     patch_proxy_unit_success_exit "$id"
@@ -1624,14 +1645,14 @@ login_proxy() {
     fi
 
     jq -n --arg id "$id" --arg log "$log" --arg startedAt "$(date -Iseconds)" --argjson pid "$login_pid" \
-        '{schemaVersion:1,id:$id,status:"started",pid:$pid,log:$log,startedAt:$startedAt,restartServiceAfterExit:true}' > "$state"
+        '{schemaVersion:1,id:$id,status:"started",pid:$pid,log:$log,startedAt:$startedAt,serviceAfterLogin:"stopped"}' > "$state"
 
-    watch_login_then_restart "$id" "$login_pid"
+    watch_login_completion "$id" "$login_pid"
 
     if wait_for_login_window "$log" "$login_pid" 40; then
         emit_login_json "$id" false "needs-login" \
             "Uma janela do navegador abriu para o login do $name." \
-            "Conclua o login no Chromium e feche a janela. O serviço inicia sozinho." "$log"
+            "Conclua o login no Chromium e feche a janela. O serviço permanecerá parado." "$log"
         return 0
     fi
     if kill -0 "$login_pid" 2>/dev/null; then
@@ -1668,6 +1689,8 @@ record_login_status() {
 }
 
 proxy_chat_probe() {
+    connection_grant_blocked
+    return 69
     local id="$1" row port model key url code payload
     row="$(proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{print; exit}')"
     [ -n "$row" ] || return 1
@@ -1689,6 +1712,8 @@ proxy_chat_probe() {
 # for the TCP port, then (3) classify: service up/down, models ok/needs-login,
 # chat ok/needs-login. Chat and qwen's models require a one-time `npm run login`.
 test_proxies() {
+    connection_grant_blocked
+    return 69
     local id repo port kind first=true
     local ids=() ports=()
     repair_runtime_shim
@@ -1776,6 +1801,8 @@ _ensure_steps_add() {
 # when the proxy still needs a browser session. Stdout is a single JSON object
 # so the simple UI can show `summary`/`next` without npm/git noise.
 ensure_one() {
+    connection_grant_blocked
+    return 69
     local id="$1" dry="$2"
     local name row repo port kind dir log steps_file
     local installed=false service="" auth_status="" needs_user="none"
@@ -1849,8 +1876,8 @@ ensure_one() {
                 --argjson steps "$(cat "$steps_file")" \
                 '{schemaVersion:1,id:$id,name:$name,ok:false,ready:false,completed:false,resumable:true,
                   status:"needs-credentials",summary:"Falta a chave oficial da API Xiaomi MiMo.",
-                  next:"Abra API Service, crie uma chave e cole-a na Central. Nenhum cookie do navegador é necessário.",
-                  nextAction:"linux/pz ai proxies ensure mimo-ai-proxy",needsUser:"api-key",
+                  next:"Abra API Service e guarde a chave em Contas. Uso via proxy permanece bloqueado sem grant por requisição.",
+                  nextAction:null,needsUser:"api-key",
                   dryRun:$dryRun,installed:false,steps:$steps}'
         fi
         rm -f "$steps_file"
@@ -1951,7 +1978,7 @@ ensure_one() {
                 summary="Vai iniciar $name e validar a sessão salva."
             elif [ "$ok" = true ] && wait_proxy_chat "$id" 5; then
                 _ensure_steps_add "$steps_file" login skipped "sessão validada por chat"
-                summary="$name já está pronto para usar."
+                summary="$name tem sessão local; uso continua bloqueado até grant por requisição."
             elif [ "$ok" = true ]; then
                 record_login_needs_login "$id"
                 _ensure_steps_add "$steps_file" login stale "sessão salva não respondeu"
@@ -1960,7 +1987,7 @@ ensure_one() {
                     needs_user="browser-login"
                     status="needs-login"
                     summary="A sessão salva do $name expirou. O navegador foi aberto."
-                    next="Conclua o login no Chromium. O serviço inicia sozinho depois."
+                    next="Conclua o login no Chromium. O serviço permanecerá parado."
                 else
                     _ensure_steps_add "$steps_file" login failed "veja $log"
                     ok=false
@@ -2013,7 +2040,7 @@ ensure_one() {
                 if login_proxy "$id" >>"$log" 2>&1; then
                     _ensure_steps_add "$steps_file" login opened
                     summary="Uma janela do navegador abriu para o login do $name."
-                    next="Conclua o login no Chromium e volte. O serviço inicia sozinho."
+                    next="Conclua o login no Chromium e volte. O serviço permanecerá parado."
                 else
                     _ensure_steps_add "$steps_file" login failed "veja $log"
                     ok=false
@@ -2070,15 +2097,17 @@ ensure_one() {
         --argjson installed "$installed" --argjson steps "$(cat "$steps_file")" \
         '{schemaVersion:1,id:$id,name:$name,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
           status:$status,summary:$summary,next:$next,needsUser:$needsUser,
-          nextAction:(if $resumable then ("linux/pz ai proxies ensure " + $id) else null end),
+          nextAction:null,
           dryRun:$dryRun,installed:$installed,log:$log,steps:$steps}'
     rm -f "$steps_file"
     [ "$ok" = true ]
 }
 
 ensure_selected() {
+    connection_grant_blocked
+    return 69
     local dry="$ENSURE_DRY_RUN" id item results_file ok=true dry_json=false
-    local ide_ok=true ide_status="not-run" ide_log="$PZ_STATE/ai-proxies/ensure-ides.log"
+    local ide_ok=false ide_status="connection-grant-not-enforceable" ide_log=""
     local ids=() envelope_status=ready
     [ "$dry" = 1 ] && dry_json=true
     results_file="$(mktemp)"
@@ -2095,17 +2124,6 @@ ensure_selected() {
         mv "$results_file.tmp" "$results_file"
         jq -e '.status != "error" and .status != "blocked"' <<< "$item" >/dev/null || ok=false
     done
-    if [ "$dry" != 1 ] && [ "$ok" = true ]; then
-        if configure_ides >>"$ide_log" 2>&1; then
-            ide_status=configured
-        else
-            ide_ok=false
-            ide_status=failed
-        fi
-    elif [ "$ok" != true ]; then
-        ide_ok=false
-        ide_status=blocked
-    fi
     if [ "$TARGET" = all ]; then
         local login=0 creds=0 failed=0 summary next=""
         login="$(jq '[.[] | select(.needsUser=="browser-login")] | length' "$results_file")"
@@ -2117,8 +2135,8 @@ ensure_selected() {
             next="Abra o modo avançado para ver o que falhou."
         elif [ "$dry" = 1 ]; then
             envelope_status=planned
-            summary="Vai preparar Kimi, Qwen, DeepSeek e Mimo. O navegador abre só se ainda faltar login."
-            next="Confirme para instalar, ligar os serviços e abrir o Chromium quando necessário."
+            summary="Preparação bloqueada até enforcement de grants por requisição."
+            next="Esta operação está bloqueada até enforcement de grants por requisição."
         elif [ "$login" -gt 0 ]; then
             envelope_status=needs-login
             summary="Proxies prontos. $login ainda precisam de login no navegador."
@@ -2127,9 +2145,9 @@ ensure_selected() {
             envelope_status=needs-credentials
             summary="Proxies prontos. Mimo ainda precisa das credenciais da conta."
         elif [ "$ide_ok" != true ]; then
-            envelope_status=degraded
-            summary="Os proxies estão prontos, mas a integração com as IDEs falhou."
-            next="Use Configurar IDEs (proxies) ou abra o modo avançado para ver o log."
+            envelope_status=blocked
+            summary="Preparação de uso bloqueada: falta vínculo por conexão e consumidor."
+            next="Nenhuma IDE foi configurada ou habilitada."
         else
             summary="Os quatro proxies estão prontos para usar."
         fi
@@ -2142,7 +2160,7 @@ ensure_selected() {
             --arg ideStatus "$ide_status" --arg ideLog "$ide_log" --argjson ideOk "$ide_ok" \
             '{schemaVersion:1,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
               status:$status,summary:$summary,next:$next,
-              nextAction:(if $resumable then "linux/pz ai proxies ensure all" else null end),dryRun:$dryRun,proxies:$proxies,
+              nextAction:null,dryRun:$dryRun,proxies:$proxies,
               ide:{ok:$ideOk,status:$ideStatus,log:$ideLog}}'
     else
         jq --arg ideStatus "$ide_status" --arg ideLog "$ide_log" --argjson ideOk "$ide_ok" '
@@ -2166,6 +2184,8 @@ open_mimo_studio() {
 }
 
 set_proxy_credentials() {
+    connection_grant_blocked
+    return 69
     local id="${TARGET:-mimo-ai-proxy}" payload api_key base_url model host http_code tmp
     [ "$id" = "mimo-ai-proxy" ] || [ "$id" = mimo ] || { pz_error "set-credentials only supports mimo-ai-proxy"; return 2; }
     id=mimo-ai-proxy
@@ -2221,6 +2241,8 @@ set_proxy_credentials() {
 }
 
 open_opencode_proxy() {
+    connection_grant_blocked
+    return 69
     local id="$TARGET" row port provider model spec name
     [ "$id" != all ] || id="$IDE_DEFAULT_PROXY"
     row="$(proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{print; exit}')"
@@ -2288,26 +2310,17 @@ case "$ACTION" in
         ;;
     install|setup|update|repair)
         install_selected
-        configure_ides
         ;;
     auth|auth-status|login-status) auth_status_json ;;
     product-status) product_status_json ;;
     provenance|sources|source-status) provenance_status_json ;;
     manifest|manifest-check) manifest_check_json ;;
     detailed-status|detailed|overview) detailed_status_json ;;
-    configure-ides|ides|configure) configure_ides ;;
-    test|verify)
-        if [ "$TARGET" = 9router ]; then
-            bash "$PZ_ROOT/linux/ai/9router-manager.sh" test | jq -s '.'
-        elif [ "$TARGET" = all ]; then
-            { test_proxies; bash "$PZ_ROOT/linux/ai/9router-manager.sh" test | jq -s '.'; } | jq -s 'add'
-        else
-            test_proxies
-        fi
+    configure-ides|ides|configure|ensure|use|prepare|open|open-client|launch|set-credentials|credentials|start|enable|restart|test|verify)
+        connection_grant_blocked
+        exit 69
         ;;
-    start|enable) service_action start ;;
     stop|disable) service_action stop ;;
-    restart) service_action restart ;;
     login)
         if [ "$TARGET" = all ]; then
             # Batch OAuth: open one headed login per browser-session proxy that
@@ -2319,13 +2332,6 @@ case "$ACTION" in
         else
             login_proxy "$TARGET"
         fi
-        ;;
-    ensure|use|prepare) ensure_selected ;;
-    open|open-client|launch)
-        open_opencode_proxy
-        ;;
-    set-credentials|credentials)
-        set_proxy_credentials
         ;;
     open-studio)
         open_mimo_studio

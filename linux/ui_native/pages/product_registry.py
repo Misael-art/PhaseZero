@@ -32,27 +32,22 @@ _RECOVERY_ACTION_BY_APP = {
     # as an implicit recovery action.
     "app.ollama": "ai.ollama",
     "app.opencode": "ai.opencode-install",
-    "app.kimiproxy": "ai.proxies-start-kimi",
-    "app.qwen-proxy": "ai.proxies-start-qwen",
-    "app.deepseek-proxy": "ai.proxies-start-deeps",
-    "app.mimo-proxy": "ai.proxies-start-mimo",
 }
 
 # These managed-session routes remain unavailable until a supported account
 # adapter can bind the selected connection to an enforceable consumer grant.
-_ACCOUNT_GRANT_GATED_ACTIONS = frozenset({"ai.claude-bonsai-run", "ai.opencode-install"})
-_PROXY_RECOVERY_AUTHORITY_BY_APP = {
-    "app.kimiproxy": "linux/ai/proxy-suite.sh",
-    "app.qwen-proxy": "linux/ai/proxy-suite.sh",
-    "app.deepseek-proxy": "linux/ai/proxy-suite.sh",
-    "app.mimo-proxy": "linux/ai/proxy-suite.sh",
-}
-_PROXY_RECOVERY_TARGET_BY_APP = {
-    "app.kimiproxy": "kimiproxy",
-    "app.qwen-proxy": "qwenproxy",
-    "app.deepseek-proxy": "deepsproxy",
-    "app.mimo-proxy": "mimo-ai-proxy",
-}
+_ACCOUNT_GRANT_GATED_ACTIONS = frozenset({
+    "ai.claude-bonsai-run", "ai.opencode-install",
+    "ai.proxies-ensure-kimi", "ai.proxies-ensure-qwen",
+    "ai.proxies-ensure-deeps", "ai.proxies-ensure-mimo", "ai.proxies-ensure-all",
+    "ai.proxies-start-kimi", "ai.proxies-start-qwen",
+    "ai.proxies-start-deeps", "ai.proxies-start-mimo", "ai.proxies-start-all",
+    "ai.proxies-open-kimi", "ai.proxies-open-qwen",
+    "ai.proxies-open-deeps", "ai.proxies-open-mimo",
+    "ai.proxies-credentials-mimo", "ai.proxies-ides", "ai.proxies-test",
+    "ai.proxies.restart-one", "ai.proxies.test-one",
+    "ai.9router-combos", "ai.9router-secrets",
+})
 _PROXY_CONFIGURE_ACTION_BY_APP = {
     "app.kimiproxy": "ai.proxies-login-kimi",
     "app.qwen-proxy": "ai.proxies-login-qwen",
@@ -95,19 +90,6 @@ _RECOVERY_IMPACT_BY_APP = {
         "Sincroniza OpenCode e mescla a rota local 9Router com rollback; pode instalar "
         "ou atualizar a CLI. Não inicia login nem importa credenciais."
     ),
-    "app.kimiproxy": (
-        "Habilita e inicia somente o serviço Kimi deste usuário; proxies Node também "
-        "podem religar o runtime Node isolado antes de iniciar."
-    ),
-    "app.qwen-proxy": (
-        "Habilita e inicia somente o serviço Qwen deste usuário; proxies Node também "
-        "podem religar o runtime Node isolado antes de iniciar."
-    ),
-    "app.deepseek-proxy": (
-        "Habilita e inicia somente o serviço DeepSeek deste usuário; proxies Node também "
-        "podem religar o runtime Node isolado antes de iniciar."
-    ),
-    "app.mimo-proxy": "Habilita e inicia somente o serviço MiMo deste usuário.",
 }
 
 
@@ -455,7 +437,10 @@ class ProductRegistryPage(BasePage):
         self.status_loader.cancel_all()
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
-        self._account_grant_notice.setVisible(app_id in {"app.claude-code", "app.opencode"})
+        self._account_grant_notice.setVisible(app_id in {
+            "app.claude-code", "app.opencode", "app.9router", "app.kimiproxy", "app.qwen-proxy",
+            "app.deepseek-proxy", "app.mimo-proxy",
+        })
         self._instances.clear()
         self._instance_id_collision = False
         self._populate_instance_selector()
@@ -748,16 +733,6 @@ class ProductRegistryPage(BasePage):
             recovery_id = _RECOVERY_ACTION_BY_APP.get(self._selected_app_id, "")
             recovery = self.by_id.get(recovery_id)
             instance = self._selected_instance()
-            proxy_authority = _PROXY_RECOVERY_AUTHORITY_BY_APP.get(self._selected_app_id)
-            proxy_recovery_owned = bool(
-                recovery is not None and instance is not None
-                and proxy_authority == "linux/ai/proxy-suite.sh"
-                and instance.manager == "phasezero-ai-proxy-suite"
-                and recovery.id == recovery_id
-                and recovery.args[:3] == ("ai", "proxies", "start")
-                and len(recovery.args) > 3
-                and recovery.args[3] == _PROXY_RECOVERY_TARGET_BY_APP.get(self._selected_app_id)
-            )
             if (
                 recovery is not None and recovery_id not in _ACCOUNT_GRANT_GATED_ACTIONS
                 and recovery_id in product.get("actionIds", [])
@@ -766,7 +741,7 @@ class ProductRegistryPage(BasePage):
             ):
                 authority_id = self._manifest_action(recovery_id).get("installationAuthorityId")
                 declared_authority = authority_id in product.get("installationAuthorityIds", [])
-                if recovery.mutable and (declared_authority or proxy_recovery_owned):
+                if recovery.mutable and declared_authority:
                     return replace(
                         recovery,
                         impact=_RECOVERY_IMPACT_BY_APP.get(self._selected_app_id, recovery.impact),

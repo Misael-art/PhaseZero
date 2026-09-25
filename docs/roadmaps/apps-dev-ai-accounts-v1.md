@@ -1077,3 +1077,55 @@ disponível acima do mínimo e pressão menor.
 Reavaliação às 11:24 -03:00: 2,6 GiB disponíveis, 9,9 GiB de swap em uso e load average
 7,06/5,15/6,35; `python3`, Qoder, ZCode, Electron e Java seguiam ativos. Sem margem para o guest
 de 4 GiB; etapa continua não realizada e nenhum processo foi encerrado.
+
+PXA-003/PXA-008 auditoria do proxy suite (2026-09-25): regressão encontrou
+atalhos secundários fora do `routing_manager`: botão Usar abria OpenCode; ensure
+e configuração de credenciais do MiMo escreviam rotas de IDE; `login` iniciava
+o serviço e fazia probe de chat após salvar a sessão; aliases `restart`, `test`
+e ações legadas `ai.proxies.restart-one`/`test-one` também chegavam ao manager.
+UI e detalhe Aplicativos agora mantêm uso, probes de inferência, credenciais
+legadas, configuração de IDE, start/restart e abertura de cliente bloqueados
+com `connection-grant-not-enforceable` (exit 69). Guardas internas cobrem os
+helpers de start, configuração, inferência, ensure e abertura. Login de browser
+permanece disponível como captura local de sessão; não testa chat nem inicia o
+serviço. Status de configuração não afirma autorização. Catálogo derivado,
+`actions.json` e inventário foram sincronizados.
+`tests/linux-ai-proxies.sh` passou; regressão de UI/catálogo/inventário/servidor
+(`test_ai_session_ui.py`, `test_product_registry_ui.py`,
+`test_product_inventory.py`, `test_catalog_visibility.py`,
+`test_linux_native_ui.py`, `test_linux_ui_server.py`) passou: 133 testes em
+50,42 s, exit 0 após encerramento limpo. `bash -n` e `git diff --check` passaram.
+Fixtures usaram HOME temporário; nenhum serviço, provider, cliente, credencial,
+API, conta ou cota real foi acionado. Isto fecha os bypasses locais verificados,
+mas não prova isolamento de serviços previamente ativos ou iniciados fora do
+manager. PXA-008 continua `in_progress`; enforcement por requisição, fallback,
+adapter Windows, Secret Service real e PXA-006/G3 permanecem pendentes.
+
+PXA-003/PXA-008 auditoria complementar do 9Router (2026-09-25): além dos atalhos
+do proxy suite, `ai.9router-test` enviava POST de chat; `client run` exportava a
+chave e iniciava comando arbitrário; `provider sync-secrets` importava credenciais;
+combos sincronizavam/criavam/ativavam fallback; `provider remove` alterava o conjunto
+compartilhado. O teste agora verifica `/api/health` e `/v1/models` somente, marca chat
+como bloqueado e não chama inferência. Wrapper gerado não exporta chave nem executa
+cliente; `client run`, importação/remoção de provider e mutações de combo retornam
+`connection-grant-not-enforceable` antes de processo, request mutável ou gravação.
+Fixtures afirmam provider conectado e recusam qualquer POST/PUT/DELETE, sentinel de
+processo cliente, chamada chat ou alteração de `settings.json`.
+
+Primeiro teste falhou porque o `case` do stub curl tinha padrão inválido dentro do
+heredoc; `bash -n` do runner externo não verificava esse script e o health loop chegava
+ao curl real por até 90 s. Corrigido padrão e adicionado `bash -n` para cada stub antes
+de instalar PATH temporário. `tests/linux-9router.sh` passou (exit 0); o primeiro run
+posterior também revelou hash capturado antes de `repair` normalizar settings. Snapshot
+agora ocorre depois do setup e prova ausência de mutação pelos comandos bloqueados.
+`tests/linux-ai-proxies.sh` passou. Regressão UI/catálogo/inventário/servidor —
+`test_ai_session_ui.py`, `test_product_registry_ui.py`, `test_product_inventory.py`,
+`test_catalog_visibility.py`, `test_linux_native_ui.py`, `test_linux_ui_server.py` —
+teve 133 aprovados em 64,43 s; subprocesso pytest terminou com exit 0. `bash -n` e
+`git diff --check` passaram. HOME/XDG temporários; nenhuma API, conta, cota, provider,
+cliente ou serviço real foi acionado.
+
+Limite: isto bloqueia rotas PhaseZero verificadas, mas não controla dashboard, serviço,
+cliente ou configuração usados diretamente fora do manager nem prova pin de conexão por
+requisição. PXA-008 e PXA-003 seguem `in_progress`; PXA-006/G3 continua gate externo,
+sem sessão/cota de conta real. Não marcar fixtures como conclusão.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton, QWidget
@@ -10,7 +11,7 @@ from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.models import OperationResult
 from linux.ui_native.operation_ledger import OperationLedger
 from linux.ui_native.pages.ai_dev import AiDevPage
-from linux.ui_native.pages.ai_proxies import AiProxiesPage, MimoTokenDialog
+from linux.ui_native.pages.ai_proxies import AiProxiesPage
 from linux.ui_native.pages.ai_routing import AiRoutingPage
 from linux.ui_native.pages.results import ResultsPage
 from linux.ui_native.pages.registry import PageRegistry
@@ -88,13 +89,13 @@ def test_bonsai_run_waits_for_account_bound_grant(routing_page):
     assert "indisponível" in warning.text()
 
 
-def test_main_window_skips_preview_for_ensure():
+def test_main_window_previews_every_mutable_action():
     src = (ROOT / "linux/ui_native/main_window.py").read_text(encoding="utf-8")
-    assert "ai.proxies-ensure" in src
-    assert "preview=action.mutable and not skip_preview" in src
+    assert "preview=action.mutable, values=values" in src
+    assert "skip_preview" not in src
 
 
-def test_ensure_actions_are_the_primary_proxy_flow(by_id):
+def test_proxy_usage_actions_remain_explicitly_blocked(by_id):
     for action_id, proxy in (
         ("ai.proxies-ensure-kimi", "kimiproxy"),
         ("ai.proxies-ensure-qwen", "qwenproxy"),
@@ -106,10 +107,13 @@ def test_ensure_actions_are_the_primary_proxy_flow(by_id):
         assert action.mutable
         assert action.args == ("ai", "proxies", "ensure", proxy)
         assert action.preview_args == ("ai", "proxies", "ensure", proxy, "--dry-run")
-        assert action.visibility != "advanced"
+        assert "grant" in action.description.lower()
+    assert by_id["ai.proxies-start-all"].mutable
+    assert "bloqueado" in by_id["ai.proxies-test"].title.lower()
     assert by_id["ai.proxies"].visibility == "advanced"
     assert by_id["ai.proxies-start-qwen"].visibility == "advanced"
     assert by_id["ai.proxies-login-qwen"].visibility == "advanced"
+    assert "não testa inferência nem inicia o serviço" in by_id["ai.proxies-login-qwen"].description
     assert by_id["ai.proxies-open-qwen"].args == ("ai", "proxies", "open", "qwenproxy")
     assert not by_id["ai.proxies-open-qwen"].mutable
     assert by_id["ai.proxies-credentials-mimo"].stdin_parameter == "credentials"
@@ -145,7 +149,7 @@ def test_proxies_page_covers_all_catalog_actions(proxies_page):
     assert {action.id for action in actions} <= page.represented_action_ids
 
 
-def test_proxies_page_usar_is_one_click_ensure(proxies_page):
+def test_proxies_page_disables_unbound_consumer_use(proxies_page):
     page, _actions = proxies_page
     labels = []
     hero = page.prepare_button.parentWidget()
@@ -153,15 +157,17 @@ def test_proxies_page_usar_is_one_click_ensure(proxies_page):
         widget = hero.layout().itemAt(index).widget()
         if isinstance(widget, QPushButton):
             labels.append(widget.text())
-    assert labels == ["Atualizar", "Preparar todos"]
+    assert labels == ["Atualizar", "Uso bloqueado"]
     qwen = page._cards["qwenproxy"]
     use = qwen["use"]
     assert isinstance(use, QPushButton)
-    assert use.text() == "Usar"
+    assert use.text() == "Uso bloqueado"
+    assert not use.isEnabled()
+    assert not page.prepare_button.isEnabled()
     selected = []
     page.action_selected.connect(lambda action: selected.append(action.id))
     use.click()
-    assert selected == ["ai.proxies-ensure-qwen"]
+    assert selected == []
 
 
 def test_proxies_page_hides_ports_in_simple_mode(proxies_page):
@@ -173,7 +179,7 @@ def test_proxies_page_hides_ports_in_simple_mode(proxies_page):
     assert not port.isHidden()
 
 
-def test_ready_qwen_button_opens_opencode(proxies_page):
+def test_unbound_proxy_consumer_use_and_ide_sync_are_blocked(proxies_page):
     page, _actions = proxies_page
     page._apply_proxies({
         "qwenproxy": ProxyState(
@@ -187,12 +193,25 @@ def test_ready_qwen_button_opens_opencode(proxies_page):
     })
     qwen_use = page._cards["qwenproxy"]["use"]
     mimo_use = page._cards["mimo-ai-proxy"]["use"]
-    assert qwen_use.text() == "Abrir no OpenCode"
-    assert mimo_use.text() == "Conectar conta"
-    selected = []
-    page.action_selected.connect(lambda action: selected.append(action.id))
-    qwen_use.click()
-    assert selected == ["ai.proxies-open-qwen"]
+    assert not qwen_use.isEnabled()
+    assert not mimo_use.isEnabled()
+    assert "grant por conexão" in qwen_use.toolTip()
+    with patch.object(page, "run_action") as run_action:
+        page._on_use_clicked("qwenproxy")
+        page._on_use_clicked("mimo-ai-proxy")
+        run_action.assert_not_called()
+    ide_setup = next(
+        button for button in page.findChildren(QPushButton)
+        if button.text() == "Uso por IDE bloqueado"
+    )
+    assert not ide_setup.isEnabled()
+    assert "grant por conexão" in ide_setup.toolTip()
+    for action_id in (
+        "ai.proxies-start-all", "ai.proxies-test", "ai.proxies-credentials-mimo",
+        "ai.proxies.restart-one", "ai.proxies.test-one",
+    ):
+        blocked = page._action_button(action_id, "Blocked action")
+        assert blocked is not None and not blocked.isEnabled()
 
 
 def test_proxies_page_translates_status_into_human_copy(proxies_page):
@@ -277,26 +296,6 @@ def test_auth_probe_failure_does_not_render_zero_accounts(proxies_page):
     assert "Verificação parcial" in page.auth_summary.text()
     assert "contas não informadas" in page.auth_summary.text()
     assert "Status indisponível" in page._auth_group_labels["providers"].text()
-
-
-def test_mimo_credentials_continue_to_opencode_automatically(
-    proxies_page, monkeypatch,
-):
-    page, _actions = proxies_page
-    monkeypatch.setattr(MimoTokenDialog, "exec", lambda _self: MimoTokenDialog.Accepted)
-    monkeypatch.setattr(MimoTokenDialog, "payload", lambda _self: {
-        "apiKey": "sk-secret-value", "baseUrl": "https://api.xiaomimimo.com/v1",
-        "model": "mimo-v2.5-pro",
-    })
-    monkeypatch.setattr(
-        "linux.ui_native.pages.ai_proxies.QDesktopServices.openUrl", lambda _url: True,
-    )
-    queued = []
-    page.actions_requested.connect(
-        lambda actions: queued.append([action.id for action in actions])
-    )
-    page._connect_mimo()
-    assert queued == [["ai.proxies-credentials-mimo", "ai.proxies-open-mimo"]]
 
 
 def test_interrupted_operation_can_retry_only_through_confirmation_flow(

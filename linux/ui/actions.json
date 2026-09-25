@@ -2619,6 +2619,28 @@
       "plan_command": "linux/pz ai status"
     },
     {
+      "name": "ai.webui-status",
+      "label": "Status Open WebUI",
+      "command": "linux/pz ai webui status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.webui-open",
+      "label": "Abrir Open WebUI",
+      "command": "linux/pz ai webui open",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "ai.usagebar",
       "label": "Instalar UsageBar",
       "command": "linux/pz ai setup usagebar",
@@ -2828,7 +2850,7 @@
     },
     {
       "name": "ai.9router-secrets",
-      "label": "Sincronizar contas de IA",
+      "label": "Importação de credenciais bloqueada",
       "command": "linux/pz ai 9router provider sync-secrets",
       "mutable": true,
       "require_plan": true,
@@ -2840,7 +2862,7 @@
     },
     {
       "name": "ai.9router-combos",
-      "label": "Criar rotas prontas",
+      "label": "Combos com fallback bloqueados",
       "command": "linux/pz ai 9router combo sync",
       "mutable": true,
       "require_plan": true,
@@ -2863,7 +2885,7 @@
     },
     {
       "name": "ai.9router-client",
-      "label": "Integrar clientes 9Router",
+      "label": "Uso de clientes 9Router bloqueado",
       "command": "linux/pz ai 9router client status",
       "mutable": false,
       "require_plan": false,
@@ -3147,7 +3169,7 @@
     },
     {
       "name": "ai.proxies-ensure-kimi",
-      "label": "Usar Kimi",
+      "label": "Uso bloqueado — Kimi",
       "command": "linux/pz ai proxies ensure kimiproxy",
       "mutable": true,
       "require_plan": true,
@@ -3159,7 +3181,7 @@
     },
     {
       "name": "ai.proxies-ensure-qwen",
-      "label": "Usar Qwen",
+      "label": "Uso bloqueado — Qwen",
       "command": "linux/pz ai proxies ensure qwenproxy",
       "mutable": true,
       "require_plan": true,
@@ -3171,7 +3193,7 @@
     },
     {
       "name": "ai.proxies-ensure-deeps",
-      "label": "Usar DeepSeek",
+      "label": "Uso bloqueado — DeepSeek",
       "command": "linux/pz ai proxies ensure deepsproxy",
       "mutable": true,
       "require_plan": true,
@@ -3183,7 +3205,7 @@
     },
     {
       "name": "ai.proxies-ensure-mimo",
-      "label": "Usar Mimo",
+      "label": "Uso bloqueado — MiMo",
       "command": "linux/pz ai proxies ensure mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
@@ -3195,7 +3217,7 @@
     },
     {
       "name": "ai.proxies-ensure-all",
-      "label": "Preparar todos os proxies",
+      "label": "Uso bloqueado — todos os proxies",
       "command": "linux/pz ai proxies ensure all",
       "mutable": true,
       "require_plan": true,
@@ -3207,7 +3229,7 @@
     },
     {
       "name": "ai.proxies-open-kimi",
-      "label": "Abrir Kimi no OpenCode",
+      "label": "Uso no OpenCode bloqueado — Kimi",
       "command": "linux/pz ai proxies open kimiproxy",
       "mutable": false,
       "require_plan": false,
@@ -3218,7 +3240,7 @@
     },
     {
       "name": "ai.proxies-open-qwen",
-      "label": "Abrir Qwen no OpenCode",
+      "label": "Uso no OpenCode bloqueado — Qwen",
       "command": "linux/pz ai proxies open qwenproxy",
       "mutable": false,
       "require_plan": false,
@@ -3229,7 +3251,7 @@
     },
     {
       "name": "ai.proxies-open-deeps",
-      "label": "Abrir DeepSeek no OpenCode",
+      "label": "Uso no OpenCode bloqueado — DeepSeek",
       "command": "linux/pz ai proxies open deepsproxy",
       "mutable": false,
       "require_plan": false,
@@ -3240,7 +3262,7 @@
     },
     {
       "name": "ai.proxies-open-mimo",
-      "label": "Abrir Mimo no OpenCode",
+      "label": "Uso no OpenCode bloqueado — MiMo",
       "command": "linux/pz ai proxies open mimo-ai-proxy",
       "mutable": false,
       "require_plan": false,
@@ -3262,7 +3284,7 @@
     },
     {
       "name": "ai.proxies-ides",
-      "label": "Configurar IDEs (proxies)",
+      "label": "Uso por IDE bloqueado",
       "command": "linux/pz ai proxies configure-ides",
       "mutable": true,
       "require_plan": true,
@@ -3437,7 +3459,7 @@
     },
     {
       "name": "ai.proxies-test",
-      "label": "Testar proxies IA",
+      "label": "Teste de inferência bloqueado",
       "command": "linux/pz ai proxies test",
       "mutable": false,
       "require_plan": false,
@@ -3448,7 +3470,7 @@
     },
     {
       "name": "ai.proxies-start-all",
-      "label": "Iniciar todos os proxies",
+      "label": "Inicialização bloqueada",
       "command": "linux/pz ai proxies start all",
       "mutable": true,
       "require_plan": true,
@@ -3460,7 +3482,7 @@
     },
     {
       "name": "ai.proxies-start-kimi",
-      "label": "Iniciar Kimi",
+      "label": "Inicialização bloqueada — Kimi",
       "command": "linux/pz ai proxies start kimiproxy",
       "mutable": true,
       "require_plan": true,
@@ -3472,7 +3494,7 @@
     },
     {
       "name": "ai.proxies-start-qwen",
-      "label": "Iniciar Qwen",
+      "label": "Inicialização bloqueada — Qwen",
       "command": "linux/pz ai proxies start qwenproxy",
       "mutable": true,
       "require_plan": true,
@@ -3484,7 +3506,7 @@
     },
     {
       "name": "ai.proxies-start-deeps",
-      "label": "Iniciar DeepSeek",
+      "label": "Inicialização bloqueada — DeepSeek",
       "command": "linux/pz ai proxies start deepsproxy",
       "mutable": true,
       "require_plan": true,
@@ -3496,7 +3518,7 @@
     },
     {
       "name": "ai.proxies-start-mimo",
-      "label": "Iniciar Mimo",
+      "label": "Inicialização bloqueada — MiMo",
       "command": "linux/pz ai proxies start mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
@@ -3507,8 +3529,52 @@
       "plan_command": "linux/pz ai proxies status"
     },
     {
+      "name": "ai.proxies-kimi-status",
+      "label": "Status Kimi",
+      "command": "linux/pz ai proxies product-status kimiproxy",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Proxies IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.proxies-qwen-status",
+      "label": "Status Qwen",
+      "command": "linux/pz ai proxies product-status qwenproxy",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Proxies IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.proxies-deeps-status",
+      "label": "Status DeepSeek",
+      "command": "linux/pz ai proxies product-status deepsproxy",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Proxies IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.proxies-mimo-status",
+      "label": "Status MiMo",
+      "command": "linux/pz ai proxies product-status mimo-ai-proxy",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Proxies IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "ai.proxies-credentials-mimo",
-      "label": "Salvar chave oficial MiMo",
+      "label": "Salvar chave MiMo bloqueado",
       "command": "linux/pz ai proxies set-credentials mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
@@ -4587,7 +4653,7 @@
     },
     {
       "name": "ai.proxies.restart-one",
-      "label": "Reiniciar proxy",
+      "label": "Reinício bloqueado",
       "command": "linux/pz ai proxies restart {proxy}",
       "mutable": true,
       "require_plan": true,
@@ -4599,7 +4665,7 @@
     },
     {
       "name": "ai.proxies.test-one",
-      "label": "Testar proxy específico",
+      "label": "Probe bloqueado",
       "command": "linux/pz ai proxies test {proxy}",
       "mutable": false,
       "require_plan": false,
@@ -4907,6 +4973,78 @@
       "input_kind": "",
       "input_label": "",
       "plan_command": "linux/pz capabilities rollback --operation-id {operation_id} --confirm {confirm} --dry-run"
+    },
+    {
+      "name": "capability.profile.development-web-js",
+      "label": "Development Web Js",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-web-js"
+    },
+    {
+      "name": "capability.profile.development-python",
+      "label": "Development Python",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-python"
+    },
+    {
+      "name": "capability.profile.development-rust",
+      "label": "Development Rust",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-rust"
+    },
+    {
+      "name": "capability.profile.development-c-cpp",
+      "label": "Development C Cpp",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-c-cpp"
+    },
+    {
+      "name": "capability.profile.development-java",
+      "label": "Development Java",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-java"
+    },
+    {
+      "name": "capability.profile.development-dotnet",
+      "label": "Development Dotnet",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile development-dotnet"
     },
     {
       "name": "capability.profile.gaming-core",
@@ -5425,6 +5563,18 @@
       "plan_command": "linux/pz capabilities plan --capability health.iwd"
     },
     {
+      "name": "capability.plan.health.wpa-supplicant",
+      "label": "wpa_supplicant",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.wpa-supplicant"
+    },
+    {
       "name": "capability.plan.security.apparmor",
       "label": "AppArmor",
       "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
@@ -5615,6 +5765,42 @@
       "input_kind": "",
       "input_label": "",
       "plan_command": "linux/pz capabilities plan --capability development.kind"
+    },
+    {
+      "name": "capability.plan.development.nodejs",
+      "label": "Node.js",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.nodejs"
+    },
+    {
+      "name": "capability.plan.development.rust",
+      "label": "Rust",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.rust"
+    },
+    {
+      "name": "capability.plan.development.cpp",
+      "label": "Compilador C/C++",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.cpp"
     },
     {
       "name": "capability.plan.development.dotnet",
