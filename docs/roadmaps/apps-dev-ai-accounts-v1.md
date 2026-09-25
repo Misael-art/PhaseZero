@@ -558,3 +558,15 @@ gateway offline sem rota de configuração oferece Doctor read-only. Odysseus no
 real observada e só oferece `ai.odysseus-open` após instalação/configuração/saúde online;
 origem permanece unknown. `test_product_inventory.py`: 2 passaram; `test_product_registry_ui.py`
 nos fluxos 9Router/Odysseus: 3 passaram. Nenhum probe de conta, gateway ou container real.
+
+PXA-003 bypass de ownership no detalhe: `ai.proxies-start-qwen` e controles vizinhos
+continuavam na seção avançada mesmo quando instância externa bloqueava Resolver; status
+desconhecido também expunha algumas rotas mutáveis antes do probe. Filtro agora exige origem
+e manager `phasezero-ai-proxy-suite` para ensure/start/stop/login, exige estado/autoridade
+para instalação e recovery mapeados, e deixa diagnóstico read-only visível. Teste primeiro
+falhou provando `ai.proxies-start-qwen` presente com CTA desabilitado; helper passou a contar
+botões da seção avançada além de `ActionListRow`. Fluxo antigo `server.llm` ainda preserva
+contexto; após status absent, action fica acessível. Suíte completa `tests/test_product_registry_ui.py`:
+26 passou; `git diff --check` passou. Commit `a64a453`. Fixtures não iniciaram processos,
+serviços nem contas. PXA-003 segue `in_progress`; rotas remotas e IDs múltiplos no mesmo
+escopo continuam sem executor contextual.
