@@ -50,8 +50,21 @@ class Quota:
     observed_at: str = ""
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.dimension, str) or not self.dimension.strip()
+            or not isinstance(self.unit, str) or not self.unit.strip()
+        ):
+            raise ValueError("quota requires dimension and unit")
         if self.source not in {"official", "local_estimate", "unknown"}:
             raise ValueError("invalid quota source")
+        for name, value in (("observed_at", self.observed_at), ("reset_at", self.reset_at)):
+            if value:
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid quota {name}") from exc
+                if parsed.tzinfo is None:
+                    raise ValueError(f"invalid quota {name}: timezone required")
         if self.remaining is not None and self.remaining < 0:
             raise ValueError("negative quota")
         if self.total is not None and self.total < 0:
