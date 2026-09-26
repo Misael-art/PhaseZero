@@ -1359,3 +1359,15 @@ de provider por API key e filtragem no seletor de credenciais, continua aberto. 
 tratar proposta como recurso lançado nem habilitar consumidores via 9Router até
 versão suportada e teste de request provarem vínculo exato e ausência de fallback.
 Gate PhaseZero permanece fail-closed; execução por consumidor segue pendente.
+
+PXA-007 acessibilidade Contas — commit f753511, 2026-09-26: status de atualização de
+contas e operação do cofre agora recebe `QAccessibleAnnouncementEvent` polido quando
+acessibilidade Qt está ativa; labels têm nomes explícitos. Mensagens não incluem conta,
+apelido ou segredo. Qt oferece esse evento desde 6.8; runtime local é PySide6/Qt 6.11.2.
+[Documentação Qt](https://doc.qt.io/qt-6/qaccessibleannouncementevent.html).
+Regressão hermética de Contas, contrato, grants e sessão: 77 passaram em 19,75 s;
+`py_compile` e `git diff --check` passaram. Teste verifica nomes e descrições da árvore
+acessível, máscara de identidade e eventos de progresso/resultado/falha do cofre. Ruff
+indisponível (`No module named ruff`). Limite: QAccessible foi simulado em Qt offscreen;
+nenhum leitor de tela ou anúncio falado foi verificado. PXA-007/G4 segue aberto para
+revisão com leitor de tela, conta real e participantes.
