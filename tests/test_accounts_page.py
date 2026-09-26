@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from PySide6 import QtGui
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
+from PySide6.QtGui import QAccessible
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QLineEdit, QPushButton, QRadioButton, QWidget,
@@ -216,6 +218,50 @@ def test_accounts_page_records_per_probe_local_observation_time(
         host_patcher.stop()
 
 
+def test_account_refresh_announces_progress_and_final_status_accessibly(
+    qapp, tmp_path, monkeypatch,
+):
+    announcement_type = getattr(QtGui, "QAccessibleAnnouncementEvent", None)
+    if announcement_type is None:
+        pytest.skip("Qt announcement events require Qt 6.8 or newer")
+
+    events = []
+    monkeypatch.setattr(QAccessible, "isActive", staticmethod(lambda: True))
+    monkeypatch.setattr(QAccessible, "updateAccessibility", staticmethod(events.append))
+    window, host_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Contas e conexões")
+        assert page.summary.accessibleName() == "Status das contas e conexões"
+        summary_accessible = QAccessible.queryAccessibleInterface(page.summary)
+        assert summary_accessible.text(QAccessible.Text.Name) == "Status das contas e conexões"
+        calls = []
+        monkeypatch.setattr(
+            page.status_loader, "fetch",
+            lambda action_id, args: calls.append((action_id, args)),
+        )
+
+        page.refresh_accounts()
+        assert len(events) == 1
+        assert events[0].message() == "Verificando provedores disponíveis…"
+        assert events[0].politeness() == QAccessible.AnnouncementPoliteness.Polite
+
+        probe_ids = [action_id for action_id, _args in calls]
+        assert len(probe_ids) == 4
+        for probe_id in probe_ids[:-1]:
+            page.status_loader.status_failed.emit(probe_id, "unavailable")
+        assert len(events) == 1
+
+        page.status_loader.status_failed.emit(probe_ids[-1], "unavailable")
+        assert len(events) == 2
+        assert isinstance(events[-1], announcement_type)
+        assert events[-1].message() == page.summary.text()
+        assert events[-1].message().startswith("Consulta parcial")
+        assert events[-1].politeness() == QAccessible.AnnouncementPoliteness.Polite
+    finally:
+        window.close()
+        host_patcher.stop()
+
+
 def test_account_screen_labels_expired_evidence_explicitly():
     positive = Evidence("yes", "fixture")
     expired = Evidence("no", "fixture", error="expired")
@@ -391,7 +437,28 @@ def test_accounts_privacy_toggle_masks_identity_and_persists(qapp, tmp_path, mon
         assert all(button.accessibleName() in {
             "Selecionar Conta 1 (openai)", "Selecionar Conta 2 (openai)",
         } for button in page.findChildren(QRadioButton))
+        radio_names = [
+            QAccessible.queryAccessibleInterface(button).text(QAccessible.Text.Name)
+            for button in page.findChildren(QRadioButton)
+        ]
+        assert set(radio_names) == {
+            "Selecionar Conta 1 (openai)", "Selecionar Conta 2 (openai)",
+        }
         assert all(label.text() == "?" for label in page.findChildren(QLabel, "accountAvatarInitials"))
+        accessible_text = " ".join(
+            " ".join(
+                (
+                    interface.text(QAccessible.Text.Name),
+                    interface.text(QAccessible.Text.Description),
+                )
+            )
+            for widget in page.findChildren(QWidget)
+            if (interface := QAccessible.queryAccessibleInterface(widget)) is not None
+        )
+        assert "Private Account" not in accessible_text
+        assert "Second Identity" not in accessible_text
+        assert "sensitive-workspace" not in accessible_text
+        assert "second-workspace" not in accessible_text
         rendered_text = " ".join(
             widget.text() + " " + widget.accessibleName()
             for widget in page.findChildren(QWidget)
@@ -538,6 +605,12 @@ def _submit_api_credential(qapp, page, *, secret="secret-value-for-test"):
 def test_public_credential_flow_uses_secure_vault_without_connecting_or_granting(
     qapp, tmp_path, monkeypatch,
 ):
+    announcement_type = getattr(QtGui, "QAccessibleAnnouncementEvent", None)
+    if announcement_type is None:
+        pytest.skip("Qt announcement events require Qt 6.8 or newer")
+    events = []
+    monkeypatch.setattr(QAccessible, "isActive", staticmethod(lambda: True))
+    monkeypatch.setattr(QAccessible, "updateAccessibility", staticmethod(events.append))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     window, host_patcher = _window(qapp)
     try:
@@ -545,8 +618,18 @@ def test_public_credential_flow_uses_secure_vault_without_connecting_or_granting
         secure_store = FakeCredentialStore()
         credential_path = tmp_path / "credential-fixture" / "credentials.json"
         page.credential_vault = CredentialVault(credential_path, secure_store)
+        credential_status = page.findChild(QLabel, "credentialVaultStatus")
+        status_accessible = QAccessible.queryAccessibleInterface(credential_status)
+        assert status_accessible.text(QAccessible.Text.Name) == "Status do cofre de credenciais"
 
         _submit_api_credential(qapp, page)
+
+        assert [event.message() for event in events] == [
+            "Aguardando resposta do cofre seguro…",
+            page.findChild(QLabel, "credentialVaultStatus").text(),
+        ]
+        assert all(isinstance(event, announcement_type) for event in events)
+        assert all(event.politeness() == QAccessible.AnnouncementPoliteness.Polite for event in events)
 
         assert len(page.credential_vault.entries) == 1
         entry = page.credential_vault.entries[0]
@@ -579,6 +662,9 @@ def test_public_credential_flow_uses_secure_vault_without_connecting_or_granting
             qapp.processEvents()
             QTest.qWait(10)
         assert not page._credential_busy
+        assert len(events) == 4
+        assert all("secret-value-for-test" not in event.message() for event in events)
+        assert all("Conta particular" not in event.message() for event in events)
         assert page.credential_vault.entries == ()
         assert secure_store.values == {}
         assert "não foi revogada" in page.findChild(QLabel, "credentialVaultStatus").text()
@@ -587,7 +673,15 @@ def test_public_credential_flow_uses_secure_vault_without_connecting_or_granting
         host_patcher.stop()
 
 
-def test_credential_ui_fails_closed_when_secure_store_is_unavailable(qapp, tmp_path):
+def test_credential_ui_fails_closed_when_secure_store_is_unavailable(
+    qapp, tmp_path, monkeypatch,
+):
+    announcement_type = getattr(QtGui, "QAccessibleAnnouncementEvent", None)
+    if announcement_type is None:
+        pytest.skip("Qt announcement events require Qt 6.8 or newer")
+    events = []
+    monkeypatch.setattr(QAccessible, "isActive", staticmethod(lambda: True))
+    monkeypatch.setattr(QAccessible, "updateAccessibility", staticmethod(events.append))
     window, host_patcher = _window(qapp)
     try:
         page = window.registry.page_for("Contas e conexões")
@@ -607,6 +701,10 @@ def test_credential_ui_fails_closed_when_secure_store_is_unavailable(qapp, tmp_p
         assert "Gravação incerta" in page.findChild(
             QLabel, "credentialVaultStatus",
         ).text()
+        assert len(events) == 2
+        assert isinstance(events[-1], announcement_type)
+        assert "Gravação incerta" in events[-1].message()
+        assert "never-display-this-secret" not in events[-1].message()
         assert "referência mantida para limpeza" in page.findChild(
             QLabel, "storedApiCredentialState",
         ).text()
@@ -619,6 +717,8 @@ def test_credential_ui_fails_closed_when_secure_store_is_unavailable(qapp, tmp_p
             qapp.processEvents()
             QTest.qWait(10)
         assert not page._credential_busy
+        assert len(events) == 4
+        assert all("never-display-this-secret" not in event.message() for event in events)
         assert page.credential_vault.entries == ()
         assert json.loads(credential_path.read_text(encoding="utf-8"))["credentials"] == []
         assert secure_store.values == {}

@@ -37,6 +37,17 @@ _CONSUMER_LABELS = {
 }
 
 
+def _announce_accessible(widget: QWidget | None, message: str) -> None:
+    if widget is None or not message:
+        return
+    try:
+        from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+    except ImportError:
+        return
+    if QAccessible.isActive():
+        QAccessible.updateAccessibility(QAccessibleAnnouncementEvent(widget, message))
+
+
 @dataclass(frozen=True)
 class AccountChannel:
     channel_id: str
@@ -312,6 +323,7 @@ class AccountsPage(BasePage):
         row = QHBoxLayout()
         self.summary = QLabel("Ainda não verificado")
         self.summary.setObjectName("accountsSummary")
+        self.summary.setAccessibleName("Status das contas e conexões")
         row.addWidget(self.summary, 1)
         refresh = QPushButton("Atualizar status")
         refresh.setObjectName("refreshAccounts")
@@ -338,6 +350,7 @@ class AccountsPage(BasePage):
         layout.addWidget(self._add_credential_button)
         self._credential_status = QLabel("")
         self._credential_status.setObjectName("credentialVaultStatus")
+        self._credential_status.setAccessibleName("Status do cofre de credenciais")
         self._credential_status.setWordWrap(True)
         layout.addWidget(self._credential_status)
         credentials = QWidget()
@@ -388,6 +401,7 @@ class AccountsPage(BasePage):
             self._add_credential_button.setEnabled(False)
         if self._credential_status is not None:
             self._credential_status.setText("Aguardando resposta do cofre seguro…")
+            _announce_accessible(self._credential_status, self._credential_status.text())
         worker = _CredentialWorker(self.credential_vault, operation, values)
         worker.signals.finished.connect(self._credential_operation_finished)
         self._credential_worker = worker
@@ -435,6 +449,7 @@ class AccountsPage(BasePage):
             else:
                 message = "Referência local removida; a chave do provedor não foi revogada."
             self._credential_status.setText(message)
+            _announce_accessible(self._credential_status, message)
         self._render_credentials()
 
     def _render_credentials(self) -> None:
@@ -540,6 +555,7 @@ class AccountsPage(BasePage):
         self._outcomes = {source: "loading" for source in _SOURCES}
         if self.summary is not None:
             self.summary.setText("Verificando provedores disponíveis…")
+            _announce_accessible(self.summary, self.summary.text())
         commands = {
             "claude": ["ai", "claude", "status"],
             "proxies": ["ai", "proxies", "detailed-status"],
@@ -620,6 +636,7 @@ class AccountsPage(BasePage):
                 )
             else:
                 self.summary.setText(f"Consulta concluída · {len(self._accounts)} registros conhecidos")
+            _announce_accessible(self.summary, self.summary.text())
 
     def _render_cards(self) -> None:
         if self._cards_layout is None:
