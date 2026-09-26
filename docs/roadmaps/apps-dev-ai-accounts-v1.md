@@ -1416,3 +1416,12 @@ há duplicatas no mesmo host/escopo, pois managers ainda não aceitam a chave da
 61 passaram em 18,56 s; `py_compile` e `git diff --check` passaram. Caso usa payload fixture;
 nenhum manager ou host remoto foi executado. PXA-003 continua `in_progress` até executor
 vincular operações à instância selecionada; PXA-006/G3 segue externo.
+
+PXA-002/PXA-003 abertura de desktop sem falso estado saudável — commit `9405a37`,
+2026-09-26: `ProductInstance.launchable` separa aptidão de lançamento de saúde runtime;
+health permanece `unknown`. Adaptador só declara Claude/Qwen gerenciados launchable quando
+launcher e entrada XDG necessários estão presentes; manifest guarda IDs `.desktop` exatos.
+CTA “Abrir” usa `gio launch` depois do clique explícito. Regressão inventário, loader e UI:
+64 passaram em 19,16 s; `py_compile` e `git diff --check` passaram. QProcess foi mockado;
+nenhum app, manager, serviço, sessão ou host remoto iniciou. Instalações externas continuam
+`unknown` sem probe compatível; PXA-003 segue `in_progress` e PXA-006/G3 segue gate externo.
