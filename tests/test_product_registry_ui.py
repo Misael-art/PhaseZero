@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -858,11 +859,23 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
         primary = page.findChild(QPushButton, "productPrimaryAction")
         assert selector is not None and refresh is not None and primary is not None
         viewport = QRect(window.mapToGlobal(QPoint(0, 0)), window.size())
-        screen_width = qapp.primaryScreen().availableGeometry().width()
+        screen = qapp.primaryScreen().availableGeometry()
+        screen_width = screen.width()
+        require_hit_test = os.environ.get("PZ_REQUIRE_UI_HIT_TEST") == "1"
+        if require_hit_test:
+            assert screen.width() == int(os.environ["PZ_EXPECT_QSCREEN_WIDTH"])
+            assert screen.height() == int(os.environ["PZ_EXPECT_QSCREEN_HEIGHT"])
+            assert window.devicePixelRatioF() == pytest.approx(
+                float(os.environ["PZ_EXPECT_DEVICE_SCALE"]), abs=0.01,
+            )
         for widget in (selector, refresh, primary):
             rect = QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
             assert widget.isVisible() and not widget.visibleRegion().isEmpty()
             assert viewport.contains(rect)
+            if require_hit_test:
+                assert width <= screen_width, (
+                    f"screen width {screen_width} cannot hit-test {width}px viewport"
+                )
             if width <= screen_width:
                 hit = qapp.widgetAt(widget.mapToGlobal(widget.rect().center()))
                 assert hit is widget or (hit is not None and widget.isAncestorOf(hit))
