@@ -1327,11 +1327,21 @@ no processo filho. Follow-up abaixo substitui a fixture de resposta.
 
 PXA-005 integração UI/engine G1 — commit 3d70d50, 2026-09-26: jornada pública agora
 lança CLI real por QProcess; CLI chama parser, plano e apply reais com FakeProvider
-persistentemente isolado em `tmp_path`. Node instala; primeira tentativa de pnpm falha;
+com estado persistente em `tmp_path`. Node instala; primeira tentativa de pnpm falha;
 retry recebe plano/token novos, pula Node e conclui pnpm; validação lê estado fake. Foram
 133 testes na regressão focal; py_compile e `git diff --check` passaram. Nenhum gerenciador
 de pacotes, serviço ou estado real do host foi acionado. Evidência G1; PXA-005 e G2 seguem
 abertos.
+
+PXA-005 cancelamento cooperativo UI/engine G1 — commit 91891bf, 2026-09-26:
+`test_development_cancel.py` mantém os botões públicos e QProcess, mas agora invoca
+`capabilities apply` e `engine.apply_plan` reais com HostFacts e FakeProvider. Cancelamento
+solicitado durante etapa Node.js aguarda o filho fake terminar; engine registra Node como
+instalado, não executa pnpm, devolve status `cancelled`/exit 130, mantém ledger retomável e
+limpa arquivo de cancelamento. Estado/eventos ficam sob `tmp_path`; nenhum package manager
+real é chamado. Em conjunto, cancelamento QProcess, retomada do engine e jornada pública:
+3 testes passaram em 9,84 s; py_compile e `git diff --check` passaram. Evidência G1;
+cancelamento com pacman e G2 continuam pendentes.
 
 Reavaliação Windows G2 solicitada pelo operador — 2026-09-26, ~10:36 -03:00:
 **não realizada**. Host com 14 GiB RAM, 3,4 GiB disponíveis, swap usada 7,7 GiB,
