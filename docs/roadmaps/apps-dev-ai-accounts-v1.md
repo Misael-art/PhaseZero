@@ -1406,3 +1406,13 @@ deixam risco concreto de pressionar trabalhos do host. ISO
 anterior (8.172.068.864 bytes): sem hash, leitura de conteúdo, montagem ou boot. Nenhum
 processo foi interrompido. Retomar G2 apenas com folga confirmada e snapshot descartável,
 conforme roadmap WinVM.
+
+PXA-003 instâncias no mesmo host/escopo — commit `63964d2`, 2026-09-26: adaptador
+read-only agora aceita envelope `instances[]` com `instanceKey` ASCII validada e cria IDs
+estáveis por chave; host e escopo continuam presos ao contexto solicitado, sem aceitar
+sobrescrita do payload. UI mostra cada estado no seletor, mas mantém ações bloqueadas quando
+há duplicatas no mesmo host/escopo, pois managers ainda não aceitam a chave da instância.
+`test_product_inventory.py`, `test_product_status_loader.py` e `test_product_registry_ui.py`:
+61 passaram em 18,56 s; `py_compile` e `git diff --check` passaram. Caso usa payload fixture;
+nenhum manager ou host remoto foi executado. PXA-003 continua `in_progress` até executor
+vincular operações à instância selecionada; PXA-006/G3 segue externo.
