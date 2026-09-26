@@ -96,6 +96,23 @@ def test_openclaw_setup_is_not_offered_without_request_bound_grants():
     assert "openclaw" not in actions["ai.setup.tool"].parameters[0].choices
 
 
+def test_experimental_chatgpt_codex_bridge_stays_unlisted_until_all_gates_pass():
+    catalog = build_catalog(ROOT)
+    payload = inventory_manifest(ROOT)
+    public_surface = json.dumps({
+        "actions": [
+            {"id": item.id, "title": item.title, "description": item.description,
+             "args": item.args}
+            for item in catalog
+        ],
+        "products": payload["products"],
+    }, ensure_ascii=False).casefold()
+
+    assert "codex-chatgpt-web" not in public_surface
+    assert "chatgpt no codex" not in public_surface
+    assert "ai.desktop.codex.status" in {item.id for item in catalog}
+
+
 def test_every_non_capability_app_has_an_explicit_product_status_probe():
     actions = {action.id: action for action in build_catalog(ROOT)}
     payload = inventory_manifest(ROOT)
