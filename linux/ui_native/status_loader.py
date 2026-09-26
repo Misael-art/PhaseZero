@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
@@ -43,12 +46,57 @@ def report_outcome(stdout: str, stderr: str, exit_code: int) -> tuple[str, objec
     return "ready", parsed, ""
 
 _DEFAULT_TIMEOUT_MS = 15_000
+_REMOTE_PRODUCT_STATUS_SLUGS = {
+    "app.ai-memory": "ai-memory",
+    "app.usagebar": "usagebar",
+    "app.claude-desktop": "claude-desktop",
+    "app.codex-desktop": "codex-desktop",
+    "app.qwen-code-desktop": "qwen-code-desktop",
+}
+_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_HOST_ID = re.compile(r"^hlh-[0-9a-f]{12}$")
+_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _ACTION_TIMEOUT_MS = {
     # Windows status includes bounded libvirt, Samba, disk and boot probes.
     # Slower storage/daemon recovery can legitimately exceed the generic UI
     # budget without meaning that the VM state is unavailable.
     "windows.status": 45_000,
 }
+
+
+def remote_product_status_slug(action: ActionSpec, app_id: str) -> str | None:
+    """Return a fixed read-only remote route only for reviewed product probes."""
+    slug = _REMOTE_PRODUCT_STATUS_SLUGS.get(app_id)
+    if (
+        slug is None or action.mutable
+        or tuple(action.status_args) != ("ai", "product-status", slug)
+    ):
+        return None
+    return slug
+
+
+def validate_remote_product_status(payload: object, expected_alias: str) -> dict[str, object]:
+    """Unwrap only a successful JSON envelope for the selected Homelab alias."""
+    if (
+        not isinstance(payload, dict) or not isinstance(expected_alias, str)
+        or not _HOST_ALIAS.fullmatch(expected_alias)
+    ):
+        raise ValueError("remote status envelope unavailable")
+    schema_version = payload.get("schemaVersion")
+    if (
+        not ((type(schema_version) is str and schema_version == "1")
+             or (type(schema_version) is int and schema_version == 1))
+        or payload.get("tool") != "homelab-hosts"
+        or payload.get("action") != "exec"
+        or payload.get("hostAlias") != expected_alias
+        or type(payload.get("rc")) is not int
+        or payload.get("rc") != 0
+        or not isinstance(payload.get("remoteVersion"), str)
+        or _VERSION.fullmatch(str(payload.get("remoteVersion"))) is None
+        or not isinstance(payload.get("payload"), dict)
+    ):
+        raise ValueError("remote status did not match selected Homelab host")
+    return payload["payload"]
 
 
 class StatusLoader(QObject):
@@ -66,7 +114,7 @@ class StatusLoader(QObject):
         super().__init__(parent)
         self.root = root
         self._processes: dict[str, QProcess] = {}
-        self._product_contexts: dict[str, tuple[str, str, str, str]] = {}
+        self._product_contexts: dict[str, tuple[str, str, str, str, str | None]] = {}
 
     def _pz_path(self) -> Path:
         return self.root / "linux" / "pz"
@@ -113,6 +161,7 @@ class StatusLoader(QObject):
         host_id: str,
         scope: str,
         instance_key: str = "default",
+        remote_alias: str | None = None,
     ) -> None:
         """Fetch a read-only status action and publish normalized instance state."""
         if action.mutable:
@@ -127,7 +176,7 @@ class StatusLoader(QObject):
         if not action.status_args:
             self.status_failed.emit(action.id, "product status requires explicit read-only arguments")
             return
-        if host_id != "local":
+        if remote_alias is None and host_id != "local":
             self.status_failed.emit(
                 action.id, "remote product status requires a host-bound executor",
             )
@@ -136,11 +185,26 @@ class StatusLoader(QObject):
         if any(token.startswith("{") and token.endswith("}") for token in args):
             self.status_failed.emit(action.id, "status requires parameters")
             return
+        if remote_alias is not None:
+            slug = remote_product_status_slug(action, app_id)
+            expected_host_id = (
+                "hlh-" + hashlib.sha256(remote_alias.encode("utf-8")).hexdigest()[:12]
+                if isinstance(remote_alias, str) else ""
+            )
+            if (
+                not isinstance(host_id, str) or not _HOST_ID.fullmatch(host_id)
+                or not isinstance(remote_alias, str)
+                or not _HOST_ALIAS.fullmatch(remote_alias) or slug is None
+                or host_id != expected_host_id
+            ):
+                self.status_failed.emit(action.id, "no allowlisted remote product status route")
+                return
+            args = ["server", "homelab", "--host", remote_alias, "product-status", slug]
         # Selection can change while a previous host/account probe is active.
         # Cancel it before replacing context so late output cannot be relabeled.
         if action.id in self._processes or action.id in self._product_contexts:
             self.cancel(action.id)
-        self._product_contexts[action.id] = (app_id, host_id, scope, instance_key)
+        self._product_contexts[action.id] = (app_id, host_id, scope, instance_key, remote_alias)
         self.fetch(action.id, list(args))
 
     def product_instances_from_result(
@@ -150,7 +214,7 @@ class StatusLoader(QObject):
         context = self._product_contexts.pop(action_id, None)
         if context is None:
             return ()
-        app_id, host_id, scope, instance_key = context
+        app_id, host_id, scope, instance_key, _remote_alias = context
         if not isinstance(payload, dict):
             return ()
         if isinstance(payload.get("capabilities"), list):
@@ -192,6 +256,16 @@ class StatusLoader(QObject):
         self._cleanup_process(action_id, process)
         outcome, parsed, message = report_outcome(stdout, stderr, exit_code)
         if outcome == "ready":
+            context = self._product_contexts.get(action_id)
+            remote_alias = context[4] if context is not None else None
+            if remote_alias is not None:
+                try:
+                    parsed = validate_remote_product_status(parsed, remote_alias)
+                    stdout = json.dumps(parsed, separators=(",", ":"))
+                except ValueError as exc:
+                    self._product_contexts.pop(action_id, None)
+                    self.status_failed.emit(action_id, str(exc))
+                    return
             instances = self.product_instances_from_result(action_id, parsed)
             if instances:
                 self.product_instances_ready.emit(action_id, instances)

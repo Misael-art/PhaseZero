@@ -618,6 +618,10 @@ if [[ "$joined" == *"--version"* ]]; then
     echo "PhaseZero Linux v1.17.4 (stable)"
     exit 0
 fi
+if [[ "$joined" == *"ai product-status usagebar"* ]]; then
+    echo '{"schemaVersion":1,"hasStatus":true,"installationState":"unknown","origin":"unknown","configurationState":"unknown","health":"unknown","manager":"phasezero-ai-usagebar","version":"","observedAt":"2026-09-26T00:00:00Z"}'
+    exit 0
+fi
 echo '{"schemaVersion":"1","tool":"homelab-apps","action":"list","apps":[{"key":"jellyfin","enabled":true}]}'
 exit 0
 EOS
@@ -629,6 +633,17 @@ export PZ_HOMELAB_SSH_STUB_LOG="$TMP/ssh.log"
     '.ok == true and .reachable == true and .remoteVersion == "1.17.4"' >/dev/null
 env_out="$("$REPO_ROOT/linux/pz" server homelab --host garage apps list --json)"
 echo "$env_out" | jq -e '.hostAlias == "garage" and .rc == 0 and .payload.action == "list" and (.payload.apps|length) == 1' >/dev/null
+status_env="$("$REPO_ROOT/linux/pz" server homelab --host garage product-status usagebar --json)"
+echo "$status_env" | jq -e '.hostAlias == "garage" and .rc == 0 and .payload.hasStatus == true and .payload.installationState == "unknown" and .remoteVersion == "1.17.4"' >/dev/null
+grep -q '^ai$' "$PZ_HOMELAB_SSH_STUB_LOG"
+grep -q '^product-status$' "$PZ_HOMELAB_SSH_STUB_LOG"
+grep -q '^usagebar$' "$PZ_HOMELAB_SSH_STUB_LOG"
+ssh_arg_count="$(wc -l < "$PZ_HOMELAB_SSH_STUB_LOG")"
+if "$REPO_ROOT/linux/pz" server homelab --host garage product-status unknown-app >/dev/null 2>&1; then
+    echo "FAIL: remote product status allowlist accepted an unknown target"
+    exit 1
+fi
+test "$(wc -l < "$PZ_HOMELAB_SSH_STUB_LOG")" -eq "$ssh_arg_count"
 grep -q 'BatchMode=yes' "$PZ_HOMELAB_SSH_STUB_LOG"
 if echo "$env_out" | rg -q 'BEGIN OPENSSH PRIVATE|password='; then
     echo "FAIL: secret material in remote envelope"

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+from PySide6.QtCore import QProcess
+from PySide6.QtWidgets import QApplication
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from linux.ui_native.models import ActionSpec
-from linux.ui_native.status_loader import StatusLoader
+from linux.ui_native.status_loader import StatusLoader, validate_remote_product_status
 
 
 def test_status_loader_emits_scoped_product_instance(tmp_path):
@@ -58,6 +64,117 @@ def test_status_loader_rejects_remote_host_without_host_bound_executor(tmp_path)
         action.id, "remote product status requires a host-bound executor",
     )]
     assert loader.product_instances_from_result(action.id, {"installed": True}) == ()
+
+
+def test_status_loader_builds_fixed_host_bound_product_status_route(tmp_path):
+    action = ActionSpec(
+        "ai.usagebar-status", "IA & Dev", "Status UsageBar", "",
+        ("ai", "product-status", "usagebar"), "",
+        status_args=("ai", "product-status", "usagebar"),
+    )
+    loader = StatusLoader(tmp_path)
+    host_id = "hlh-" + hashlib.sha256(b"garage").hexdigest()[:12]
+    with patch.object(loader, "fetch") as fetch:
+        loader.fetch_product_status(
+            action, app_id="app.usagebar", host_id=host_id,
+            scope="user", remote_alias="garage",
+        )
+    fetch.assert_called_once_with(action.id, [
+        "server", "homelab", "--host", "garage", "product-status", "usagebar",
+    ])
+    instances = loader.product_instances_from_result(action.id, {
+        "hasStatus": True,
+        "installationState": "unknown",
+        "origin": "unknown",
+        "health": "unknown",
+    })
+    assert len(instances) == 1
+    assert (instances[0].host_id, instances[0].scope) == (host_id, "user")
+
+
+def test_remote_product_status_rejects_unbound_host_id(tmp_path):
+    action = ActionSpec(
+        "ai.usagebar-status", "IA & Dev", "Status UsageBar", "",
+        ("ai", "product-status", "usagebar"), "",
+        status_args=("ai", "product-status", "usagebar"),
+    )
+    loader = StatusLoader(tmp_path)
+    failures = []
+    loader.status_failed.connect(lambda action_id, reason: failures.append((action_id, reason)))
+    with patch.object(loader, "fetch") as fetch:
+        loader.fetch_product_status(
+            action, app_id="app.usagebar", host_id="hlh-a1b2c3d4e5f6",
+            scope="user", remote_alias="garage",
+        )
+    fetch.assert_not_called()
+    assert failures == [(action.id, "no allowlisted remote product status route")]
+
+
+def test_remote_product_status_envelope_must_match_selected_host():
+    payload = {"hasStatus": True, "installationState": "unknown"}
+    envelope = {
+        "schemaVersion": "1", "tool": "homelab-hosts", "action": "exec",
+        "hostAlias": "garage", "rc": 0, "payload": payload,
+        "error": None, "remoteVersion": "1.17.4",
+    }
+    assert validate_remote_product_status(envelope, "garage") == payload
+    for wrong in (
+        {**envelope, "hostAlias": "other"},
+        {**envelope, "rc": 1},
+        {**envelope, "remoteVersion": ""},
+        {**envelope, "payload": None},
+    ):
+        with pytest.raises(ValueError):
+            validate_remote_product_status(wrong, "garage")
+
+
+@pytest.mark.parametrize("actual_alias, succeeds", [("garage", True), ("other", False)])
+def test_qprocess_remote_status_binds_response_to_captured_host(
+    tmp_path, actual_alias, succeeds,
+):
+    _app = QApplication.instance() or QApplication([])
+    action = ActionSpec(
+        "ai.usagebar-status", "IA & Dev", "Status UsageBar", "",
+        ("ai", "product-status", "usagebar"), "",
+        status_args=("ai", "product-status", "usagebar"),
+    )
+    remote_payload = {
+        "hasStatus": True,
+        "installationState": "unknown",
+        "origin": "unknown",
+        "health": "unknown",
+    }
+    envelope = {
+        "schemaVersion": "1", "tool": "homelab-hosts", "action": "exec",
+        "hostAlias": actual_alias, "rc": 0, "payload": remote_payload,
+        "error": None, "remoteVersion": "1.17.4",
+    }
+    loader = StatusLoader(tmp_path)
+    host_id = "hlh-" + hashlib.sha256(b"garage").hexdigest()[:12]
+    outcomes = []
+    instances = []
+    loader.status_ready.connect(lambda *_: outcomes.append("ready"))
+    loader.status_failed.connect(lambda _aid, reason: outcomes.append(("failed", reason)))
+    loader.product_instances_ready.connect(lambda _aid, rows: instances.extend(rows))
+    with patch.object(loader, "fetch"):
+        loader.fetch_product_status(
+            action, app_id="app.usagebar", host_id=host_id,
+            scope="user", remote_alias="garage",
+        )
+    process = QProcess(loader)
+    loader._processes[action.id] = process
+    with patch("linux.ui_native.status_loader.parse_json_output", return_value=envelope):
+        loader._on_finished(action.id, 0, process)
+
+    if succeeds:
+        assert outcomes == ["ready"]
+        assert len(instances) == 1
+        assert instances[0].host_id == host_id
+        assert instances[0].installation == "unknown"
+    else:
+        assert outcomes and outcomes[0][0] == "failed"
+        assert "selected Homelab host" in outcomes[0][1]
+        assert instances == []
 
 
 def test_status_loader_rejects_mutating_action(tmp_path):

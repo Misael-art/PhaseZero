@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from ..command_runner import CommandRunner
 from ..icons import desktop_dirs, find_desktop_entry
 from ..models import ActionSpec, ProductInstance
 from ..product_inventory import inventory_manifest, target_for
+from ..status_loader import remote_product_status_slug
 from ..widgets import ActionListRow, AdvancedActionsPanel, SectionHeader
 from .base import BasePage
 
@@ -33,6 +36,9 @@ _RECOVERY_ACTION_BY_APP = {
     "app.ollama": "ai.ollama",
     "app.opencode": "ai.opencode-install",
 }
+_HOST_LIST_ACTION_ID = "product.homelab-hosts"
+_HOST_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_HOST_ID = re.compile(r"^hlh-[0-9a-f]{12}$")
 
 # These managed-session and dashboard routes remain unavailable until a
 # supported adapter can bind each inference request to an enforceable grant.
@@ -126,6 +132,10 @@ class ProductRegistryPage(BasePage):
         self._selected_app_id = ""
         self._context_action_id = ""
         self._status_action_id = ""
+        self._status_scope = "host"
+        self._selected_host_id = "local"
+        self._remote_hosts: dict[str, str] = {}
+        self._host_list_pending = False
         self._list_page: QWidget | None = None
         self._detail_page: QWidget | None = None
         self._comparison_page: QWidget | None = None
@@ -135,6 +145,10 @@ class ProductRegistryPage(BasePage):
         self._detail_actions_start = 0
         self._status_label: QLabel | None = None
         self._instance_selector: QComboBox | None = None
+        self._host_context_panel: QWidget | None = None
+        self._host_selector: QComboBox | None = None
+        self._host_refresh_button: QPushButton | None = None
+        self._host_context_status: QLabel | None = None
         self._primary_button: QPushButton | None = None
         self._primary_action: ActionSpec | None = None
         self._primary_desktop_entry = ""
@@ -142,6 +156,7 @@ class ProductRegistryPage(BasePage):
         self._product_facts: QLabel | None = None
         self._context_label: QLabel | None = None
         self.status_loader.product_instances_ready.connect(self._instances_ready)
+        self.status_loader.status_ready.connect(self._status_ready)
         self.status_loader.status_failed.connect(self._status_failed)
 
     @property
@@ -159,6 +174,135 @@ class ProductRegistryPage(BasePage):
     @property
     def instances(self) -> tuple[ProductInstance, ...]:
         return tuple(self._instances.values())
+
+    def _selected_host_context(self) -> tuple[str, str | None]:
+        host_id = self._selected_host_id
+        if self._host_selector is not None:
+            selected = self._host_selector.currentData()
+            host_id = str(selected or "local")
+        if host_id == "local":
+            return "local", None
+        alias = self._remote_hosts.get(host_id)
+        return (host_id, alias) if alias else ("local", None)
+
+    def _populate_host_selector(self, preferred_host_id: str = "local") -> None:
+        selector = self._host_selector
+        if selector is None:
+            self._selected_host_id = "local"
+            return
+        selector.blockSignals(True)
+        selector.clear()
+        selector.addItem("Este computador (local)", "local")
+        for host_id, alias in sorted(self._remote_hosts.items(), key=lambda item: item[1].casefold()):
+            selector.addItem(f"{alias} (Homelab)", host_id)
+        index = selector.findData(preferred_host_id)
+        selector.setCurrentIndex(index if index >= 0 else 0)
+        self._selected_host_id = str(selector.currentData() or "local")
+        selector.blockSignals(False)
+
+    def refresh_remote_hosts(self) -> None:
+        if self._host_list_pending or self.status_loader.running(_HOST_LIST_ACTION_ID):
+            return
+        self._host_list_pending = True
+        if self._host_refresh_button is not None:
+            self._host_refresh_button.setEnabled(False)
+        self.status_loader.fetch(
+            _HOST_LIST_ACTION_ID, ["server", "homelab", "hosts", "list", "--json"],
+        )
+
+    def _status_ready(self, action_id: str, _stdout: str, payload: object) -> None:
+        if action_id != _HOST_LIST_ACTION_ID:
+            return
+        previous_context = self._selected_host_context()
+        self._host_list_pending = False
+        if self._host_refresh_button is not None:
+            self._host_refresh_button.setEnabled(True)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schemaVersion") not in ("1", 1)
+            or payload.get("tool") != "homelab-hosts"
+            or payload.get("action") != "list"
+            or not isinstance(payload.get("hosts"), list)
+        ):
+            self._remote_hosts = {}
+            self._populate_host_selector()
+            self._host_registry_context_changed(previous_context)
+            if self._host_context_status is not None:
+                self._host_context_status.setText(
+                    "Registro Homelab inválido; consulta local continua disponível."
+                )
+            self._render_primary_action()
+            return
+        hosts: dict[str, str] = {}
+        aliases: set[str] = set()
+        for row in payload["hosts"]:
+            if not isinstance(row, dict):
+                continue
+            host_id = row.get("id")
+            alias = row.get("alias")
+            if (
+                not isinstance(host_id, str) or not _HOST_ID.fullmatch(host_id)
+                or not isinstance(alias, str) or not _HOST_ALIAS.fullmatch(alias)
+                or host_id != "hlh-" + hashlib.sha256(alias.encode("utf-8")).hexdigest()[:12]
+                or host_id in hosts or alias in aliases
+            ):
+                continue
+            hosts[host_id] = alias
+            aliases.add(alias)
+        preferred = self._selected_host_id
+        self._remote_hosts = hosts
+        self._populate_host_selector(preferred)
+        self._host_registry_context_changed(previous_context)
+        if self._host_context_status is not None:
+            count = len(hosts)
+            self._host_context_status.setText(
+                f"{count} host(s) Homelab registrado(s). Consulta remota é somente leitura."
+                if count else "Nenhum host Homelab registrado; consulta local continua disponível."
+            )
+        self._render_primary_action()
+
+    def _host_registry_context_changed(self, previous: tuple[str, str | None]) -> None:
+        current = self._selected_host_context()
+        self._selected_host_id = current[0]
+        if previous == current or not self._selected_app_id:
+            return
+        if self._status_action_id:
+            self.status_loader.cancel(self._status_action_id)
+        self._instances.clear()
+        self._instance_id_collision = False
+        self._populate_instance_selector()
+        if self._status_label is not None:
+            self._status_label.setText("Instalação, configuração e saúde: desconhecidas")
+        if self._host_context_status is not None:
+            self._host_context_status.setText(
+                f"Host {current[1]} selecionado; consulte status read-only."
+                if current[1] else "Status e ações neste computador."
+            )
+        self._render_primary_action()
+        self._render_detail_actions()
+
+    def _selected_host_changed(self, _index: int) -> None:
+        host_id, alias = self._selected_host_context()
+        self._selected_host_id = host_id
+        if not self._selected_app_id:
+            return
+        if self._status_action_id:
+            self.status_loader.cancel(self._status_action_id)
+        self._instances.clear()
+        self._instance_id_collision = False
+        self._populate_instance_selector()
+        if self._status_label is not None:
+            self._status_label.setText(
+                f"Host {alias} selecionado · clique Verificar remoto para consulta read-only."
+                if alias else "Instalação, configuração e saúde: desconhecidas"
+            )
+        if self._host_context_status is not None:
+            self._host_context_status.setText(
+                f"{alias}: somente status remoto; alterações e abertura ficam indisponíveis aqui."
+                if alias else "Status e ações neste computador."
+            )
+        self._render_primary_action()
+        self._render_detail_actions()
 
     def build(self) -> None:
         self._stack = QStackedWidget()
@@ -261,6 +405,32 @@ class ProductRegistryPage(BasePage):
         self._context_label.setObjectName("productContext")
         self._context_label.setWordWrap(True)
         layout.addWidget(self._context_label)
+        self._host_context_panel = QWidget()
+        self._host_context_panel.setObjectName("productHostContext")
+        host_layout = QVBoxLayout(self._host_context_panel)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_row = QHBoxLayout()
+        host_caption = QLabel("Verificar em:")
+        self._host_selector = QComboBox()
+        self._host_selector.setObjectName("productHostSelector")
+        self._host_selector.setAccessibleName("Host para verificar aplicativo")
+        self._host_selector.addItem("Este computador (local)", "local")
+        self._host_selector.currentIndexChanged.connect(self._selected_host_changed)
+        host_caption.setBuddy(self._host_selector)
+        host_row.addWidget(host_caption)
+        host_row.addWidget(self._host_selector, 1)
+        self._host_refresh_button = QPushButton("Listar hosts")
+        self._host_refresh_button.setObjectName("productHostRefresh")
+        self._host_refresh_button.setAccessibleName("Listar hosts Homelab registrados")
+        self._host_refresh_button.clicked.connect(self.refresh_remote_hosts)
+        host_row.addWidget(self._host_refresh_button)
+        host_layout.addLayout(host_row)
+        self._host_context_status = QLabel("Status local. Hosts Homelab carregam sob demanda.")
+        self._host_context_status.setObjectName("productHostContextStatus")
+        self._host_context_status.setWordWrap(True)
+        host_layout.addWidget(self._host_context_status)
+        layout.addWidget(self._host_context_panel)
+        self._host_context_panel.hide()
         self._product_summary = QLabel("")
         self._product_summary.setObjectName("productDescription")
         self._product_summary.setWordWrap(True)
@@ -437,6 +607,9 @@ class ProductRegistryPage(BasePage):
         ):
             context_action_id = ""
         self.status_loader.cancel_all()
+        self._host_list_pending = False
+        if self._host_refresh_button is not None:
+            self._host_refresh_button.setEnabled(True)
         self._selected_app_id = app_id
         self._context_action_id = context_action_id
         grant_gated_app = app_id in {
@@ -478,19 +651,36 @@ class ProductRegistryPage(BasePage):
             self._context_label.setText(f"Atalho de origem: {action.category} · {action.title} · escopo {scope}")
         else:
             self._context_label.setText("Catálogo de aplicativos")
-        self._clear_detail_actions()
-        self._render_detail_actions()
-        self._detail_layout.addStretch()
         self._stack.setCurrentWidget(self._detail_page)
         self.product_opened.emit(app_id, context_action_id)
         status_action = self._status_action(product)
         self._status_action_id = status_action.id if status_action is not None else ""
         target = self._targets.get(status_action.id) if status_action is not None else None
         self._status_scope = target.instance_scope if target is not None else "host"
+        remote_slug = (
+            remote_product_status_slug(status_action, app_id)
+            if status_action is not None else None
+        )
+        if self._host_context_panel is not None:
+            self._host_context_panel.setVisible(remote_slug is not None)
+        if remote_slug is None:
+            self._populate_host_selector()
+        host_id, remote_alias = self._selected_host_context()
+        if self._host_context_status is not None and remote_alias:
+            self._host_context_status.setText(
+                f"{remote_alias}: somente status remoto; alterações e abertura ficam indisponíveis aqui."
+            )
+        self._clear_detail_actions()
+        self._render_detail_actions()
+        self._detail_layout.addStretch()
         self._render_primary_action()
-        if status_action is not None:
+        if status_action is not None and host_id == "local":
             self.status_loader.fetch_product_status(
                 status_action, app_id=app_id, host_id="local", scope=self._status_scope,
+            )
+        elif status_action is not None and remote_alias:
+            self._status_label.setText(
+                f"Host {remote_alias} selecionado · clique Verificar remoto para consulta read-only."
             )
 
     def _render_detail_actions(self) -> None:
@@ -499,7 +689,14 @@ class ProductRegistryPage(BasePage):
         all_actions = [self.by_id[item] for item in product.get("actionIds", []) if item in self.by_id]
         actions = all_actions
         context_message = ""
-        if self._instances:
+        _host_id, remote_alias = self._selected_host_context()
+        if remote_alias:
+            actions = []
+            context_message = (
+                f"Host {remote_alias}: este detalhe oferece consulta read-only; "
+                "operações e abertura remotas ainda indisponíveis."
+            )
+        elif self._instances:
             instance = self._selected_instance()
             if instance is None:
                 actions = []
@@ -799,7 +996,27 @@ class ProductRegistryPage(BasePage):
         return ""
 
     def _render_primary_action(self) -> None:
-        if self._primary_button is None:
+        if self._primary_button is None or not self._selected_app_id:
+            return
+        _host_id, remote_alias = self._selected_host_context()
+        if remote_alias:
+            product = self._product_by_id.get(self._selected_app_id, {})
+            status_action = self._status_action(product) if product else None
+            supported = (
+                status_action is not None
+                and remote_product_status_slug(status_action, self._selected_app_id) is not None
+            )
+            running = bool(status_action and self.status_loader.running(status_action.id))
+            self._primary_action = None
+            self._primary_desktop_entry = ""
+            self._primary_button.setText(
+                "Verificando…" if running else
+                "Atualizar status remoto" if self._instances else "Verificar remoto"
+            )
+            self._primary_button.setEnabled(supported and not running)
+            self._primary_button.setToolTip(
+                f"Consulta read-only em {remote_alias}. Instalar, alterar ou abrir continua indisponível aqui."
+            )
             return
         instance = self._selected_instance()
         if len(self._instances) > 1 and instance is None:
@@ -880,6 +1097,31 @@ class ProductRegistryPage(BasePage):
     def _primary_clicked(self) -> None:
         if not self._selected_app_id:
             return
+        host_id, remote_alias = self._selected_host_context()
+        if remote_alias:
+            product = self._product_by_id[self._selected_app_id]
+            status_action = self._status_action(product)
+            if (
+                status_action is None
+                or remote_product_status_slug(status_action, self._selected_app_id) is None
+            ):
+                return
+            instance = self._selected_instance()
+            if self._primary_button is not None:
+                self._primary_button.setText("Verificando…")
+                self._primary_button.setEnabled(False)
+            self.status_loader.fetch_product_status(
+                status_action,
+                app_id=self._selected_app_id,
+                host_id=host_id,
+                scope=instance.scope if instance is not None else self._status_scope,
+                instance_key=(
+                    instance.instance_id.rsplit(":", 1)[-1]
+                    if instance is not None else "default"
+                ),
+                remote_alias=remote_alias,
+            )
+            return
         if not self._selected_context_is_actionable():
             return
         if self._primary_action is not None:
@@ -896,9 +1138,15 @@ class ProductRegistryPage(BasePage):
             selected_host = instance.host_id if instance is not None else "local"
             target = self._targets.get(status_action.id)
             self._status_scope = selected_scope or (target.instance_scope if target is not None else "host")
+            if self._primary_button is not None:
+                self._primary_button.setText("Verificando…")
+                self._primary_button.setEnabled(False)
             self.status_loader.fetch_product_status(
                 status_action, app_id=self._selected_app_id, host_id=selected_host, scope=self._status_scope,
-                instance_key=instance.instance_id if instance is not None else "default",
+                instance_key=(
+                    instance.instance_id.rsplit(":", 1)[-1]
+                    if instance is not None else "default"
+                ),
             )
 
     def _instances_ready(self, action_id: str, instances: object) -> None:
@@ -918,11 +1166,31 @@ class ProductRegistryPage(BasePage):
         self._render_detail_actions()
 
     def _status_failed(self, action_id: str, _message: str) -> None:
+        if action_id == _HOST_LIST_ACTION_ID:
+            previous_context = self._selected_host_context()
+            self._host_list_pending = False
+            self._remote_hosts = {}
+            self._populate_host_selector()
+            self._host_registry_context_changed(previous_context)
+            if self._host_refresh_button is not None:
+                self._host_refresh_button.setEnabled(True)
+            if self._host_context_status is not None:
+                self._host_context_status.setText(
+                    "Registro Homelab indisponível; consulta local continua disponível."
+                )
+            self._render_primary_action()
+            self._render_detail_actions()
+            return
         if action_id == self._status_action_id:
             self._instances.clear()
             self._instance_id_collision = False
             self._populate_instance_selector()
-            self._status_label.setText("Status indisponível · instalação, configuração e saúde desconhecidas")
+            _host_id, remote_alias = self._selected_host_context()
+            self._status_label.setText(
+                f"Status remoto de {remote_alias} indisponível · verifique conexão e pareamento Homelab"
+                if remote_alias else
+                "Status indisponível · instalação, configuração e saúde desconhecidas"
+            )
             self._render_primary_action()
             self._render_detail_actions()
 
@@ -967,6 +1235,9 @@ class ProductRegistryPage(BasePage):
     def close_detail(self) -> None:
         if self._stack is not None and self._list_page is not None:
             self.status_loader.cancel_all()
+            self._host_list_pending = False
+            if self._host_refresh_button is not None:
+                self._host_refresh_button.setEnabled(True)
             self._selected_app_id = ""
             self._context_action_id = ""
             self._status_action_id = ""
@@ -976,6 +1247,9 @@ class ProductRegistryPage(BasePage):
     def show_catalog(self) -> None:
         if self._stack is not None and self._list_page is not None:
             self.status_loader.cancel_all()
+            self._host_list_pending = False
+            if self._host_refresh_button is not None:
+                self._host_refresh_button.setEnabled(True)
             self._selected_app_id = ""
             self._context_action_id = ""
             self._status_action_id = ""

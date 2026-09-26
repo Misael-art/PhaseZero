@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import target_for
@@ -622,7 +625,7 @@ def test_multiple_instances_require_explicit_local_scope_selection(qapp):
         page.open_product("app.vscode")
         page._instances_ready(page._status_action_id, (
             ProductInstance(
-                "local:host:app.vscode", "app.vscode", "local", "host",
+                "local:host:app.vscode:host-default", "app.vscode", "local", "host",
                 installation="absent",
             ),
             ProductInstance(
@@ -639,7 +642,7 @@ def test_multiple_instances_require_explicit_local_scope_selection(qapp):
 
         local_index = next(
             index for index in range(1, selector.count())
-            if selector.itemData(index) == "local:host:app.vscode"
+            if selector.itemData(index) == "local:host:app.vscode:host-default"
         )
         selector.setCurrentIndex(local_index)
         assert "Instância: local · escopo host" in page._status_label.text()
@@ -745,14 +748,14 @@ def test_verify_uses_selected_instance_scope(qapp):
                 installation="unknown",
             ),
             ProductInstance(
-                "local:project:app.vscode", "app.vscode", "local", "project",
+                "local:project:app.vscode:project-default", "app.vscode", "local", "project",
                 installation="unknown",
             ),
         ))
         selector = page.findChild(QComboBox, "productInstanceSelector")
         index = next(
             index for index in range(1, selector.count())
-            if selector.itemData(index) == "local:project:app.vscode"
+            if selector.itemData(index) == "local:project:app.vscode:project-default"
         )
         selector.setCurrentIndex(index)
         assert page._primary_button.text() == "Verificar"
@@ -761,7 +764,114 @@ def test_verify_uses_selected_instance_scope(qapp):
         fetch.assert_called_once()
         assert fetch.call_args.kwargs["host_id"] == "local"
         assert fetch.call_args.kwargs["scope"] == "project"
-        assert fetch.call_args.kwargs["instance_key"] == "local:project:app.vscode"
+        assert fetch.call_args.kwargs["instance_key"] == "project-default"
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_remote_product_status_requires_registered_host_and_keeps_actions_blocked(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.usagebar")
+        assert not page._host_context_panel.isHidden()
+        with patch.object(page.status_loader, "fetch") as list_hosts:
+            page._host_refresh_button.click()
+            list_hosts.assert_called_once_with(
+                "product.homelab-hosts", ["server", "homelab", "hosts", "list", "--json"],
+            )
+        alias = "garage"
+        host_id = "hlh-" + hashlib.sha256(alias.encode()).hexdigest()[:12]
+        page._status_ready("product.homelab-hosts", "", {
+            "schemaVersion": "1",
+            "tool": "homelab-hosts",
+            "action": "list",
+            "hosts": [
+                {"id": host_id, "alias": alias, "user": "operator", "host": "192.0.2.1"},
+                {"id": "hlh-000000000000", "alias": "forged", "user": "x", "host": "y"},
+            ],
+        })
+        selector = page.findChild(QComboBox, "productHostSelector")
+        assert selector is not None and selector.count() == 2
+        selector.setCurrentIndex(1)
+        assert selector.currentText() == "garage (Homelab)"
+
+        with patch.object(page.status_loader, "fetch_product_status") as fetch:
+            page.open_product("app.usagebar")
+            fetch.assert_not_called()  # selecting a remote host never contacts it
+            assert page._primary_button.text() == "Verificar remoto"
+            assert page._primary_button.isEnabled()
+            page._primary_button.click()
+            fetch.assert_called_once()
+            assert fetch.call_args.kwargs["host_id"] == host_id
+            assert fetch.call_args.kwargs["remote_alias"] == alias
+            assert fetch.call_args.kwargs["instance_key"] == "default"
+            assert not _detail_action_ids(page)
+            assert page._primary_button.text() == "Verificando…"
+            assert not page._primary_button.isEnabled()
+
+        page._instances_ready(page._status_action_id, (
+            ProductInstance(
+                f"{host_id}:user:app.usagebar:default", "app.usagebar", host_id, "user",
+                installation="unknown",
+            ),
+        ))
+        assert page._primary_button.text() == "Atualizar status remoto"
+        assert page._primary_button.isEnabled()
+        notice = page.findChild(QLabel, "productInstanceActionNotice")
+        assert notice is not None and "consulta read-only" in notice.text()
+        assert not _detail_action_ids(page)
+
+        page._status_ready("product.homelab-hosts", "", {
+            "schemaVersion": "1", "tool": "homelab-hosts", "action": "list", "hosts": [],
+        })
+        assert selector.currentData() == "local"
+        assert page.instances == ()
+        assert page._status_label.text() == "Instalação, configuração e saúde: desconhecidas"
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+@pytest.mark.parametrize("width,height", [(800, 600), (1280, 800)])
+def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp, width, height):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.show()
+        window.resize(width, height)
+        window.show_category("Aplicativos")
+        qapp.processEvents()
+        page = window.registry.page_for("Aplicativos")
+        page._search.setText("UsageBar")
+        open_button = next(
+            button for button in page.findChildren(QPushButton, "productOpenButton")
+            if button.text() == "UsageBar"
+        )
+        QTest.mouseClick(open_button, Qt.LeftButton)
+        qapp.processEvents()
+
+        selector = page.findChild(QComboBox, "productHostSelector")
+        refresh = page.findChild(QPushButton, "productHostRefresh")
+        primary = page.findChild(QPushButton, "productPrimaryAction")
+        assert selector is not None and refresh is not None and primary is not None
+        viewport = QRect(window.mapToGlobal(QPoint(0, 0)), window.size())
+        screen_width = qapp.primaryScreen().availableGeometry().width()
+        for widget in (selector, refresh, primary):
+            rect = QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
+            assert widget.isVisible() and not widget.visibleRegion().isEmpty()
+            assert viewport.contains(rect)
+            if width <= screen_width:
+                hit = qapp.widgetAt(widget.mapToGlobal(widget.rect().center()))
+                assert hit is widget or (hit is not None and widget.isAncestorOf(hit))
+
+        with patch.object(page.status_loader, "fetch") as fetch:
+            QTest.mouseClick(refresh, Qt.LeftButton)
+        fetch.assert_called_once_with(
+            "product.homelab-hosts", ["server", "homelab", "hosts", "list", "--json"],
+        )
     finally:
         window.close()
         host_patcher.stop()
