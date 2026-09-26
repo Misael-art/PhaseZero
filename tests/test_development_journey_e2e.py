@@ -34,37 +34,99 @@ def test_development_public_journey_retries_partial_failure_then_validates_and_o
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
     monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    capability_state = state / "phasezero-capabilities"
+    package_state = tmp_path / "installed-packages.json"
+    package_events = tmp_path / "fake-package-events.jsonl"
+    pnpm_failure = tmp_path / "pnpm-first-attempt-failed"
+    monkeypatch.setenv("PZ_CAPABILITIES_STATE_DIR", str(capability_state))
+    monkeypatch.setenv("PZ_TEST_PACKAGE_STATE", str(package_state))
+    monkeypatch.setenv("PZ_TEST_PACKAGE_EVENTS", str(package_events))
+    monkeypatch.setenv("PZ_TEST_PNPM_FAILURE", str(pnpm_failure))
 
     events_file = tmp_path / "fake-operations.jsonl"
     fake = tmp_path / "fake_capabilities.py"
     fake.write_text(
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "events, action_id, phase = sys.argv[1:4]\n"
-        "prior = [json.loads(line) for line in Path(events).read_text(encoding='utf-8').splitlines()] if Path(events).exists() else []\n"
-        "attempt = sum(event['phase'] == 'apply' for event in prior)\n"
-        "preview_number = sum(event['phase'] == 'preview' for event in prior) + 1\n"
-        "with Path(events).open('a', encoding='utf-8') as stream:\n"
-        " stream.write(json.dumps({'action': action_id, 'phase': phase, 'extra': sys.argv[4:]}) + '\\n')\n"
-        "if phase == 'preview':\n"
-        " payload = {'kind': 'plan', 'status': 'ready', 'summary': 'Plano isolado pronto.', 'blockers': [], 'id': f'fixture-plan-{preview_number}', 'confirmToken': f'fixture-confirm-{preview_number}'}\n"
-        "elif action_id == 'capability.status':\n"
-        " payload = {'kind': 'status', 'status': 'ok', 'capabilities': [{'id': 'development.nodejs', 'installed': True}, {'id': 'development.pnpm', 'installed': True}]}\n"
-        "elif attempt == 0:\n"
-        " payload = {'kind': 'operation', 'status': 'failed', 'results': [{'capabilityId': 'development.nodejs', 'status': 'installed'}, {'capabilityId': 'development.pnpm', 'status': 'failed'}]}\n"
-        "else:\n"
-        " payload = {'kind': 'operation', 'status': 'completed', 'ok': True, 'summary': 'Preparação isolada concluída.'}\n"
-        "print(json.dumps(payload))\n",
+        """\
+import json
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, r"__ROOT__")
+from linux.capabilities import __main__ as cli
+from linux.capabilities import engine
+from linux.capabilities.platform import HostFacts
+from linux.capabilities.providers import Provider
+
+facts = HostFacts(
+    platform="linux", architecture="x86_64", distro="arch", distro_like=(),
+    package_family="arch", immutable=False, immutable_kind="", container=False,
+    init="systemd", desktop="kde", session="wayland", gpus=("amd",),
+    package_manager="pacman", flatpak=True, flathub=True,
+)
+package_state = Path(os.environ["PZ_TEST_PACKAGE_STATE"])
+package_events = Path(os.environ["PZ_TEST_PACKAGE_EVENTS"])
+pnpm_failure = Path(os.environ["PZ_TEST_PNPM_FAILURE"])
+
+def installed_packages():
+    return set(json.loads(package_state.read_text(encoding="utf-8"))) if package_state.exists() else set()
+
+class FakeProvider(Provider):
+    def __init__(self):
+        super().__init__(facts)
+
+    def installed(self, source):
+        return source.name in installed_packages()
+
+    def available(self, source):
+        return True
+
+    def estimate_space(self, source):
+        return {"downloadBytes": 1024, "installedBytes": 4096}
+
+    def estimate_transaction_space(self, sources):
+        return None
+
+    def execute(self, plan):
+        package = plan.args[-1]
+        with package_events.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"package": package, "command": plan.command()}) + "\\n")
+        if package == "pnpm" and not pnpm_failure.exists():
+            pnpm_failure.touch()
+            return 1, "", "fixture package failure"
+        packages = installed_packages()
+        packages.add(package)
+        package_state.write_text(json.dumps(sorted(packages)), encoding="utf-8")
+        return 0, "fixture package installed", ""
+
+provider = FakeProvider()
+engine.shutil.disk_usage = lambda _path: SimpleNamespace(free=10**12, total=10**12, used=0)
+real_create_plan = engine.create_plan
+real_apply_plan = engine.apply_plan
+real_catalog_payload = engine.catalog_payload
+cli.detect = lambda: facts
+cli.create_plan = lambda **kwargs: real_create_plan(**kwargs, facts=facts, provider=provider)
+cli.apply_plan = lambda plan_id, **kwargs: real_apply_plan(
+    plan_id, facts=facts, provider=provider, **kwargs,
+)
+cli.catalog_payload = lambda **kwargs: real_catalog_payload(
+    facts=facts, provider=provider, **kwargs,
+)
+arguments = sys.argv[1:]
+if arguments and arguments[0] == "capabilities":
+    arguments = arguments[1:]
+raise SystemExit(cli.main(arguments))
+""".replace("__ROOT__", str(ROOT)),
         encoding="utf-8",
     )
 
     def fake_build_program(_root, action, *, preview, value="", values=None):
         phase = "preview" if preview else "status" if action.id == "capability.status" else "apply"
-        args = [str(fake), str(events_file), action.id, phase]
-        for key, flag in (("plan_id", "--bound-plan-id"), ("confirm", "--bound-confirm-token")):
-            if values and values.get(key):
-                args.extend((flag, values[key]))
-        return sys.executable, args
+        args = action.resolved_args(value, preview=preview, values=values)
+        with events_file.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"action": action.id, "phase": phase, "args": args}) + "\n")
+        return sys.executable, [str(fake), *args]
 
     host_patcher = patch.object(MainWindow, "_host_summary")
     status_patcher = patch("linux.ui_native.status_loader.StatusLoader.fetch_product_status")
@@ -82,10 +144,8 @@ def test_development_public_journey_retries_partial_failure_then_validates_and_o
         dialog = qapp.activeModalWidget()
         if isinstance(dialog, PreviewDialog):
             dialogs_seen.append("preview")
-            if not dialog.confirm.isEnabled() or not any(
-                label.text() == "Plano isolado pronto." for label in dialog.findChildren(QLabel)
-            ):
-                dialog_errors.append("preview não exibiu plano confirmável")
+            if not dialog.confirm.isEnabled():
+                dialog_errors.append("preview não habilitou confirmação")
                 dialog.reject()
                 return
             dialog.confirm.click()
@@ -134,19 +194,28 @@ def test_development_public_journey_retries_partial_failure_then_validates_and_o
         assert results[1].parsed["status"] == "failed"
         assert window.status_text.text() == "Falhou"
         assert "incompleta" in page.status.text()
+        assert json.loads(package_state.read_text(encoding="utf-8")) == ["nodejs"]
 
         page.findChild(QPushButton, "prepareDevelopment").click()
         wait_for_results(4)
         assert [result.preview for result in results[2:4]] == [True, False]
         assert results[3].ok, (results[3].exit_code, results[3].stdout, results[3].stderr, results[3].parsed)
         assert "Preparação concluída" in page.status.text()
+        assert json.loads(package_state.read_text(encoding="utf-8")) == ["nodejs", "pnpm"]
+        package_attempts = [
+            json.loads(line)["package"]
+            for line in package_events.read_text(encoding="utf-8").splitlines()
+        ]
+        assert package_attempts == ["nodejs", "pnpm", "pnpm"]
 
         page.findChild(QPushButton, "validateDevelopment").click()
         wait_for_results(5)
         assert results[4].action_id == "capability.status"
-        assert [item["id"] for item in results[4].parsed["capabilities"]] == [
-            "development.nodejs", "development.pnpm",
-        ]
+        status_by_id = {
+            item["id"]: item["installed"] for item in results[4].parsed["capabilities"]
+        }
+        assert status_by_id["development.nodejs"] is True
+        assert status_by_id["development.pnpm"] is True
         assert "Validação consultada" in page.status.text()
 
         page.findChild(QPushButton, "openDevelopmentTool").click()
@@ -163,19 +232,24 @@ def test_development_public_journey_retries_partial_failure_then_validates_and_o
             ("apply", "capability.profile.development-web-js"),
             ("status", "capability.status"),
         ]
-        first_apply_args = events[1]["extra"]
-        second_apply_args = events[3]["extra"]
-        assert first_apply_args[:4] == [
-            "--bound-plan-id", "fixture-plan-1",
-            "--bound-confirm-token", "fixture-confirm-1",
+        first_apply_args = results[1].command[2:]
+        second_apply_args = results[3].command[2:]
+        first_preview = results[0].parsed
+        second_preview = results[2].parsed
+        assert first_preview["id"] != second_preview["id"]
+        assert first_apply_args[:5] == [
+            "capabilities", "apply", "--plan-id", first_preview["id"],
+            "--confirm",
         ]
-        assert second_apply_args[:4] == [
-            "--bound-plan-id", "fixture-plan-2",
-            "--bound-confirm-token", "fixture-confirm-2",
+        assert first_apply_args[5] == first_preview["confirmToken"]
+        assert second_apply_args[:5] == [
+            "capabilities", "apply", "--plan-id", second_preview["id"],
+            "--confirm",
         ]
-        assert first_apply_args[4] == second_apply_args[4] == "--cancel-file"
-        assert not Path(first_apply_args[5]).exists()
-        assert not Path(second_apply_args[5]).exists()
+        assert second_apply_args[5] == second_preview["confirmToken"]
+        assert first_apply_args[6] == second_apply_args[6] == "--cancel-file"
+        assert not Path(first_apply_args[7]).exists()
+        assert not Path(second_apply_args[7]).exists()
     finally:
         modal_driver.stop()
         window.close()
