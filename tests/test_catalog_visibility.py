@@ -182,6 +182,8 @@ def test_omniroute_appears_exactly_once_with_experimental_badge(catalog):
     assert "9router" in card.description.casefold(), (
         "copy precisa apontar o 9Router como router público"
     )
+    assert "uso bloqueado" in card.description.casefold()
+    assert "grants por requisição" in card.description.casefold()
 
 
 def test_9router_remains_the_public_router(catalog):
