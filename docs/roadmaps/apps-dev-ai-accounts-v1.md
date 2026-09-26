@@ -177,16 +177,96 @@ Disponibilidade de ferramentas de escrita depende de plano/workspace/admin; vali
 real, não inferir de “Pro” ou de login bem-sucedido.
 [Fonte: Developer mode e MCP](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
 
+### Revisão de arquitetura e segurança PXA-010 — 2026-09-26
+
+O fluxo tem dois canais independentes:
+
+```mermaid
+flowchart LR
+    codex["Codex"] -->|"inferência Responses"| bridge["Bridge local"]
+    bridge -->|"mensagem e contexto"| web["Sessão própria ChatGPT Web"]
+    web -->|"chamada MCP"| endpoint["Endpoint MCP hospedado pela OpenAI"]
+    client["tunnel-client local"] -->|"poll HTTPS de saída"| endpoint
+    client --> broker["Broker MCP local"]
+    broker -->|"ferramentas do turno ativo"| tools["Ferramentas Codex"]
+    tools --> broker --> client --> endpoint --> web
+```
+
+Inferência percorre Codex → bridge → sessão própria do ChatGPT Web. O túnel não
+transporta inferência e não garante economia de cota: limites da conta ChatGPT
+continuam valendo. Chamadas MCP percorrem endpoint OpenAI → `tunnel-client` de
+saída → broker local → ferramentas anunciadas pelo turno Codex vigente. Sandbox,
+escopo da tarefa e aprovações do Codex continuam aplicáveis a cada ação.
+
+O túnel oficial não exige porta pública, regra de entrada ou encaminhamento no
+roteador. Criar/editar/remover túnel requer Tunnels Read + Manage; executar
+`tunnel-client` ou selecionar túnel requer Tunnels Read + Use. A permissão de
+Developer Mode do ChatGPT é separada e pertence ao workspace. [Secure MCP
+Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+Runtime key é credencial de transporte, distinta da conta/sessão ChatGPT: usar
+escopo mínimo Read + Use, guardar no cofre do SO, prever rotação e revogação, e
+nunca gerar chave ampla/não expirável para todos os túneis. Operações administrativas
+de túnel/conector são guiadas e executadas pelo operador autorizado.
+
+Elegibilidade vem antes de oferecer ferramentas: a documentação OpenAI consultada
+limita MCP completo com escrita a Business e Enterprise/Edu em beta; Pro permite
+MCP read/fetch. Confirmar plano, workspace, Developer Mode, ações permitidas e
+broker disponível. Login bem-sucedido não prova escrita disponível. Começar pelo
+modo Web sem ferramentas locais; só então mostrar modo com ferramentas, capacidades
+que o workspace realmente expõe e permissões necessárias.
+[Disponibilidade oficial](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+
+Liberação é gradual: Browser-only pode aparecer quando seus próprios gates de perfil,
+sessão, pacote e reversão passarem; não inicia broker, MCP nem túnel. Full com ferramentas
+é outro gate e só aparece após elegibilidade do workspace, permissões e broker comprovados.
+Até o primeiro gate passar, manter produto fora do catálogo; a aprovação do modo Web-only
+nunca promove automaticamente o modo Full.
+
+Não importar cookies, local storage nem perfil do browser pessoal. Login acontece
+por ação explícita no perfil privado do launcher. `Authentication: None` só cabe
+no fluxo esperado túnel + broker; não substitui autorização por tarefa. Não habilitar
+“Allow all actions” nem aprovação automática. Usar `tunnel_id` para túnel e a
+identidade MCP fixa da release (v6.0.0: `Codex Native2`); nome visível do túnel
+não precisa coincidir com o nome do conector.
+[Modelo de segurança v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/security-model.md),
+[arquitetura v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/docs/architecture.md).
+
+Bridge Responses escuta em loopback, mas processos sob o mesmo usuário podem
+alcançá-lo. Loopback não isola aplicações locais. Full mode exige conta local
+individual confiável e ausência de processos/código não confiáveis sob esse usuário;
+máquina compartilhada fica inelegível até existir isolamento provado.
+
+Fixar release/commit antes de qualquer pacote, conferir SHA-256 publicado e
+comparar após download. Hash detecta alteração em relação ao valor publicado; não
+prova identidade do publicador. O upstream informa que pacotes não têm assinatura
+de plataforma: avisar sobre SmartScreen/Gatekeeper e nunca instruir a ignorar o
+bloqueio. v6.0.0 segue referência de auditoria; release v6.1.0 apareceu em
+25/09/2026 e exige revisão própria antes de qualquer mudança de pin.
+[README v6.0.0](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.0.0/README.md),
+[release v6.1.0](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.0).
+
+Instalação do launcher não ativa rota. Ativação Codex separada exige preview,
+backup atômico e comparação exata do antes/depois. Desativação restaura primeiro
+a rota; depois reinicia Codex, encerra bridge e só então fecha/remove launcher.
+Edição externa conflitante para e pede resolução; não sobrescrever configuração
+do usuário. Sem gates reais de conta, permissão, isolamento, falha e rollback, não
+oferecer escrita local, autostart ou troca automática de conta/modelo. Medidor do
+upstream é estimativa local de mensagens enviadas pelo launcher, não saldo/cota
+oficial nem prova do relato “2%”.
+
 ### Contrato desejado no PhaseZero — requisitos, não funcionalidades já comprovadas
 
 Nome de produto: **ChatGPT no Codex — experimental**. Entrada em IA → Integrações, registro
 no catálogo e conexão em Contas. Não classificá-lo como mais um provedor genérico do 9Router
 sem comprovar compatibilidade. Não associar automaticamente a Hermes, OpenCode ou Claude Code.
 
-Assistente: entender origem de consumo → verificar plataforma/versão → instalar isoladamente
-→ login explícito → escolher modo → revisar acesso → testar → ativar no contexto escolhido.
-Sessão de navegador permanece no runtime proprietário; nenhum reaproveitamento de cookies
-do Chrome pessoal. O agente deve primeiro mapear mutações reais de setup/uninstall upstream.
+Assistente: preflight de plataforma, versão e elegibilidade/plano/workspace antes de baixar
+ou instalar; explicar requisitos do modo Web e do modo com ferramentas separadamente. Começar
+no modo Web sem ferramentas locais; oferecer o modo com ferramentas somente depois de validar
+plano, workspace, permissões e broker. Login ocorre por ação explícita no perfil privado do
+launcher; nunca importar cookies, local storage ou perfil do browser pessoal. Guiar a pessoa
+autorizada nas ações administrativas do túnel/conector. Mapear mutações reais de setup/uninstall
+upstream antes de automatizar.
 
 1. **Desligado por padrão:** sem processo, porta, túnel, autostart ou alteração de rota.
 2. **Escopo:** preferir launcher/perfil Codex dedicado, com HOME de aplicação isolado e
@@ -195,15 +275,19 @@ do Chrome pessoal. O agente deve primeiro mapear mutações reais de setup/unins
 3. **Modos claros:** browser sem ferramentas; modo manual assistido; modo com ferramentas.
    Usar nomes descritivos, nunca prometer “risco zero”. Ausência de permissão de escrita não
    impede oferecer modo limitado com aviso claro antes da ativação.
-4. **Ferramentas:** consentimento distinto, sandbox e aprovações do Codex preservados;
-   rejeitar ação fora do workspace/turno autorizado. Não ativar aprovação automática.
-5. **Instalação:** versão fixada, origem e hashes conferidos; preflight de libs, disco,
-   arquitetura e portas. Arquivos duráveis fora do worktree e de mounts temporários.
+4. **Ferramentas:** consentimento distinto; broker limitado a ferramentas do turno e escopo
+   autorizados; sandbox e aprovações do Codex preservados; rejeitar ação fora do workspace/turno.
+   `Authentication: None` não remove essa autorização. Não permitir “Allow all actions” nem
+   aprovação automática.
+5. **Instalação:** versão fixada, origem e hashes conferidos; preflight de elegibilidade,
+   libs, disco, arquitetura e portas. Hash não prova identidade do publicador. Arquivos
+   duráveis fora do worktree e de mounts temporários.
    Dados sensíveis em filesystem com permissões reais, nunca assumir proteção de SD/fuseblk.
 6. **Reversão:** journal de alterações e hashes, backup atômico, restore somente do trecho
    ainda pertencente ao PhaseZero. Edição posterior pelo usuário gera conflito visível.
-   Desativar drena/cancela tarefas com escolha explícita, remove rota/entrada próprias e
-   confirma parada de processos filhos. Sessão fica preservada até pedido de exclusão.
+   Desativar restaura primeiro rota/entrada próprias e reinicia Codex; depois drena/encerra
+   bridge e remove launcher. Edição externa conflitante pede resolução. Sessão fica preservada
+   até pedido de exclusão.
 7. **Falhas:** erro de DOM, sessão, modelo, cota ou túnel interrompe com recuperação; nunca
    muda silenciosamente para API paga, outro modelo ou outra conta. Retry não reenvia pedido
    aceito sem prova de idempotência. Estado “incerto” é melhor que duplicar consumo.
@@ -232,7 +316,7 @@ concentrar lógica em shell/UI. IDs `PXA-xxx` são exclusivos deste plano.
 | PXA-007 / P1 | Contas UI, avatar e canais; página **nova**, `pages/registry.py`, `pages/ai_proxies.py`, `preferences.py` | 003,006 | Duas contas mesmo provedor; troca não aceita callback anterior; identidade opcional; foto indisponível usa iniciais; teclado e privacidade funcionam |
 | PXA-008 / P0 | Grants por consumidor e gestão de credenciais; adaptadores AI, `routing_manager.py`, managers existentes | 006 | Login não habilita consumidor automaticamente; grant/revogação idempotentes; referências seguras; incompatibilidade explícita; sem fallback pago tácito |
 | PXA-009 / P1 | Cotas e saúde desacopladas; `auth-registry.sh`, `routing_manager.py`, `pages/ai_routing.py`, status loader | 006,008 | Unknown≠zero; fonte/horário/unidade visíveis; estimativa separada; timeout parcial não apaga conta; polling sem inferência paga |
-| PXA-010 / P0 | Spike bridge em fixture; integração **nova** em `linux/ai/` e adapter Windows a definir após mapear bootstrap | 006 | Fixar release/commit; mapear setup/uninstall, arquivos/ports/autostart; provar isolamento Codex, política de aprovação e viabilidade no Arch/Windows; se inviável, registrar gate falho |
+| PXA-010 / P0 | Spike bridge em fixture; integração **nova** em `linux/ai/` e adapter Windows a definir após mapear bootstrap | 006 | Fixar versão/commit/hash; separar gates Browser-only e Full; comprovar elegibilidade, identidade, chave mínima, broker por turno, sandbox/aprovações, fronteira local, preview/backup/restore e viabilidade Arch/Windows; sem gate próprio, manter cada modo fora da descoberta/ativação |
 | PXA-011 / P1 | Manager bridge: plan/install/enable/status/disable/remove/doctor, nomes propostos | 008,010 | Host simulado limpo, dependência ausente, download truncado, hash errado, porta ocupada, crash e edição externa; rollback só alterações próprias; nenhum processo quando desativado |
 | PXA-012 / P1 | Wizard e seleção contextual do bridge; IA, Contas, catálogo e operação comum | 007,009,011 | Só cliques públicos; modo sem ferramentas explícito; grants antes de ativar; cota desconhecida honesta; opção aparece sem mudar modelo/rota atual |
 | PXA-013 / P0 | Provas de integração e reversão; testes **novos**, suítes AI/UI existentes | 011,012 | Rejeitar tool fora do escopo, conta errada, replay e sessão expirada; falha sem fallback; disable durante tarefa; restore preserva edição externa; logs redigidos |
@@ -335,7 +419,7 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: spike documental fixou `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`, checksums publicados Linux/Windows e mapa setup/removal, bridge, autostart e modos. Checksum não foi verificado contra download. Gate de habilitação automática falho: isolamento Codex e política de aprovação não provados; upstream tem opção auto-approve. Arch/Windows descartáveis, conta real e falhas/rollback pendentes. Nenhuma integração implementada ou pacote executado. |
+| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 não realizado nesta avaliação de host (RAM disponível igual ao mínimo guest; registro abaixo). Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
@@ -1552,3 +1636,16 @@ que tenta outras contas após falha, sem ID de conexão escolhido pela requisiç
 ([handler atual](https://github.com/decolua/9router/blob/master/src/sse/handlers/chat.js)).
 PXA-008 continua fail-closed; não habilitar roteamento até contrato suportado
 prender conta autorizada à requisição e eliminar fallback entre contas.
+
+Windows G2 reavaliado — 2026-09-26 19:38 -03:00: etapa **não realizada** por
+falta de margem segura no host. Amostra somente leitura: 14 GiB RAM total, 10 GiB
+usados, 4,0 GiB disponíveis (exatamente o mínimo guest planejado); swap 6,3 GiB
+em uso; load 3,67/3,00/3,97. Qoder, Electron, Chromium, Codex, Steam e Plasma
+ativos. Espaço livre: 239 GiB em `/mnt/sdcard`, 127 GiB em `/home`; risco de
+memória/concorrência, não de espaço bruto. ISO `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`:
+`stat` apenas, 8.172.068.864 bytes; sem hash, leitura, montagem ou boot. Nenhum
+processo interrompido. Não iniciar VM com RAM no limite, swap ocupada e histórico
+Btrfs ainda aberto (603 erros acumulados no último registro). Repetir G2 em host
+com folga de RAM, I/O estável e snapshot descartável após resolver o gate Btrfs.
+PXA-004/005/010/014 Windows G2 permanecem pendentes; seguir apenas ciclos
+independentes e herméticos.
