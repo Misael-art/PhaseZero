@@ -339,7 +339,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `planned` | G2/G4 pendentes: Arch e Windows descartáveis, conta real, participantes, escala/tema/acessibilidade e CI. |
+| PXA-014 | `planned` | `c7cdcf4`: gate local de acessibilidade agora corta subprocessos de status enquanto mantém widgets reais; `tests/test_accessibility_gate.py tests/test_native_tokens.py`: 72 passaram em 40,66 s, exit 0. G2 Arch/Windows integral, CI remota, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
