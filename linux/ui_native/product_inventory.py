@@ -8,6 +8,7 @@ replace duplicate installers with one product detail and instance contract.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +73,7 @@ _COMPARISON_CATEGORY_BY_APP = {
     "app.tailscale": "mesh-network",
     "app.zerotier": "mesh-network",
 }
+_INSTANCE_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _PRODUCT_SEARCH_TERMS = {
     "app.ollama": ("chat local", "modelos locais", "LLM local"),
     "app.vscode": ("programar", "editor de código", "desenvolver software"),
@@ -439,9 +441,42 @@ def instances_from_status_payload(
     scope: str,
     instance_key: str = "default",
 ) -> tuple[ProductInstance, ...]:
-    """Normalize one read-only app status without converting missing data to false."""
+    """Normalize one or more read-only app statuses without guessing absence."""
     if not isinstance(payload, dict) or not app_id.startswith("app."):
         return ()
+    rows = payload.get("instances")
+    if rows is not None:
+        if not isinstance(rows, list):
+            return ()
+        envelope = {key: value for key, value in payload.items() if key != "instances"}
+        instances: list[ProductInstance] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("instanceKey")
+            if not isinstance(key, str) or not _INSTANCE_KEY_PATTERN.fullmatch(key):
+                continue
+            item_payload = dict(envelope)
+            item_payload.update(row)
+            instances.extend(_single_status_instance(
+                item_payload, app_id=app_id, host_id=host_id, scope=scope,
+                instance_key=key,
+            ))
+        return tuple(instances)
+    return _single_status_instance(
+        payload, app_id=app_id, host_id=host_id, scope=scope,
+        instance_key=instance_key,
+    )
+
+
+def _single_status_instance(
+    payload: dict[str, object],
+    *,
+    app_id: str,
+    host_id: str,
+    scope: str,
+    instance_key: str,
+) -> tuple[ProductInstance, ...]:
     probe_failed = bool(payload.get("error")) or payload.get("status") in {
         "unavailable", "unknown", "timeout", "error",
     }

@@ -165,3 +165,40 @@ def test_status_loader_normalizes_verified_proxy_product_status(tmp_path):
         "present", "phasezero", "ready", "offline",
     )
     assert not instance.ready
+
+
+def test_status_loader_keeps_same_host_same_scope_instances_distinct(tmp_path):
+    action = ActionSpec(
+        "ai.webui-status", "AI", "Status Open WebUI", "", ("ai", "webui", "status"), "",
+        status_args=("ai", "webui", "status"),
+    )
+    loader = StatusLoader(tmp_path)
+    with patch.object(loader, "fetch"):
+        loader.fetch_product_status(
+            action, app_id="app.open-webui", host_id="local", scope="local",
+        )
+    instances = loader.product_instances_from_result(action.id, {
+        "hasStatus": True,
+        "instances": [
+            {"instanceKey": "local-a", "installationState": "present", "origin": "external",
+             "health": "online"},
+            {"instanceKey": "local-b", "installationState": "absent", "origin": "unknown",
+             "health": "unknown"},
+            {"instanceKey": "../unsafe", "installationState": "present"},
+        ],
+    })
+    assert len(instances) == 2
+    assert len({instance.instance_id for instance in instances}) == 2
+    assert {(instance.host_id, instance.scope) for instance in instances} == {("local", "local")}
+    assert {instance.instance_id.rsplit(":", 1)[-1] for instance in instances} == {"local-a", "local-b"}
+
+    with patch.object(loader, "fetch"):
+        loader.fetch_product_status(
+            action, app_id="app.open-webui", host_id="local", scope="local",
+        )
+    unprobed = loader.product_instances_from_result(action.id, {
+        "hasStatus": False,
+        "instances": [{"instanceKey": "stale", "installationState": "present"}],
+    })
+    assert len(unprobed) == 1
+    assert unprobed[0].installation == "unknown"

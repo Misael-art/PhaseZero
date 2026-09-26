@@ -640,20 +640,21 @@ def test_duplicate_instances_in_same_scope_block_unscoped_actions(qapp):
     try:
         page = window.registry.page_for("Aplicativos")
         page.open_product("app.vscode")
-        page._instances_ready(page._status_action_id, (
-            ProductInstance(
-                "local:first:app.vscode", "app.vscode", "local", "host",
-                installation="absent",
-            ),
-            ProductInstance(
-                "local:second:app.vscode", "app.vscode", "local", "host",
-                installation="present", origin="phasezero", configuration="ready", health="online",
-            ),
-        ))
+        from linux.ui_native.product_inventory import instances_from_status_payload
+
+        instances = instances_from_status_payload({
+            "hasStatus": True,
+            "instances": [
+                {"instanceKey": "first", "installationState": "absent"},
+                {"instanceKey": "second", "installationState": "present", "origin": "phasezero",
+                 "configurationState": "ready", "health": "online"},
+            ],
+        }, app_id="app.vscode", host_id="local", scope="host")
+        page._instances_ready(page._status_action_id, instances)
         selector = page.findChild(QComboBox, "productInstanceSelector")
         index = next(
             index for index in range(1, selector.count())
-            if selector.itemData(index) == "local:first:app.vscode"
+            if selector.itemData(index) == "local:host:app.vscode:first"
         )
         selector.setCurrentIndex(index)
         assert page._primary_button.text() == "Preparar"
