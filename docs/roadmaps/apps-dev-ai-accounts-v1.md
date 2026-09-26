@@ -1530,3 +1530,25 @@ em tmp; sem package manager, serviço, VM ou host status. Isso cobre queda abrup
 worker G1 e preserva instalação de autoria incerta; não prova interrupção dentro de
 transação real do gerenciador. PXA-004 segue `in_progress`; crash/cancelamento G2 real
 e Windows G2 continuam pendentes.
+
+Windows G2 reavaliado — 2026-09-26 19:10 -03:00: etapa **não realizada**.
+`free -h`: 3,5 GiB disponíveis para guest com mínimo de 4 GiB; swap 6,5 GiB.
+`vmstat 1 3`: primeira amostra 595 páginas/s de swap-in, 792 de swap-out e
+57% I/O wait; segunda 120/0. Load 2,78/3,53/7,42; Qoder, Codex, Chromium,
+Electron e Plasma ativos. `ps` não encontrou QEMU. Roadmap WinVM e nota de
+recovery mantêm armazenamento Btrfs como risco aberto (603 erros acumulados no
+último registro; scrub sem novos erros não encerrou diagnóstico). Não iniciei
+VM nem interrompi processo. ISO `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
+permanece apenas com `stat` anterior (8.172.068.864 bytes), sem leitura, hash,
+montagem ou boot. Reavaliar só com RAM acima do orçamento, I/O estável e snapshot
+descartável após resolução do gate Btrfs.
+
+PXA-008 contrato upstream rechecado — 2026-09-26 19:12 -03:00: PR [#1332](https://github.com/decolua/9router/pull/1332)
+segue aberto; propõe escopo por API key, mas o diff só filtra quando encontra
+uma chave ativa e considera allowlist ausente/vazia elegível para a requisição.
+Isso não prova grant PhaseZero fail-closed. `master` ainda chama
+`getProviderCredentials(provider, excludeConnectionIds, model)` dentro de loop
+que tenta outras contas após falha, sem ID de conexão escolhido pela requisição
+([handler atual](https://github.com/decolua/9router/blob/master/src/sse/handlers/chat.js)).
+PXA-008 continua fail-closed; não habilitar roteamento até contrato suportado
+prender conta autorizada à requisição e eliminar fallback entre contas.
