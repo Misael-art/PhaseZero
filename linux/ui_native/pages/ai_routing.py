@@ -44,6 +44,10 @@ POLICY_REASONS = {
 }
 
 QUOTA_POLL_MS = 60_000
+_APPLY_GATE_MESSAGE = (
+    "Aplicação bloqueada: 9Router ainda não vincula cada requisição à conexão autorizada "
+    "e pode usar outra conta ou fallback pago. Prévia continua disponível; nenhum combo será alterado."
+)
 _CLEAR = "—"
 
 
@@ -113,8 +117,7 @@ def routing_status_text(parsed: dict) -> str:
     return f"Online, {ready} de {total} provedores disponíveis"
 
 class AiRoutingPage(BasePage):
-    """Dedicated per-task routing page: recommendations, policies, quota,
-    fallback chain editor, apply/rollback and an isolated Bonsai card."""
+    """Routing page with read-only recommendations until request grants bind."""
 
     def __init__(
         self, root: Path, runner: CommandRunner, actions: list[ActionSpec],
@@ -131,6 +134,7 @@ class AiRoutingPage(BasePage):
         self._recommendations: dict[str, list[dict]] = {}
         self._policy_combo: QComboBox | None = None
         self._apply_all_button: QPushButton | None = None
+        self._apply_gate_notice: QLabel | None = None
         self._chain_editor: QListWidget | None = None
         self._chain_task = "code"
         self._technical_widgets: list[QWidget] = []
@@ -162,7 +166,9 @@ class AiRoutingPage(BasePage):
         layout.setSpacing(14)
 
         layout.addWidget(SectionHeader(
-            "Roteamento IA", "Escolha a tarefa. O PhaseZero sugere o modelo e aplica a rota."))
+            "Roteamento IA",
+            "Consulte recomendações e prévias. Aplicar fica bloqueado enquanto a rota não fixa "
+            "cada requisição à conexão autorizada."))
 
         summary = QFrame()
         summary.setObjectName("moduleFacts")
@@ -187,6 +193,7 @@ class AiRoutingPage(BasePage):
         self._apply_all_button = QPushButton("Aplicar as 3 rotas")
         self._apply_all_button.setObjectName("primaryButton")
         self._apply_all_button.setEnabled(False)
+        self._apply_all_button.setToolTip(_APPLY_GATE_MESSAGE)
         self._apply_all_button.clicked.connect(self._apply_all)
         actions_row.addWidget(self._apply_all_button)
         preview_all = QPushButton("Prévia do plano")
@@ -201,6 +208,11 @@ class AiRoutingPage(BasePage):
                 self._technical_widgets.append(button)
         actions_row.addStretch()
         layout.addLayout(actions_row)
+
+        self._apply_gate_notice = QLabel(_APPLY_GATE_MESSAGE)
+        self._apply_gate_notice.setObjectName("routingGrantGateNotice")
+        self._apply_gate_notice.setWordWrap(True)
+        layout.addWidget(self._apply_gate_notice)
 
         self._quota_details = QLabel("Atualize cotas para consultar fonte, horário e unidade.")
         self._quota_details.setObjectName("cardDescription")
@@ -223,7 +235,7 @@ class AiRoutingPage(BasePage):
             grid.addWidget(self._task_card(task, label), index // 2, index % 2)
         layout.addWidget(grid_host)
 
-        editor_box = QGroupBox("Ordem avançada de fallbacks")
+        editor_box = QGroupBox("Cadeia sugerida (somente leitura)")
         self._technical_widgets.append(editor_box)
         editor_layout = QVBoxLayout(editor_box)
         editor_row = QHBoxLayout()
@@ -239,18 +251,6 @@ class AiRoutingPage(BasePage):
         self._chain_editor = QListWidget()
         self._chain_editor.setMaximumHeight(160)
         list_row.addWidget(self._chain_editor, 1)
-        order_col = QVBoxLayout()
-        for label, slot in (
-            ("Subir", self._chain_up),
-            ("Descer", self._chain_down),
-            ("Aplicar ordem", self._chain_apply),
-        ):
-            button = QPushButton(label)
-            button.setObjectName("secondaryButton")
-            button.clicked.connect(slot)
-            order_col.addWidget(button)
-        order_col.addStretch()
-        list_row.addLayout(order_col)
         editor_layout.addLayout(list_row)
         layout.addWidget(editor_box)
 
@@ -426,40 +426,6 @@ class AiRoutingPage(BasePage):
             text = POLICY_REASONS.get(str(policy), POLICY_REASONS["balanced"])
         card["reason"].setText(text)
 
-    def _chain_apply(self) -> None:
-        models = [self._chain_editor.item(i).text() for i in range(self._chain_editor.count())]
-        if not models:
-            self._status_value.setText("Sem modelos na cadeia — adicione ao menos um antes de aplicar")
-            return
-        action = ActionSpec(
-            id=f"routing.chain-apply.{self._chain_task}",
-            category="Roteamento IA",
-            title="Aplicar ordem de fallbacks",
-            description="",
-            args=("ai", "routing", "apply", "--task", self._chain_task,
-                  "--yes", "--chain", ",".join(models)),
-            icon="system-run",
-            mutable=True,
-        )
-        self.request_action(action)
-
-    def _chain_up(self) -> None:
-        self._move_chain(-1)
-
-    def _chain_down(self) -> None:
-        self._move_chain(1)
-
-    def _move_chain(self, delta: int) -> None:
-        if self._chain_editor is None:
-            return
-        row = self._chain_editor.currentRow()
-        target = row + delta
-        if row < 0 or target < 0 or target >= self._chain_editor.count():
-            return
-        item = self._chain_editor.takeItem(row)
-        self._chain_editor.insertItem(target, item)
-        self._chain_editor.setCurrentRow(target)
-
     def _task_preview(self, task: str) -> None:
         card = self._task_cards.get(task)
         if card is None:
@@ -476,28 +442,9 @@ class AiRoutingPage(BasePage):
         )
         self.request_action(dynamic)
 
-    def _task_apply(self, task: str) -> None:
-        card = self._task_cards.get(task)
-        if card is None:
-            return
-        policy = str(self._policy_combo.currentData()) if self._policy_combo is not None else "balanced"
-        action = ActionSpec(
-            id=f"routing.apply.{task}.{policy}",
-            category="Roteamento IA",
-            title=f"Aplicar rota {task}",
-            description="",
-            args=("ai", "routing", "apply", "--task", task,
-                  "--policy", policy, "--yes"),
-            preview_args=("ai", "routing", "apply", "--task", task,
-                          "--policy", policy, "--dry-run"),
-            icon="system-run",
-            mutable=True,
-        )
-        self.request_action(action)
-
     def _apply_all(self) -> None:
-        # Backend reconciles all three managed combos in one transaction.
-        self._task_apply("code")
+        if self._apply_gate_notice is not None:
+            self._apply_gate_notice.setText(_APPLY_GATE_MESSAGE)
 
     def _rollback_clicked(self) -> None:
         manifest = self._manifest_input.text().strip()
@@ -615,9 +562,8 @@ class AiRoutingPage(BasePage):
             quota_text += f" · confiança: {conf:.0%}"
             card["quota"].setText(quota_text)
             if self._apply_all_button is not None:
-                self._apply_all_button.setEnabled(
-                    all(task_id in self._recommendations for task_id, _label, _aid in TASKS)
-                )
+                self._apply_all_button.setEnabled(False)
+                self._apply_all_button.setToolTip(_APPLY_GATE_MESSAGE)
             if task == self._chain_task:
                 self._populate_chain_editor(task)
 

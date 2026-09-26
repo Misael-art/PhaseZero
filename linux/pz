@@ -223,7 +223,7 @@ Usage:
    pz ai routing inventory      Collect redacted inventory [--refresh-quota] [--json]
    pz ai routing recommend --task code|analysis|plan --policy quality|balanced|save-quota|privacy
    pz ai routing plan --task <t> --client claude|opencode
-   pz ai routing apply [--dry-run] [--yes] --task <t> [--policy <p>]
+   pz ai routing apply --dry-run --task <t> [--policy <p>]  Preview only; writes blocked until request grants are enforceable
    pz ai routing run <task> --client claude|opencode -- <args>
    pz ai routing rollback <manifest> [--force]
    pz ai routing verify [--live]

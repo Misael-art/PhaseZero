@@ -1151,9 +1151,40 @@ def combo_models_match(combo: dict | None, models: list[str]) -> bool:
     return list(combo.get("models", [])) == list(models)
 
 
+def request_scoped_grants_enforced() -> bool:
+    """Return whether 9Router can bind every inference request to one grant.
+
+    Current combo/model routes cannot pin an account and may fail over to
+    sibling connections. Mutations stay blocked until a supported API and an
+    integration test prove request-scoped account enforcement.
+    """
+    return False
+
+
+def blocked_apply_result(task: str, policy: str) -> dict:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "blocked",
+        "blockedReason": "connection-grant-not-enforceable",
+        "message": (
+            "Aplicação bloqueada: 9Router não vincula cada requisição a uma conexão "
+            "autorizada e pode usar outra conta ou fallback pago. Nenhum combo foi alterado."
+        ),
+        "task": task,
+        "policy": policy,
+        "dryRun": False,
+        "applied": False,
+        "changes": {},
+        "secretsRedacted": True,
+    }
+
+
 def apply_plan(client: R9Client, config: Config, task: str, policy: str,
                dry_run: bool = False, assume_yes: bool = False, override: dict | None = None) -> dict:
-    """Materialize managed combos for the recommendation chain (transactional)."""
+    """Preview route combos; block mutation until request grants can be enforced."""
+    if not dry_run and not request_scoped_grants_enforced():
+        return blocked_apply_result(task, policy)
+
     manager = ComboManager(client)
     inventory = build_inventory(client, refresh_quota=True)
     reco = recommend(client, config, inventory, task, policy)
@@ -1573,6 +1604,10 @@ def cmd_plan(args) -> int:
 
 
 def cmd_apply(args) -> int:
+    if not args.dry_run and not request_scoped_grants_enforced():
+        _print_json(blocked_apply_result(args.task, args.policy))
+        return 2
+
     config = Config.load(create=not args.dry_run)
     client = R9Client()
     override = None
@@ -1588,7 +1623,7 @@ def cmd_apply(args) -> int:
     result = apply_plan(client, config, args.task, args.policy,
                         dry_run=args.dry_run, assume_yes=args.yes, override=override)
     _print_json(result)
-    return 0
+    return 2 if result.get("status") == "blocked" else 0
 
 
 def cmd_run(args) -> int:
@@ -1655,7 +1690,10 @@ def main(argv: list[str] | None = None) -> int:
     p_plan.add_argument("--json", action="store_true", help="accepted for catalog compatibility")
     p_plan.set_defaults(func=cmd_plan)
 
-    p_apply = sub.add_parser("apply", help="Materialize PhaseZero-managed combos transactionally")
+    p_apply = sub.add_parser(
+        "apply",
+        help="Blocked until each request enforces one granted connection; --dry-run previews only",
+    )
     p_apply.add_argument("--task", choices=TASKS, required=True)
     p_apply.add_argument("--policy", choices=POLICY_NAMES, default="balanced")
     p_apply.add_argument("--dry-run", action="store_true", help="no files, no combos, no state")

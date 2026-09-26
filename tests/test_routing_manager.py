@@ -300,6 +300,13 @@ def config(sandbox):
     return rm.Config.load()
 
 
+@pytest.fixture()
+def transaction_gate_for_legacy_tests(monkeypatch):
+    # Exercise combo transaction mechanics in the fake server only. This does
+    # not prove PXA-008 request binding; production gate remains false.
+    monkeypatch.setattr(rm, "request_scoped_grants_enforced", lambda: True)
+
+
 def _fresh_inventory(client) -> dict:
     return rm.build_inventory(client, refresh_quota=True)
 
@@ -586,7 +593,45 @@ def test_weights_must_sum_100(fake, config, sandbox):
 # Apply / idempotency / transactional behavior
 # ---------------------------------------------------------------------------
 
-def test_apply_creates_only_phasezero_combos(fake, config):
+def test_route_apply_mutation_blocks_before_contacting_9router():
+    class ForbiddenClient:
+        def __getattr__(self, name):
+            pytest.fail(f"route apply contacted 9Router through {name}")
+
+    result = rm.apply_plan(
+        ForbiddenClient(), config=None, task="code", policy="balanced", assume_yes=True,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["blockedReason"] == "connection-grant-not-enforceable"
+    assert result["applied"] is False
+    assert result["changes"] == {}
+    assert result["secretsRedacted"] is True
+
+
+def test_route_apply_cli_blocks_before_loading_config_or_router(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        rm.Config, "load",
+        lambda **_kwargs: pytest.fail("mutating apply loaded/created router config"),
+    )
+    monkeypatch.setattr(
+        rm, "R9Client", lambda: pytest.fail("mutating apply contacted router"),
+    )
+
+    code = rm.cmd_apply(SimpleNamespace(
+        task="code", policy="balanced", dry_run=False, yes=True, chain=None,
+    ))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code != 0
+    assert payload["status"] == "blocked"
+    assert payload["blockedReason"] == "connection-grant-not-enforceable"
+    assert payload["applied"] is False
+
+
+def test_apply_creates_only_phasezero_combos(fake, config, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     before = {c["name"]: list(c["models"]) for c in client.combos()}
@@ -601,7 +646,7 @@ def test_apply_creates_only_phasezero_combos(fake, config):
     assert after["phasezero-plan"][0] == "cx/gpt-5.6-sol"
 
 
-def test_apply_idempotent_second_run_no_manifest(fake, config, sandbox):
+def test_apply_idempotent_second_run_no_manifest(fake, config, sandbox, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
@@ -627,7 +672,7 @@ def test_dry_run_leaves_no_trace(fake, config, sandbox, monkeypatch, tmp_path):
     assert not (tmp_path / "config2").exists()
 
 
-def test_apply_failure_midway_rolls_back(fake, config):
+def test_apply_failure_midway_rolls_back(fake, config, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     # pre-create code+analysis with wrong models so the apply PUTs them;
@@ -649,7 +694,7 @@ def test_apply_failure_midway_rolls_back(fake, config):
     assert after["Default"] == before["Default"]
 
 
-def test_rollback_restores_bytes_and_state(fake, config, sandbox):
+def test_rollback_restores_bytes_and_state(fake, config, sandbox, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     # pre-existing combo (stale models) so the apply PUTs it and rollback can restore bytes
@@ -668,7 +713,7 @@ def test_rollback_restores_bytes_and_state(fake, config, sandbox):
     assert "phasezero-code" not in after
 
 
-def test_rollback_refuses_drift_without_force(fake, config):
+def test_rollback_refuses_drift_without_force(fake, config, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     client.request("POST", "/api/combos", {"name": "phasezero-code",
@@ -688,7 +733,9 @@ def test_rollback_refuses_drift_without_force(fake, config):
     assert after["phasezero-code"] == ["stale-model"]
 
 
-def test_apply_blocks_opencode_catalog_sync_without_account_bound_grant(fake, config, sandbox, monkeypatch):
+def test_apply_never_syncs_opencode_catalog_without_account_bound_grant(
+    fake, config, sandbox, monkeypatch, transaction_gate_for_legacy_tests,
+):
     _fake, base = fake
     client = _client_for(fake, base)
     # opencode.json present with stale model list
@@ -715,7 +762,9 @@ def test_apply_blocks_opencode_catalog_sync_without_account_bound_grant(fake, co
     assert manifest["opencodeCatalogBefore"] is None
 
 
-def test_rollback_leaves_opencode_catalog_unchanged_when_sync_was_blocked(fake, config, sandbox, monkeypatch):
+def test_rollback_leaves_opencode_catalog_unchanged_when_sync_was_blocked(
+    fake, config, sandbox, monkeypatch, transaction_gate_for_legacy_tests,
+):
     _fake, base = fake
     client = _client_for(fake, base)
     opencode_path = rm.opencode_config_path()
@@ -733,7 +782,7 @@ def test_rollback_leaves_opencode_catalog_unchanged_when_sync_was_blocked(fake, 
     assert opencode_path.read_bytes() == before_bytes
 
 
-def test_apply_skips_opencode_sync_when_config_absent(fake, config, sandbox):
+def test_apply_skips_opencode_sync_when_config_absent(fake, config, sandbox, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
@@ -741,7 +790,7 @@ def test_apply_skips_opencode_sync_when_config_absent(fake, config, sandbox):
     assert result["opencodeCatalog"]["reason"] == "opencode.json absent"
 
 
-def test_chain_override_applies_manual_order(fake, config):
+def test_chain_override_applies_manual_order(fake, config, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     override = [
@@ -769,7 +818,7 @@ def test_output_redacts_accounts_and_errors(fake):
     assert "429" in json.dumps(claude["status"]["reason"])  # classified, not raw
 
 
-def test_state_and_manifest_redacted(fake, config, sandbox):
+def test_state_and_manifest_redacted(fake, config, sandbox, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
@@ -781,7 +830,7 @@ def test_state_and_manifest_redacted(fake, config, sandbox):
     assert "test-api-key" not in json.dumps(manifest)
 
 
-def test_file_permissions_private(fake, config, sandbox):
+def test_file_permissions_private(fake, config, sandbox, transaction_gate_for_legacy_tests):
     _fake, base = fake
     client = _client_for(fake, base)
     rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
@@ -918,19 +967,18 @@ def test_cli_apply_dry_run_no_trace(sandbox, fake):
     assert not (sandbox[0] / "config").exists()
 
 
-def test_cli_apply_and_rollback(sandbox, fake):
+def test_cli_apply_blocks_global_routes_until_grants_bind_each_request(sandbox, fake):
+    fake_obj, _base = fake
+    combos_before = [dict(combo) for combo in fake_obj.combos]
     proc = _run_cli(sandbox, fake, "apply", "--task", "code", "--yes")
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 2, proc.stderr
     data = json.loads(proc.stdout)
-    assert data["applied"] is True
-    manifest = data["manifest"]
-    assert manifest and (sandbox[0] / "data").exists()
-
-    proc = _run_cli(sandbox, fake, "rollback", manifest)
-    assert proc.returncode == 0, proc.stderr
-    roll = json.loads(proc.stdout)
-    assert set(roll["restoredCombos"]) == {"phasezero-code", "phasezero-analysis",
-                                           "phasezero-plan"}
+    assert data["status"] == "blocked"
+    assert data["blockedReason"] == "connection-grant-not-enforceable"
+    assert data["applied"] is False
+    assert fake_obj.combos == combos_before
+    assert not (sandbox[0] / "data").exists()
+    assert not (sandbox[0] / "config").exists()
 
 
 def test_cli_verify(sandbox, fake):

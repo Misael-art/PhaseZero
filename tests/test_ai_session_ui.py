@@ -430,7 +430,7 @@ def test_routing_hides_technical_surfaces_in_simple_mode(routing_page):
     page, _actions = routing_page
     boxes = page.findChildren(QGroupBox)
     titles = {box.title() for box in boxes}
-    assert "Ordem avançada de fallbacks" in titles
+    assert "Cadeia sugerida (somente leitura)" in titles
     assert "Rollback transacional" in titles
     for widget in page._technical_widgets:
         assert widget.isHidden()
@@ -439,24 +439,24 @@ def test_routing_hides_technical_surfaces_in_simple_mode(routing_page):
         assert not widget.isHidden()
 
 
-def test_routing_preview_and_apply_keep_selected_policy(routing_page):
+def test_routing_preview_keeps_policy_and_apply_is_blocked(routing_page):
     page, _actions = routing_page
     policy = page._policy_combo
     policy.setCurrentIndex(policy.findData("privacy"))
     requested = []
     page.action_requested.connect(lambda action: requested.append(action))
     page._task_preview("code")
-    page._task_apply("code")
+    page._apply_all()
+    assert len(requested) == 1
     assert requested[0].args == (
         "ai", "routing", "apply", "--task", "code", "--policy", "privacy", "--dry-run",
     )
-    assert requested[1].args == (
-        "ai", "routing", "apply", "--task", "code", "--policy", "privacy", "--yes",
-    )
-    assert requested[1].preview_args[-1] == "--dry-run"
+    assert page._apply_all_button is not None and not page._apply_all_button.isEnabled()
+    assert not any(button.text() == "Aplicar ordem" for button in page.findChildren(QPushButton))
+    assert "conexão autorizada" in page._apply_gate_notice.text()
 
 
-def test_routing_dynamic_success_populates_fallback_and_enables_apply(routing_page):
+def test_routing_recommendations_populate_fallback_but_keep_apply_blocked(routing_page):
     page, _actions = routing_page
     recommendation = [
             {
@@ -475,7 +475,7 @@ def test_routing_dynamic_success_populates_fallback_and_enables_apply(routing_pa
             f"routing.dynamic.{task}.balanced", "", {"recommendation": recommendation},
         )
     card = page._task_cards["code"]
-    assert page._apply_all_button.isEnabled()
+    assert not page._apply_all_button.isEnabled()
     assert page._chain_editor.count() == 2
     assert page._chain_editor.item(0).text() == "provider/model-a"
     assert "cota: conhecida" in card["quota"].text()
