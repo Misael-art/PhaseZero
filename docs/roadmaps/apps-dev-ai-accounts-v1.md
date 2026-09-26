@@ -1381,3 +1381,28 @@ de argumentos read-only. Regressão focal: 58 testes; `py_compile` e `git diff -
 QProcess foi mockado nos novos casos; nenhum manager, serviço, pacote, conta, sessão, VM ou
 host remoto foi acionado. PXA-003 permanece `in_progress`: executor remoto e distinção de
 instâncias no mesmo host/escopo seguem pendentes.
+
+PXA-003 probes de produto IA — commit `9f4c40c`, 2026-09-26: catálogo agora oferece probe
+read-only, individual para ai-memory, UsageBar, Claude Desktop, Codex Desktop e Qwen Code
+Desktop; antes esses cinco produtos não tinham capability nem ação de status. Adaptador
+`linux/ai/product_status.py` normaliza evidência por produto. Preserva origem desconhecida
+quando não há prova de propriedade; ausência no diretório gerenciado Claude/Qwen e versão
+salva pelo updater Codex não provam ausência/propriedade. Status agregado não é rotulado como
+status de um produto. Manifesto regenerado. Regressão de inventário, loader e UI: 60 passaram
+em 25,48 s; `py_compile`, `bash -n linux/pz` e `git diff --check` passaram. Smoke fixtures
+`tests/linux-ai-desktop.sh` e `tests/linux-ai-proxies.sh` passaram. Probes novos não foram
+executados contra o host. PXA-003 segue `in_progress`: executor remoto e instâncias distintas
+no mesmo host/escopo pendem; alguns estados externos de desktop permanecem `unknown`.
+PXA-006/G3 continua gate externo: falta conta/sessão suportada e cota real observada; fixtures
+não fecham o gate.
+
+Reavaliação Windows G2 solicitada pelo operador — 2026-09-26, 11:55 -03:00:
+**etapa não realizada; pular para demais itens**. Leitura read-only: RAM total 14 GiB,
+4,2 GiB disponíveis; swap usada 6,9 GiB; load average 4,81/5,59/6,33. Qoder, Electron e
+Chrome ativos (~34%, ~32%, ~32% CPU na amostra). Nenhum QEMU, virt-manager ou VirtualBox
+em execução. Guest Windows requer 4 GiB; margem livre de 0,2 GiB, swap alta e carga ativa
+deixam risco concreto de pressionar trabalhos do host. ISO
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` só tem o `stat`
+anterior (8.172.068.864 bytes): sem hash, leitura de conteúdo, montagem ou boot. Nenhum
+processo foi interrompido. Retomar G2 apenas com folga confirmada e snapshot descartável,
+conforme roadmap WinVM.
