@@ -366,6 +366,38 @@ def test_primary_open_uses_installed_desktop_entry_without_shell(qapp, tmp_path,
         status_patcher.stop()
 
 
+def test_managed_desktop_opens_when_launcher_is_ready_and_runtime_health_unknown(
+    qapp, tmp_path, monkeypatch,
+):
+    from linux.ui_native.main_window import QProcess
+    from linux.ui_native.product_inventory import instances_from_status_payload
+
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        apps = tmp_path / "applications"
+        apps.mkdir()
+        entry = apps / "claude-desktop.desktop"
+        entry.write_text("[Desktop Entry]\nType=Application\nName=Claude Desktop\n", encoding="utf-8")
+        monkeypatch.setattr("linux.ui_native.pages.product_registry.desktop_dirs", lambda: (apps,))
+        page = window.registry.page_for("Aplicativos")
+        page.open_product("app.claude-desktop")
+        observed = instances_from_status_payload({
+            "hasStatus": True, "installationState": "present", "origin": "phasezero",
+            "configurationState": "ready", "health": "unknown", "launchable": True,
+        }, app_id="app.claude-desktop", host_id="local", scope="local")
+        page._instances_ready(page._status_action_id, observed)
+        assert "Saúde: unknown" in page._status_label.text()
+        assert page._primary_button.text() == "Abrir"
+        assert page._primary_button.isEnabled()
+        with patch.object(QProcess, "startDetached", return_value=(True, 42)) as start:
+            page._primary_button.click()
+        start.assert_called_once_with("gio", ["launch", str(entry)])
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
 def test_open_webui_status_keeps_usage_blocked_without_request_grants(qapp, tmp_path, monkeypatch):
     apps = tmp_path / "applications"
     apps.mkdir()

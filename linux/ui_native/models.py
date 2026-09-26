@@ -153,6 +153,7 @@ class ProductInstance:
     details: str = ""
     usage_blocked: bool = False
     blocked_reason: str = ""
+    launchable: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -170,6 +171,10 @@ class ProductInstance:
             raise ValueError("invalid health state")
         if type(self.usage_blocked) is not bool:
             raise ValueError("invalid usage permission state")
+        if type(self.launchable) is not bool:
+            raise ValueError("invalid launchability state")
+        if self.launchable and (self.installation != "present" or self.configuration != "ready"):
+            raise ValueError("launchable instance needs installed, configured app")
         if not isinstance(self.blocked_reason, str):
             raise ValueError("invalid usage block reason")
         if self.origin == "external" and self.installation != "present":
@@ -183,6 +188,8 @@ class ProductInstance:
             return "verify"
         if self.configuration == "needed":
             return "configure"
+        if self.launchable and self.configuration == "ready" and self.health == "unknown":
+            return "open"
         if self.configuration == "unknown" or self.health == "unknown":
             return "verify"
         if self.health in {"offline", "failed"}:
@@ -209,6 +216,7 @@ class ProductInstance:
             "observedAt": self.observed_at,
             "usageBlocked": self.usage_blocked,
             "blockedReason": self.blocked_reason,
+            "launchable": self.launchable,
             "nextAction": self.next_action,
             "ready": self.ready,
         }

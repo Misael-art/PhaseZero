@@ -112,6 +112,7 @@ def _base(
     configuration: str = "unknown",
     health: str = "unknown",
     version: Any = "",
+    launchable: bool = False,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
@@ -122,8 +123,16 @@ def _base(
         "health": health,
         "manager": manager,
         "version": version if isinstance(version, str) else "",
+        "launchable": launchable,
         "observedAt": _observed_at(),
     }
+
+
+def _is_executable_file(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    path = Path(value).expanduser()
+    return path.is_file() and os.access(path, os.X_OK)
 
 
 def normalize_payload(app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -188,19 +197,24 @@ def normalize_payload(app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             "ready" if installed is True and record.get("launcherOk") is True
             and record.get("desktopEntryOk") is True else "unknown"
         )
+        launchable = configuration == "ready"
     elif app_id == "qwen-code-desktop":
         installed = record.get("installed")
         version = record.get("version")
         launcher = record.get("launcher")
+        binary = record.get("binary")
+        launcher_ok = _is_executable_file(launcher)
+        binary_ok = _is_executable_file(binary)
         configuration = (
-            "ready" if installed is True and isinstance(launcher, str)
-            and Path(launcher).is_file() else "unknown"
+            "ready" if installed is True and launcher_ok and binary_ok else "unknown"
         )
+        launchable = configuration == "ready"
     else:
         # Codex update state records a version, not package ownership or health.
         installed = None
         version = record.get("installedVersion")
         configuration = "unknown"
+        launchable = False
 
     # The desktop manager only inventories its own Claude/Qwen directories.
     # A negative managed-path check cannot prove absence of external installs.
@@ -212,6 +226,7 @@ def normalize_payload(app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         origin=origin,
         configuration=configuration,
         version=version,
+        launchable=launchable,
     )
 
 

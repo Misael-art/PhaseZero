@@ -109,7 +109,7 @@ def _read_icon_key(path: Path) -> str:
 def _candidate_basenames(source_kind: str, source_name: str) -> tuple[str, ...]:
     if not source_name:
         return ()
-    if source_kind == "flatpak":
+    if source_kind in {"flatpak", "desktop-entry"}:
         # App id é o nome do arquivo exportado, sem exceção.
         return (source_name,)
     # Pacotes: o `.desktop` costuma repetir o nome do binário; variações com

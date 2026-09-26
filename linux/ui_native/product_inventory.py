@@ -56,6 +56,10 @@ _EXTRA_APPS = {
     "qwen-code-desktop": "Qwen Code Desktop", "qwen-proxy": "Qwen Proxy",
     "9router": "9Router", "usagebar": "UsageBar",
 }
+_DESKTOP_ENTRY_HINTS = {
+    "app.claude-desktop": ("claude-desktop",),
+    "app.qwen-code-desktop": ("qwen-code-desktop",),
+}
 
 # Existing contexts can offer the same app without owning a second installer.
 # `server.llm` keeps its model/server workflow, but delegates the package setup
@@ -285,12 +289,14 @@ def inventory_manifest(root: Path) -> dict[str, object]:
     ]
     capability_apps = {item["appId"] for item in products}
     products.extend(
-        {"appId": f"app.{key}", "name": name, "capabilityId": None,
-         "description": "", "group": "Inteligência artificial",
-         "requires": [], "conflicts": [], "risk": "normal", "license": "unknown",
-         "compatibility": {"distros": [], "gpu": [], "desktops": [],
-                           "sessions": [], "init": [], "immutable": "unknown",
-                           "container": "unknown"}, "sources": []}
+        ({"appId": f"app.{key}", "name": name, "capabilityId": None,
+          "description": "", "group": "Inteligência artificial",
+          "requires": [], "conflicts": [], "risk": "normal", "license": "unknown",
+          "compatibility": {"distros": [], "gpu": [], "desktops": [],
+                            "sessions": [], "init": [], "immutable": "unknown",
+                            "container": "unknown"}, "sources": [],
+          **({"desktopEntries": list(_DESKTOP_ENTRY_HINTS[f"app.{key}"])}
+             if f"app.{key}" in _DESKTOP_ENTRY_HINTS else {})})
         for key, name in sorted(_EXTRA_APPS.items())
         if f"app.{key}" not in capability_apps
     )
@@ -545,4 +551,8 @@ def _single_status_instance(
         observed_at=str(payload.get("observedAt") or ""),
         usage_blocked=payload.get("usageBlocked") is True,
         blocked_reason=blocked_reason if isinstance(blocked_reason, str) else "",
+        launchable=(
+            payload.get("launchable") is True
+            and installation == "present" and raw_configuration == "ready"
+        ),
     ),)

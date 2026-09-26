@@ -776,6 +776,14 @@ class ProductRegistryPage(BasePage):
         ) and action.id != self._status_action_id), None)
 
     def _desktop_entry_for_product(self, product: dict[str, object]) -> str:
+        entries = product.get("desktopEntries", [])
+        if isinstance(entries, list):
+            roots = desktop_dirs()
+            for name in entries:
+                if isinstance(name, str) and name:
+                    entry = find_desktop_entry("desktop-entry", name, roots)
+                    if entry is not None:
+                        return str(entry)
         sources = product.get("sources", [])
         if not isinstance(sources, list):
             return ""

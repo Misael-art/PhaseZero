@@ -140,6 +140,31 @@ def test_product_status_normalizers_preserve_unknown_installation_evidence(tmp_p
     assert desktop["installationState"] == "unknown"
     assert desktop["origin"] == "unknown"
     assert desktop["health"] == "unknown"
+    managed_desktop = normalize_payload("claude-desktop", {
+        "claudeDesktop": {
+            "installed": True, "version": "1.0", "launcherOk": True,
+            "desktopEntryOk": True,
+        },
+    })
+    assert managed_desktop["installationState"] == "present"
+    assert managed_desktop["configurationState"] == "ready"
+    assert managed_desktop["health"] == "unknown"
+    assert managed_desktop["launchable"] is True
+
+    qwen_launcher = tmp_path / "qwen-code-desktop"
+    qwen_binary = tmp_path / "Qwen-Code-Desktop.AppImage"
+    qwen_launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    qwen_binary.write_text("fixture", encoding="utf-8")
+    qwen_launcher.chmod(0o755)
+    qwen_binary.chmod(0o755)
+    qwen = normalize_payload("qwen-code-desktop", {
+        "qwenCodeDesktop": {
+            "installed": True, "version": "1.0", "launcher": str(qwen_launcher),
+            "binary": str(qwen_binary),
+        },
+    })
+    assert qwen["configurationState"] == "ready"
+    assert qwen["launchable"] is True
 
     usagebar = normalize_payload("usagebar", {
         "available": True, "version": "1.2", "configPath": str(tmp_path / "config.toml"),
@@ -181,6 +206,24 @@ def test_product_status_normalizers_preserve_unknown_installation_evidence(tmp_p
     assert codex["origin"] == "unknown"
 
 
+def test_launchable_status_requires_present_configured_instance():
+    launchable = instances_from_status_payload(
+        {"hasStatus": True, "installationState": "present", "origin": "phasezero",
+         "configurationState": "ready", "health": "unknown", "launchable": True},
+        app_id="app.claude-desktop", host_id="local", scope="local",
+    )[0]
+    assert launchable.next_action == "open"
+    assert launchable.health == "unknown"
+    assert launchable.to_dict()["launchable"] is True
+
+    uninstalled = instances_from_status_payload(
+        {"hasStatus": True, "installationState": "absent", "launchable": True},
+        app_id="app.claude-desktop", host_id="local", scope="local",
+    )[0]
+    assert uninstalled.launchable is False
+    assert uninstalled.next_action == "prepare"
+
+
 def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
     payload = inventory_manifest(ROOT)
     actions = {item["actionId"]: item for item in payload["actions"]}
@@ -212,6 +255,12 @@ def test_comparison_groups_only_include_curated_same_function_apps():
     categories = {item["appId"]: item["comparisonCategory"] for item in payload["products"]}
     assert categories["app.ollama"] is None
     assert categories["app.9router"] is None
+
+
+def test_managed_desktop_entry_hints_are_exact_app_ids():
+    products = {item["appId"]: item for item in inventory_manifest(ROOT)["products"]}
+    assert products["app.claude-desktop"]["desktopEntries"] == ["claude-desktop"]
+    assert products["app.qwen-code-desktop"]["desktopEntries"] == ["qwen-code-desktop"]
 
 
 def test_unclassified_action_fails_closed():
