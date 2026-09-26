@@ -1425,3 +1425,13 @@ CTA “Abrir” usa `gio launch` depois do clique explícito. Regressão invent�
 64 passaram em 19,16 s; `py_compile` e `git diff --check` passaram. QProcess foi mockado;
 nenhum app, manager, serviço, sessão ou host remoto iniciou. Instalações externas continuam
 `unknown` sem probe compatível; PXA-003 segue `in_progress` e PXA-006/G3 segue gate externo.
+
+PXA-002/PXA-003 identidade do status de capability — commit `5580a0e`, 2026-09-26:
+teste red mostrou que payload podia fornecer `hostId`, `scope` e `instanceId` e reassociar
+estado à instância errada. Normalizador agora usa host/escopo capturados na consulta e deriva
+ID do contexto mais ID canônico da capability. Regressão de inventário, status e detalhe:
+65 passaram em 27,43 s; `py_compile` e `git diff --check` passaram. Payload adversarial foi
+fixture; nenhum executor ou host remoto foi chamado. PXA-003 continua `in_progress`: seletor
+e executor Homelab ainda não vinculam estado/ações a identidade remota verificada; instâncias
+duplicadas continuam sem manager endereçável. PXA-006/G3 permanece gate externo; fixtures
+não substituem conta, sessão e quota reais.
