@@ -4,7 +4,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAccessible
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QComboBox, QFormLayout, QLabel, QPushButton
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +61,130 @@ def test_development_controls_build_optional_editor_plan_validate_and_open(qapp)
         open_tool.click()
         assert window.stack.currentWidget() is window.registry.page_for("Aplicativos")
         assert window.registry.page_for("Aplicativos").selected_app_id == "app.vscode"
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_development_controls_have_accessible_names_and_keyboard_order(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.show_category("Desenvolvimento")
+        window.show()
+        qapp.processEvents()
+        page = window.registry.page_for("Desenvolvimento")
+        controls = (
+            page.findChild(QComboBox, "developmentObjective"),
+            page.findChild(QComboBox, "developmentEditor"),
+            page.findChild(QPushButton, "prepareDevelopment"),
+            page.findChild(QPushButton, "validateDevelopment"),
+            page.findChild(QPushButton, "openDevelopmentTool"),
+        )
+        expected_names = (
+            "Objetivo de desenvolvimento", "Editor opcional",
+            "Revisar plano e preparar", "Validar ambiente", "Abrir ferramenta",
+        )
+        expected_descriptions = (
+            "Escolha a receita inicial para este projeto.",
+            "Escolha Visual Studio Code, VSCodium ou decida depois.",
+            "Exibe custos e mudanças antes de preparar o ambiente.",
+            "Consulta o estado das ferramentas selecionadas.",
+            "Abre o detalhe canônico da ferramenta escolhida.",
+        )
+        interface_names = (
+            "Web JavaScript / TypeScript", "Escolher depois",
+            "Revisar plano e preparar", "Validar ambiente", "Abrir ferramenta",
+        )
+        for control, expected_name, expected_description, interface_name in zip(
+            controls, expected_names, expected_descriptions, interface_names, strict=True,
+        ):
+            assert control.accessibleName() == expected_name
+            assert control.accessibleDescription() == expected_description
+            interface = QAccessible.queryAccessibleInterface(control)
+            assert interface is not None
+            assert interface.text(QAccessible.Text.Name) == interface_name
+            assert interface.text(QAccessible.Text.Description) == expected_description
+            assert control.focusPolicy() & Qt.TabFocus
+
+        form = page.findChild(QFormLayout)
+        objective_label = form.labelForField(controls[0])
+        editor_label = form.labelForField(controls[1])
+        assert isinstance(objective_label, QLabel) and objective_label.buddy() is controls[0]
+        assert isinstance(editor_label, QLabel) and editor_label.buddy() is controls[1]
+
+        controls[0].setFocus()
+        qapp.processEvents()
+        assert controls[0].hasFocus()
+        for current, following in zip(controls[:-1], controls[1:], strict=True):
+            QTest.keyClick(current, Qt.Key_Tab)
+            qapp.processEvents()
+            assert following.hasFocus()
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+@pytest.mark.parametrize(
+    ("action_id", "exit_code", "parsed", "expected"),
+    (
+        (
+            "capability.profile.development-web-js", 130,
+            {"kind": "operation", "status": "cancelled"},
+            "Preparação pausada entre etapas. O que terminou foi preservado; "
+            "gere novo preview para retomar.",
+        ),
+        (
+            "capability.profile.development-web-js", 0,
+            {"kind": "operation", "status": "completed"},
+            "Preparação concluída. Valide o ambiente para conferir cada ferramenta.",
+        ),
+        (
+            "capability.profile.development-web-js", 0,
+            {"kind": "operation", "status": "failed"},
+            "Preparação interrompida ou incompleta. Revise o erro; você pode "
+            "gerar novo plano e tentar novamente.",
+        ),
+        (
+            "capability.status", 1,
+            {"kind": "status", "status": "unknown"},
+            "A validação falhou. O estado permanece desconhecido; tente novamente.",
+        ),
+    ),
+    ids=("cancelled", "completed", "failed-with-zero-exit", "validation-failed"),
+)
+def test_development_operation_results_are_announced_accessibly(
+    qapp, monkeypatch, action_id, exit_code, parsed, expected,
+):
+    from PySide6 import QtGui
+    from linux.ui_native.models import OperationResult
+
+    announcement_type = getattr(QtGui, "QAccessibleAnnouncementEvent", None)
+    if announcement_type is None:
+        pytest.skip("Qt before 6.8 has no QAccessibleAnnouncementEvent")
+    events = []
+    monkeypatch.setattr(QAccessible, "isActive", staticmethod(lambda: True))
+    monkeypatch.setattr(QAccessible, "updateAccessibility", events.append)
+
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.show_category("Desenvolvimento")
+        page = window.registry.page_for("Desenvolvimento")
+        action = page.by_id[action_id]
+        result = OperationResult(
+            action_id=action.id, command=["linux/pz", "capabilities", "apply"],
+            preview=False, exit_code=exit_code, started_at="", finished_at="",
+            stdout="{}", stderr="", parsed=parsed,
+        )
+
+        page.on_operation_result(action, result)
+
+        assert page.status.text() == expected
+        assert len(events) == 1
+        assert isinstance(events[0], announcement_type)
+        assert events[0].message() == expected
+        assert events[0].politeness() == QAccessible.AnnouncementPoliteness.Polite
     finally:
         window.close()
         host_patcher.stop()

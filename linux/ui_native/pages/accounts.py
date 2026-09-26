@@ -17,6 +17,7 @@ from linux.ai.credential_vault import CredentialEntry, CredentialVault, Credenti
 from linux.ai.grants import CONSENT_RECORD_ADAPTERS, GrantError, GrantLedger
 from linux.ai.secret_store import SecretStoreUnavailable
 
+from ..a11y_events import announce_accessible
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
 from ..preferences import UiPreferences
@@ -35,17 +36,6 @@ _CONSUMER_LABELS = {
     "app.claude-code": "Claude Code",
     "app.opencode": "OpenCode",
 }
-
-
-def _announce_accessible(widget: QWidget | None, message: str) -> None:
-    if widget is None or not message:
-        return
-    try:
-        from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
-    except ImportError:
-        return
-    if QAccessible.isActive():
-        QAccessible.updateAccessibility(QAccessibleAnnouncementEvent(widget, message))
 
 
 @dataclass(frozen=True)
@@ -401,7 +391,7 @@ class AccountsPage(BasePage):
             self._add_credential_button.setEnabled(False)
         if self._credential_status is not None:
             self._credential_status.setText("Aguardando resposta do cofre seguro…")
-            _announce_accessible(self._credential_status, self._credential_status.text())
+            announce_accessible(self._credential_status, self._credential_status.text())
         worker = _CredentialWorker(self.credential_vault, operation, values)
         worker.signals.finished.connect(self._credential_operation_finished)
         self._credential_worker = worker
@@ -449,7 +439,7 @@ class AccountsPage(BasePage):
             else:
                 message = "Referência local removida; a chave do provedor não foi revogada."
             self._credential_status.setText(message)
-            _announce_accessible(self._credential_status, message)
+            announce_accessible(self._credential_status, message)
         self._render_credentials()
 
     def _render_credentials(self) -> None:
@@ -555,7 +545,7 @@ class AccountsPage(BasePage):
         self._outcomes = {source: "loading" for source in _SOURCES}
         if self.summary is not None:
             self.summary.setText("Verificando provedores disponíveis…")
-            _announce_accessible(self.summary, self.summary.text())
+            announce_accessible(self.summary, self.summary.text())
         commands = {
             "claude": ["ai", "claude", "status"],
             "proxies": ["ai", "proxies", "detailed-status"],
@@ -636,7 +626,7 @@ class AccountsPage(BasePage):
                 )
             else:
                 self.summary.setText(f"Consulta concluída · {len(self._accounts)} registros conhecidos")
-            _announce_accessible(self.summary, self.summary.text())
+            announce_accessible(self.summary, self.summary.text())
 
     def _render_cards(self) -> None:
         if self._cards_layout is None:

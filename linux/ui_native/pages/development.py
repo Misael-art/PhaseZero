@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget,
 )
 
+from ..a11y_events import announce_accessible
 from ..command_runner import CommandRunner
 from ..models import ActionSpec, OperationResult
 from ..widgets import SectionHeader
@@ -68,6 +69,8 @@ class DevelopmentPage(BasePage):
         form = QFormLayout()
         self.objective = QComboBox()
         self.objective.setObjectName("developmentObjective")
+        self.objective.setAccessibleName("Objetivo de desenvolvimento")
+        self.objective.setAccessibleDescription("Escolha a receita inicial para este projeto.")
         for title, profile_id, app_id, description in _OBJECTIVES:
             self.objective.addItem(title, profile_id)
         self.objective.currentIndexChanged.connect(self._update_objective)
@@ -75,6 +78,8 @@ class DevelopmentPage(BasePage):
 
         self.editor = QComboBox()
         self.editor.setObjectName("developmentEditor")
+        self.editor.setAccessibleName("Editor opcional")
+        self.editor.setAccessibleDescription("Escolha Visual Studio Code, VSCodium ou decida depois.")
         for title, capability_id in _EDITORS:
             self.editor.addItem(title, capability_id)
         form.addRow("Editor (opcional):", self.editor)
@@ -88,21 +93,33 @@ class DevelopmentPage(BasePage):
         row = QHBoxLayout()
         self.prepare_button = QPushButton("Revisar plano e preparar")
         self.prepare_button.setObjectName("prepareDevelopment")
+        self.prepare_button.setAccessibleName("Revisar plano e preparar")
+        self.prepare_button.setAccessibleDescription("Exibe custos e mudanças antes de preparar o ambiente.")
         self.prepare_button.setMinimumHeight(42)
         self.prepare_button.clicked.connect(self._prepare)
         row.addWidget(self.prepare_button)
         self.validate_button = QPushButton("Validar ambiente")
         self.validate_button.setObjectName("validateDevelopment")
+        self.validate_button.setAccessibleName("Validar ambiente")
+        self.validate_button.setAccessibleDescription("Consulta o estado das ferramentas selecionadas.")
         self.validate_button.clicked.connect(self._validate)
         row.addWidget(self.validate_button)
         self.open_button = QPushButton("Abrir ferramenta")
         self.open_button.setObjectName("openDevelopmentTool")
+        self.open_button.setAccessibleName("Abrir ferramenta")
+        self.open_button.setAccessibleDescription("Abre o detalhe canônico da ferramenta escolhida.")
         self.open_button.clicked.connect(self._open_tool)
         row.addWidget(self.open_button)
         layout.addLayout(row)
 
+        QWidget.setTabOrder(self.objective, self.editor)
+        QWidget.setTabOrder(self.editor, self.prepare_button)
+        QWidget.setTabOrder(self.prepare_button, self.validate_button)
+        QWidget.setTabOrder(self.validate_button, self.open_button)
+
         self.status = QLabel("Nenhum ambiente validado nesta sessão.")
         self.status.setObjectName("developmentStatus")
+        self.status.setAccessibleName("Status do ambiente de desenvolvimento")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         layout.addStretch()
@@ -125,7 +142,7 @@ class DevelopmentPage(BasePage):
         action = self.by_id.get(f"capability.profile.{profile_id}")
         if action is None:
             if self.status is not None:
-                self.status.setText("Receita indisponível. Atualize o catálogo e tente novamente.")
+                self._set_status("Receita indisponível. Atualize o catálogo e tente novamente.")
             return
         editor_id = self.editor.currentData() if self.editor is not None else ""
         if editor_id:
@@ -145,7 +162,14 @@ class DevelopmentPage(BasePage):
     def _validate(self) -> None:
         action = self.by_id.get("capability.status")
         if action is not None:
+            self._set_status("Validação iniciada.")
             self.request_action(action)
+
+    def _set_status(self, message: str) -> None:
+        if self.status is None:
+            return
+        self.status.setText(message)
+        announce_accessible(self.status, message)
 
     def _open_tool(self) -> None:
         _title, profile_id, default_app_id, _description = self._objective()
@@ -161,18 +185,18 @@ class DevelopmentPage(BasePage):
                 isinstance(result.parsed, dict) and result.parsed.get("status") == "cancelled"
             )
             if cancelled:
-                self.status.setText(
+                self._set_status(
                     "Preparação pausada entre etapas. O que terminou foi preservado; "
                     "gere novo preview para retomar."
                 )
             else:
-                self.status.setText(
+                self._set_status(
                     "Preparação concluída. Valide o ambiente para conferir cada ferramenta."
                     if result.ok else
                     "Preparação interrompida ou incompleta. Revise o erro; você pode gerar novo plano e tentar novamente."
                 )
         elif action.id == "capability.status":
-            self.status.setText(
+            self._set_status(
                 "Validação consultada. Confira estados desconhecidos e ferramentas ausentes no resultado."
                 if result.ok else
                 "A validação falhou. O estado permanece desconhecido; tente novamente."
