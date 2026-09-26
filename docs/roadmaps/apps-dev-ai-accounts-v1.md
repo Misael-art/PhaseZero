@@ -1322,9 +1322,26 @@ alinha OperationResult.ok à severidade estruturada. A jornada por botões públ
 mostra “Falhou” e “incompleta”, exige novo preview/token e permite retry, validação e
 abertura canônica. Regressão: os sete arquivos de UI/resultados listados no commit,
 78 testes passaram; py_compile e git diff --check passaram; E2E final passou isolado.
-Resultado parcial veio de fixture; testes de engine já cobrem interrupção real via
-FakeProvider. Nenhum package manager ou serviço real chamado. Isso prova este caminho
-G1, não conclui PXA-005 nem G2.
+Este primeiro E2E usava envelope de operação manual e não provava execução do engine
+no processo filho. Follow-up abaixo substitui a fixture de resposta.
+
+PXA-005 integração UI/engine G1 — commit 3d70d50, 2026-09-26: jornada pública agora
+lança CLI real por QProcess; CLI chama parser, plano e apply reais com FakeProvider
+persistentemente isolado em `tmp_path`. Node instala; primeira tentativa de pnpm falha;
+retry recebe plano/token novos, pula Node e conclui pnpm; validação lê estado fake. Foram
+133 testes na regressão focal; py_compile e `git diff --check` passaram. Nenhum gerenciador
+de pacotes, serviço ou estado real do host foi acionado. Evidência G1; PXA-005 e G2 seguem
+abertos.
+
+Reavaliação Windows G2 solicitada pelo operador — 2026-09-26, ~10:36 -03:00:
+**não realizada**. Host com 14 GiB RAM, 3,4 GiB disponíveis, swap usada 7,7 GiB,
+load 7,57/5,50/4,40; processos Python ativos (~95% e ~88% CPU), além de Chrome,
+Electron e Qoder. Nenhum processo QEMU, virt-manager ou VirtualBox encontrado. ISO
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` permanece só
+identificada por `stat` anterior (8.172.068.864 bytes): sem hash, montagem, leitura ou
+boot. Sem snapshot Windows descartável e com pressão de memória/swap, iniciar VM pode
+prejudicar trabalho do host. Nada foi parado ou alterado. Retomar em host com margem
+confirmada e snapshot descartável, conforme roadmap WinVM.
 
 PXA-003/PXA-008 evidência upstream — 2026-09-25: o PR oficial 9Router
 [#1332](https://github.com/decolua/9router/pull/1332), que propõe escopo de conexões
