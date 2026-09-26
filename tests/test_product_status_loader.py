@@ -124,7 +124,9 @@ def test_status_loader_normalizes_capability_catalog_by_app_and_scope(tmp_path):
         "hasStatus": True,
         "capabilities": [
             {"id": "development.vscode", "installed": True,
-             "origin": "external", "configuration": "ready", "health": "online"},
+             "origin": "external", "configuration": "ready", "health": "online",
+             "hostId": "forged-host", "scope": "forged-scope",
+             "instanceId": "forged-instance"},
             {"id": "development.neovim", "installed": False},
         ],
     })
@@ -132,6 +134,8 @@ def test_status_loader_normalizes_capability_catalog_by_app_and_scope(tmp_path):
     assert (instances[0].app_id, instances[0].scope, instances[0].origin) == (
         "app.vscode", "host", "external",
     )
+    assert instances[0].host_id == "local"
+    assert instances[0].instance_id == "local:host:app.vscode:development.vscode"
     assert instances[0].ready
 
 

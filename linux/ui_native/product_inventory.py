@@ -386,14 +386,14 @@ def write_inventory_manifest(root: Path, destination: Path) -> None:
 
 
 def instances_from_capability_status(
-    payload: object, *, host_id: str,
+    payload: object, *, host_id: str, scope: str = "host",
 ) -> tuple[ProductInstance, ...]:
     """Read-only bridge from capability status; never infers owner or health.
 
     ``catalog`` payloads have ``hasStatus=false`` and therefore yield unknown
     installation even though their legacy ``installed`` field is false.
     """
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or not host_id or not scope:
         return ()
     rows = payload.get("capabilities")
     if not isinstance(rows, list):
@@ -418,14 +418,14 @@ def instances_from_capability_status(
         health = str(raw.get("health", "unknown"))
         if health not in {"online", "offline", "failed", "unknown"}:
             health = "unknown"
-        instance_host = str(raw.get("hostId") or host_id)
-        instance_scope = str(raw.get("scope") or "host")
+        # Host and scope come from the request context. Status output is
+        # observation data and cannot relabel itself as another instance.
+        instance_host = host_id
+        instance_scope = scope
+        app_id = _capability_target(capability_id)
         result.append(ProductInstance(
-            instance_id=str(
-                raw.get("instanceId")
-                or f"{instance_host}:{instance_scope}:{_capability_target(capability_id)}"
-            ),
-            app_id=_capability_target(capability_id),
+            instance_id=f"{instance_host}:{instance_scope}:{app_id}:{capability_id}",
+            app_id=app_id,
             host_id=instance_host,
             scope=instance_scope,
             manager=str(source.get("kind") or "unknown"),

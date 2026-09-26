@@ -338,6 +338,30 @@ def test_capability_catalog_does_not_fake_absence_or_ownership():
     assert not found[0].ready
 
 
+def test_capability_status_cannot_override_bound_host_scope_or_identity():
+    instances = instances_from_capability_status({
+        "hasStatus": True,
+        "capabilities": [{
+            "id": "development.vscode",
+            "installed": True,
+            "hostId": "forged-host",
+            "scope": "forged-scope",
+            "instanceId": "forged-instance",
+        }],
+    }, host_id="registered-host", scope="host")
+
+    assert len(instances) == 1
+    assert (
+        instances[0].host_id,
+        instances[0].scope,
+        instances[0].instance_id,
+    ) == (
+        "registered-host",
+        "host",
+        "registered-host:host:app.vscode:development.vscode",
+    )
+
+
 def test_status_adapter_keeps_scope_and_unknown_dimensions_separate():
     local = instances_from_status_payload(
         {"hasStatus": True, "installed": True, "serviceActive": False,

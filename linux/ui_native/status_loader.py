@@ -155,7 +155,9 @@ class StatusLoader(QObject):
             return ()
         if isinstance(payload.get("capabilities"), list):
             return tuple(
-                instance for instance in instances_from_capability_status(payload, host_id=host_id)
+                instance for instance in instances_from_capability_status(
+                    payload, host_id=host_id, scope=scope,
+                )
                 if instance.app_id == app_id
             )
         return instances_from_status_payload(
