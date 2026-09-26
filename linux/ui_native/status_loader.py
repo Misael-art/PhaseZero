@@ -6,7 +6,11 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from shiboken6 import isValid
 
 from .models import ActionSpec, ProductInstance
-from .product_inventory import instances_from_capability_status, instances_from_status_payload
+from .product_inventory import (
+    instances_from_capability_status,
+    instances_from_status_payload,
+    status_action_matches_app,
+)
 from .result_parser import parse_json_output
 
 _SECRET_PATTERNS = (
@@ -117,12 +121,18 @@ class StatusLoader(QObject):
         if not app_id.startswith("app.") or not host_id or not scope or not instance_key:
             self.status_failed.emit(action.id, "invalid product status context")
             return
+        if not status_action_matches_app(action, app_id):
+            self.status_failed.emit(action.id, "status action does not match product context")
+            return
+        if not action.status_args:
+            self.status_failed.emit(action.id, "product status requires explicit read-only arguments")
+            return
         if host_id != "local":
             self.status_failed.emit(
                 action.id, "remote product status requires a host-bound executor",
             )
             return
-        args = action.status_args or action.args
+        args = action.status_args
         if any(token.startswith("{") and token.endswith("}") for token in args):
             self.status_failed.emit(action.id, "status requires parameters")
             return

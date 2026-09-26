@@ -87,6 +87,20 @@ def _capability_target(capability_id: str) -> str:
     return f"app.{capability_id.rsplit('.', 1)[-1]}"
 
 
+def status_action_matches_app(action: ActionSpec, app_id: str) -> bool:
+    """Return whether an explicitly read-only status action owns this app."""
+    if action.id == "product.capabilities.status":
+        return app_id in _CAPABILITY_APP_IDS
+    try:
+        target = target_for(action)
+    except ValueError:
+        return False
+    return target.target_kind == "app" and target.target_id == app_id
+
+
+_CAPABILITY_APP_IDS = frozenset(_capability_target(item.id) for item in CAPABILITIES)
+
+
 def _ai_app(action_id: str) -> str | None:
     suffix = action_id.removeprefix("ai.")
     if suffix.startswith("desktop."):

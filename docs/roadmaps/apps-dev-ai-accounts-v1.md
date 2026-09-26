@@ -1371,3 +1371,13 @@ acessível, máscara de identidade e eventos de progresso/resultado/falha do cof
 indisponível (`No module named ruff`). Limite: QAccessible foi simulado em Qt offscreen;
 nenhum leitor de tela ou anúncio falado foi verificado. PXA-007/G4 segue aberto para
 revisão com leitor de tela, conta real e participantes.
+
+PXA-003 vínculo do probe de status — 2026-09-26: `StatusLoader.fetch_product_status`
+aceitava uma ação read-only de um app com `app_id` de outro e normalizava resposta alheia
+como estado da seleção. Agora valida propriedade via inventário canônico, restringe o
+probe genérico ao catálogo de capabilities conhecido e exige `status_args` explícito antes
+de iniciar QProcess. Testes regressivos cobrem ação Open WebUI rotulada como Ollama e ausência
+de argumentos read-only. Regressão focal: 58 testes; `py_compile` e `git diff --check` passam.
+QProcess foi mockado nos novos casos; nenhum manager, serviço, pacote, conta, sessão, VM ou
+host remoto foi acionado. PXA-003 permanece `in_progress`: executor remoto e distinção de
+instâncias no mesmo host/escopo seguem pendentes.
