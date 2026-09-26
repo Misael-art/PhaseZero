@@ -1435,3 +1435,29 @@ fixture; nenhum executor ou host remoto foi chamado. PXA-003 continua `in_progre
 e executor Homelab ainda não vinculam estado/ações a identidade remota verificada; instâncias
 duplicadas continuam sem manager endereçável. PXA-006/G3 permanece gate externo; fixtures
 não substituem conta, sessão e quota reais.
+
+PXA-003 status remoto Homelab read-only — commit `b254133`, 2026-09-26:
+detalhes dos cinco apps com adaptador `ai product-status` agora permitem carregar hosts
+registrados sob demanda e selecionar alias. IDs aceitos precisam ser `hlh-` + hash do alias;
+QProcess envia rota fixa `server homelab --host <alias> product-status <slug>`. Bridge só
+permite `ai-memory`, `usagebar`, `claude-desktop`, `codex-desktop` e `qwen-code-desktop`,
+valida versão remota e encapsula JSON. Loader exige alias, versão, `rc=0` e payload objeto
+exatos antes de rotular host/escopo; respostas de outro alias falham fechado. Selecionar host
+não consulta automaticamente; botão Verificar inicia apenas probe read-only. Mutação e abertura
+remotas continuam indisponíveis.
+
+Teste red no smoke Homelab mostrou `--json` após `--` sendo tratado como argumento remoto;
+bridge agora descarta somente esse sufixo opcional e rejeita slug inválido antes de SSH. Outro
+primeiro harness Qt com `QEventLoop` caiu em segfault; foi substituído por fixture QProcess
+inerte que chama callback de término diretamente, sem loop ou SSH. `tests/linux-homelab.sh`
+passou com stub SSH; fixture final em HOME temporário confirmou envelope válido e zero chamadas
+SSH para slug inválido. Inventário, loader e UI: 71 passaram em 41,11 s antes do refinamento
+final do estado ocupado; após refinamento, 17 testes focados passaram em 3,09 s, incluindo
+seleção/remoção de host e viewport 800×600/1280×800 com Qt offscreen. `py_compile`, `bash -n`
+e `git diff --check` passaram. Sem host remoto real. QTest enviou clique nos dois tamanhos;
+`widgetAt` real só pôde ser verificado em 800 px porque display offscreen é menor que 1280.
+Participantes, escalas reais, leitor de tela e G4 seguem pendentes.
+
+PXA-003 continua `in_progress`: somente cinco status remotos têm rota; operações e abertura
+remotas, outras apps e seleção gerenciável de instâncias duplicadas ainda faltam. PXA-006/G3
+segue gate externo: conta/sessão suportada e quota observada não fornecidas; fixtures não fecham.
