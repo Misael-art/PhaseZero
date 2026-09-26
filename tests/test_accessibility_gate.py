@@ -41,7 +41,13 @@ def window(qapp):
     from linux.ui_native.main_window import MainWindow
 
     with patch.object(MainWindow, "_host_summary"), patch(
-        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+        "linux.ui_native.status_loader.StatusLoader.fetch"
+    ), patch(
+        # Homelab has its own QProcess path, outside StatusLoader. These
+        # geometry/name checks need the real page widgets, not live host
+        # inventory or service probes.
+        "linux.ui_native.pages.homelab.HomelabPage._spawn",
+        lambda *_args, **_kwargs: None,
     ):
         win = MainWindow(ROOT)
         yield win

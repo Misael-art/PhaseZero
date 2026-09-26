@@ -1503,3 +1503,18 @@ PXA-008 reauditoria de probe Hermes — 2026-09-26 18:01 -03:00: busca ampliada 
 PXA-005/PXA-014 acessibilidade da jornada Desenvolvimento — 2026-09-26 18:27 -03:00: controles de objetivo/editor e ações agora expõem nomes/descrições acessíveis; formulário associa labels aos combos e tabulação segue objetivo→editor→preparar→validar→abrir. Resultados assíncronos de preparação e validação pedem anúncio polite para sucesso, falha, falha reportada com exit 0 e cancelamento; Contas reutiliza o helper Qt comum. PySide6 6.11.2, offscreen, HOME/XDG absolutos temporários: `tests/test_development_page.py tests/test_development_cancel.py tests/test_development_journey_e2e.py tests/test_accounts_page.py tests/test_dialog_a11y.py`: 35 passaram em 51,10 s; após ampliar assertions de descrição e buddy-label, teste focal passou (1). `py_compile` e `git diff --check` passaram; Ruff/Black ausentes. Duas falhas iniciais eram expectativas erradas do teste sobre nome Qt de combo e método da announcement event; corrigidas e regressão final verde. Um comando de harness com `$` escapado criou diretórios temporários literais no worktree; caminhos foram inspecionados, ecoados e removidos; nenhuma configuração real do host foi tocada. Limite: evento Qt e ordem de foco não provam anúncio audível; leitor de tela real, contraste por tema, participantes G4 e Windows G2 continuam pendentes. PXA-005 segue `in_progress`; PXA-014 segue `planned`.
 
 PXA-005 anúncio acessível — 2026-09-26 18:30 -03:00: reteste `tests/test_development_page.py::test_development_operation_results_are_announced_accessibly` cobriu os quatro resultados e confirmou tipo `QAccessibleAnnouncementEvent`, mensagem e polite. Resultado: 4 passaram em 2,30 s.
+
+PXA-014 gate de acessibilidade sem probes do host — 2026-09-26 18:49 -03:00:
+primeira suíte reportou 72 verdes, mas runner permaneceu ativo e deixou subprocessos
+`linux/pz` durante teardown. Causa: `StatusLoader.fetch_product_status()` chama
+`fetch()` diretamente, fora do mock antigo de `fetch_action`; página Homelab também
+usa QProcess próprio em `_spawn`. Fixture agora mantém widgets reais e substitui
+`StatusLoader.fetch` e `HomelabPage._spawn`, pois gate mede nomes/foco/layout, não
+status vivo. Com HOME/XDG absolutos temporários, offscreen: `tests/test_accessibility_gate.py
+tests/test_native_tokens.py` — 72 passaram em 40,66 s, processo encerrou com código 0
+e `ps` confirmou zero pytest/linux-pz/Homelab residual. Durante execução não houve
+subprocesso `linux/pz`. Nenhuma mutação de serviço/pacote/login; sem consulta de host
+na prova final. Diff check passou. Host Manjaro, kernel 6.18.49-1-MANJARO, PySide6
+6.11.2. PXA-014 permanece `planned`: leitores reais, escalas/temas em display apto,
+CI remota, G2 Windows e G4 ainda pendentes; PXA-006/G3 externo segue sem conta/sessão
+suportada ou cota real.
