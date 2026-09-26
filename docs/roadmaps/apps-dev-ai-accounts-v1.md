@@ -1518,3 +1518,15 @@ na prova final. Diff check passou. Host Manjaro, kernel 6.18.49-1-MANJARO, PySid
 6.11.2. PXA-014 permanece `planned`: leitores reais, escalas/temas em display apto,
 CI remota, G2 Windows e G4 ainda pendentes; PXA-006/G3 externo segue sem conta/sessão
 suportada ou cota real.
+
+PXA-004 crash abrupto G1 — commit `620a6fd`, 2026-09-26 19:05 -03:00:
+novo worker subprocesso chama engine real com `FakeProvider`, grava apenas pacote
+fixture e termina com `os._exit(73)` antes do registro de operação. Retomada do mesmo
+plano trata Node.js sem prova de autoria como `preexisting`, instala pnpm uma vez;
+rollback remove somente pnpm e preserva Node.js. `tests/test_capabilities.py`
+`tests/test_development_journey_e2e.py` `tests/test_development_cancel.py`: 58 passaram
+em 5,62 s; focal 1 passou; `py_compile` e `git diff --check` passaram. HOME/XDG e estado
+em tmp; sem package manager, serviço, VM ou host status. Isso cobre queda abrupta do
+worker G1 e preserva instalação de autoria incerta; não prova interrupção dentro de
+transação real do gerenciador. PXA-004 segue `in_progress`; crash/cancelamento G2 real
+e Windows G2 continuam pendentes.
