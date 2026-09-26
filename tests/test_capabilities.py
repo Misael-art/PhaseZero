@@ -577,6 +577,127 @@ def test_partial_profile_apply_can_resume_without_reinstalling_completed_steps(p
     assert sum(command[-1] == "nodejs" for command in provider.executed) == 1
 
 
+def test_worker_crash_after_fake_package_commit_resumes_without_adopting_for_rollback(
+    private_state, tmp_path, monkeypatch,
+):
+    """An abrupt child exit leaves one fake package outside operation ownership."""
+    from linux.capabilities import state
+
+    home = tmp_path / "home"
+    config = home / ".config"
+    data = home / ".local" / "share"
+    state_home = home / ".local" / "state"
+    for path in (home, config, data, state_home):
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(
+        profile_ids=["development-web-js"], facts=facts, provider=provider,
+    )
+    package_state = tmp_path / "fake-installed-packages.json"
+    crash_worker = tmp_path / "crash_apply.py"
+    crash_worker.write_text(
+        """\
+import json
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, r"__ROOT__")
+from linux.capabilities import engine
+from linux.capabilities.platform import HostFacts
+from linux.capabilities.providers import Provider
+
+facts = HostFacts(
+    platform="linux", architecture="x86_64", distro="arch", distro_like=(),
+    package_family="arch", immutable=False, immutable_kind="", container=False,
+    init="systemd", desktop="kde", session="wayland", gpus=("amd",),
+    package_manager="pacman", flatpak=True, flathub=True,
+)
+packages_path = Path(os.environ["PZ_TEST_PACKAGE_STATE"])
+
+class CrashAfterFirstPackage(Provider):
+    def __init__(self):
+        super().__init__(facts)
+
+    def installed(self, source):
+        packages = (
+            json.loads(packages_path.read_text(encoding="utf-8"))
+            if packages_path.exists() else []
+        )
+        return source.name in packages
+
+    def available(self, source):
+        return True
+
+    def estimate_space(self, source):
+        return {"downloadBytes": 1024, "installedBytes": 4096}
+
+    def estimate_transaction_space(self, sources):
+        return None
+
+    def execute(self, plan):
+        packages = (
+            json.loads(packages_path.read_text(encoding="utf-8"))
+            if packages_path.exists() else []
+        )
+        packages.append(plan.args[-1])
+        packages_path.write_text(json.dumps(packages), encoding="utf-8")
+        os._exit(73)
+
+engine.shutil.disk_usage = lambda _path: SimpleNamespace(free=10**12, total=10**12, used=0)
+engine.apply_plan(
+    sys.argv[1], confirmation=sys.argv[2], facts=facts,
+    provider=CrashAfterFirstPackage(),
+)
+""".replace("__ROOT__", str(ROOT)),
+        encoding="utf-8",
+    )
+    child_env = {
+        "PATH": os.defpath,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(config),
+        "XDG_DATA_HOME": str(data),
+        "XDG_STATE_HOME": str(state_home),
+        "PZ_CAPABILITIES_STATE_DIR": str(private_state),
+        "PZ_TEST_PACKAGE_STATE": str(package_state),
+    }
+    crashed = subprocess.run(
+        [sys.executable, str(crash_worker), plan["id"], plan["confirmToken"]],
+        capture_output=True, text=True, cwd=ROOT, env=child_env, timeout=15,
+        check=False,
+    )
+    assert crashed.returncode == 73, (crashed.stdout, crashed.stderr)
+    assert json.loads(package_state.read_text(encoding="utf-8")) == ["nodejs"]
+    assert state.list_records("operations") == []
+
+    recovered_provider = FakeProvider(facts, installed={"nodejs"})
+    resumed = apply_plan(
+        plan["id"], confirmation=plan["confirmToken"], facts=facts,
+        provider=recovered_provider,
+    )
+    assert resumed["status"] == "complete"
+    assert [item["status"] for item in resumed["results"]] == ["preexisting", "installed"]
+    assert len(resumed["installedByOperation"]) == 1
+    recovered = resumed["installedByOperation"][0]
+    assert recovered["capabilityId"] == "development.pnpm"
+    assert recovered["source"]["name"] == "pnpm"
+    assert sum(command[-1] == "nodejs" for command in recovered_provider.executed) == 0
+
+    rolled_back = rollback_operation(
+        resumed["id"], confirmation=resumed["rollbackToken"], facts=facts,
+        provider=recovered_provider,
+    )
+    assert rolled_back["status"] == "complete"
+    assert recovered_provider.installed_names == {"nodejs"}
+
+
 def test_cooperative_cancel_stops_between_package_steps_and_resumes(private_state):
     class CancelAfterFirstPackageProvider(FakeProvider):
         def execute(self, plan):
