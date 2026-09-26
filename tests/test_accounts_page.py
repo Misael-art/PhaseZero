@@ -13,7 +13,8 @@ from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtGui import QAccessible
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QLabel, QLineEdit, QPushButton, QRadioButton, QWidget,
+    QApplication, QCheckBox, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QRadioButton, QWidget,
 )
 
 
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 from linux.ai.account_adapters import router_provider_accounts
 from linux.ai.account_contract import Connection, Evidence, Quota
 from linux.ai.credential_vault import CredentialVault
-from linux.ai.grants import GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
+from linux.ai.grants import CONSENT_RECORD_ADAPTERS, GrantLedger
 from linux.ai.secret_store import SecretStoreUnavailable
 from linux.ui_native.pages.accounts import (
     AccountChannelsDialog, AccountsPage, AddApiCredentialDialog, _credential_vault_path,
@@ -127,14 +128,23 @@ def test_accounts_page_keeps_same_provider_accounts_separate_and_rejects_stale_p
 
         grant_buttons = page.findChildren(QPushButton, "accountConsumerGrant")
         assert len(grant_buttons) == 4
-        assert "Sessões ainda não aplicam" in page.findChild(QLabel, "accountGrantScopeNote").text()
-        with patch.object(page, "_confirm_grant", return_value=True):
+        scope_note = page.findChild(QLabel, "accountGrantScopeNote").text().casefold()
+        assert "não libera inferência" in scope_note
+        assert all(button.text().startswith("Registrar consentimento em ")
+                   for button in grant_buttons)
+        with patch("linux.ui_native.pages.accounts.QMessageBox.question",
+                   return_value=QMessageBox.Yes) as confirm:
             grant_buttons[0].click()
+        assert confirm.call_args.args[1] == "Registrar consentimento?"
+        assert (
+            "nenhuma inferência será habilitada por esta ação"
+            in confirm.call_args.args[2].casefold()
+        )
         granted = page.grant_ledger.for_consumer("app.claude-code")
         assert len(granted) == 1
         assert granted[0].connection_id == page._accounts[1][1].connection_id
         revoke = next(button for button in page.findChildren(QPushButton, "accountConsumerGrant")
-                      if button.text().startswith("Revogar uso"))
+                      if button.text().startswith("Revogar consentimento"))
         revoke.click()
         assert page.grant_ledger.for_consumer("app.claude-code") == ()
 
@@ -547,7 +557,7 @@ def test_coerced_grant_enabled_value_disables_consent_controls(qapp, tmp_path, m
     ledger = GrantLedger(ledger_path)
     ledger.grant(
         connection, "app.claude-code", ("inference",),
-        support=SUPPORTED_CONSUMER_ADAPTERS, consented=True,
+        support=CONSENT_RECORD_ADAPTERS, consented=True,
     )
     payload = json.loads(ledger_path.read_text())
     payload["grants"][0]["enabled"] = "false"

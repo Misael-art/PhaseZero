@@ -13,8 +13,8 @@ from typing import Mapping
 from .account_contract import Connection, Grant
 
 
-# Consumers may request only declared scopes from declared adapters.
-SUPPORTED_CONSUMER_ADAPTERS: dict[str, dict[str, tuple[str, ...]]] = {
+# These pairs may record consent only; no listed adapter binds live requests yet.
+CONSENT_RECORD_ADAPTERS: dict[str, dict[str, tuple[str, ...]]] = {
     "app.claude-code": {"9router-provider-status": ("inference",)},
     "app.opencode": {"9router-provider-status": ("inference",)},
 }

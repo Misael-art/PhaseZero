@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from linux.ai.account_adapters import adapt_account_sources
 from linux.ai.account_contract import Account, Connection, Evidence, public_account, redacted_summary
 from linux.ai.credential_vault import CredentialEntry, CredentialVault, CredentialVaultError
-from linux.ai.grants import GrantError, GrantLedger, SUPPORTED_CONSUMER_ADAPTERS
+from linux.ai.grants import CONSENT_RECORD_ADAPTERS, GrantError, GrantLedger
 from linux.ai.secret_store import SecretStoreUnavailable
 
 from ..command_runner import CommandRunner
@@ -694,11 +694,11 @@ class AccountsPage(BasePage):
             self._radios_by_provider.setdefault(account.provider, []).append((account.account_id, select))
             row.addWidget(select)
             self._cards_layout.addWidget(card)
-            compatible_consumers = [
-                consumer for consumer, adapters in SUPPORTED_CONSUMER_ADAPTERS.items()
+            consent_consumers = [
+                consumer for consumer, adapters in CONSENT_RECORD_ADAPTERS.items()
                 if connection.adapter_id in adapters
             ]
-            if compatible_consumers:
+            if consent_consumers:
                 if self._grant_load_error:
                     unavailable = QLabel("Autorizações indisponíveis · ledger local inválido")
                     unavailable.setObjectName("accountGrantUnavailable")
@@ -706,25 +706,25 @@ class AccountsPage(BasePage):
                     self._cards_layout.addWidget(unavailable)
                     continue
                 access_note = QLabel(
-                    "Registra consentimento de inferência por app. Sessões ainda não aplicam "
-                    "este grant; custos e limites seguem o provedor desta conexão."
+                    "Registra somente consentimento por app; este grant não libera inferência. "
+                    "Sessões não aplicam o vínculo por requisição, então uso segue bloqueado."
                 )
                 access_note.setObjectName("accountGrantScopeNote")
                 access_note.setWordWrap(True)
                 self._cards_layout.addWidget(access_note)
-                for consumer_id in compatible_consumers:
+                for consumer_id in consent_consumers:
                     active = next((grant for grant in self.grant_ledger.for_consumer(consumer_id)
                                    if grant.connection_id == connection.connection_id), None)
                     action = QPushButton(
-                        f"Revogar uso em {_CONSUMER_LABELS[consumer_id]}" if active else
+                        f"Revogar consentimento em {_CONSUMER_LABELS[consumer_id]}" if active else
                         "Conexão desativada" if not connection.enabled else
-                        f"Permitir uso em {_CONSUMER_LABELS[consumer_id]}"
+                        f"Registrar consentimento em {_CONSUMER_LABELS[consumer_id]}"
                     )
                     action.setObjectName("accountConsumerGrant")
                     action.setAccessibleName(action.text())
                     action.setEnabled(bool(active) or connection.enabled)
                     if not connection.enabled and not active:
-                        action.setToolTip("Ative esta conexão no 9Router antes de autorizar o uso.")
+                        action.setToolTip("Ative esta conexão no 9Router antes de registrar consentimento.")
                     action.clicked.connect(
                         lambda _checked=False, conn=connection, cid=consumer_id:
                         self._toggle_grant(conn, cid)
@@ -743,7 +743,7 @@ class AccountsPage(BasePage):
         try:
             self.grant_ledger.grant(
                 connection, consumer_id, ("inference",),
-                support=SUPPORTED_CONSUMER_ADAPTERS, consented=True,
+                support=CONSENT_RECORD_ADAPTERS, consented=True,
             )
         except GrantError as exc:
             QMessageBox.warning(self, "Conexão incompatível", str(exc))
@@ -753,9 +753,10 @@ class AccountsPage(BasePage):
     def _confirm_grant(self, consumer_id: str) -> bool:
         label = _CONSUMER_LABELS[consumer_id]
         answer = QMessageBox.question(
-            self, "Permitir uso da conexão?",
-            f"{label} poderá enviar solicitações de inferência por esta conexão. "
-            "O provedor pode cobrar ou aplicar limites da conta.",
+            self, "Registrar consentimento?",
+            f"Registra apenas consentimento de {label}. Nenhuma sessão gerenciada aplica "
+            "este grant; nenhuma inferência será habilitada por esta ação. Quando o vínculo "
+            "por requisição estiver disponível, o provedor poderá cobrar ou aplicar limites.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         return answer == QMessageBox.Yes
