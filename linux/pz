@@ -577,6 +577,11 @@ cmd_ai() {
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
             ;;
+        product-status)
+            shift
+            PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+                python3 "$PZ_ROOT/linux/ai/product_status.py" "${@:-}"
+            ;;
         omo|openagent|oh-my-openagent)
             shift
             bash "$PZ_ROOT/linux/ai/setup-omo.sh" "${@:-status}"

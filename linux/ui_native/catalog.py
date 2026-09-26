@@ -814,6 +814,24 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             args, "system-search", badge="JSON", visibility="advanced",
             status_args=args,
         ))
+
+    # These tools lack a capability-backed probe. Keep detail status scoped to
+    # one product and normalize manager evidence without claiming ownership
+    # when the source cannot prove it.
+    for action_id, app_id, title in (
+        ("ai.memory-status", "ai-memory", "Status ai-memory"),
+        ("ai.usagebar-status", "usagebar", "Status UsageBar"),
+        ("ai.desktop.claude.status", "claude-desktop", "Status Claude Desktop"),
+        ("ai.desktop.codex.status", "codex-desktop", "Status Codex Desktop"),
+        ("ai.desktop.qwen.status", "qwen-code-desktop", "Status Qwen Code Desktop"),
+    ):
+        args = ("ai", "product-status", app_id)
+        actions.append(_a(
+            action_id, "IA & Dev", title,
+            "Consulta estado read-only deste app e preserva origem desconhecida.",
+            args, "system-search", badge="JSON", visibility="advanced",
+            status_args=args,
+        ))
     actions.append(
         _a(
             "ai.proxies-credentials-mimo",

@@ -11,7 +11,8 @@ from linux.ui_native.catalog import build_catalog
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import (
     instances_from_capability_status, instances_from_status_payload,
-    inventory, inventory_manifest, render_inventory_manifest, target_for,
+    inventory, inventory_manifest, render_inventory_manifest,
+    status_action_matches_app, target_for,
 )
 
 
@@ -93,6 +94,91 @@ def test_hermes_consumption_and_setup_wait_for_request_bound_grants():
 def test_openclaw_setup_is_not_offered_without_request_bound_grants():
     actions = {action.id: action for action in build_catalog(ROOT)}
     assert "openclaw" not in actions["ai.setup.tool"].parameters[0].choices
+
+
+def test_every_non_capability_app_has_an_explicit_product_status_probe():
+    actions = {action.id: action for action in build_catalog(ROOT)}
+    payload = inventory_manifest(ROOT)
+    unsupported = []
+    for product in payload["products"]:
+        app_id = product["appId"]
+        if product["capabilityId"] is not None:
+            continue
+        probes = [
+            actions[action_id]
+            for action_id in product["actionIds"]
+            if action_id in actions
+            and status_action_matches_app(actions[action_id], app_id)
+            and actions[action_id].status_args
+            and not actions[action_id].mutable
+            and (action_id.endswith("status") or ".status." in action_id)
+        ]
+        if not probes:
+            unsupported.append(app_id)
+    assert unsupported == []
+
+    expected = {
+        "app.ai-memory": ("ai.memory-status", "ai-memory"),
+        "app.usagebar": ("ai.usagebar-status", "usagebar"),
+        "app.claude-desktop": ("ai.desktop.claude.status", "claude-desktop"),
+        "app.codex-desktop": ("ai.desktop.codex.status", "codex-desktop"),
+        "app.qwen-code-desktop": ("ai.desktop.qwen.status", "qwen-code-desktop"),
+    }
+    for app_id, (action_id, slug) in expected.items():
+        action = actions[action_id]
+        assert action.status_args == ("ai", "product-status", slug)
+        assert status_action_matches_app(action, app_id)
+
+
+def test_product_status_normalizers_preserve_unknown_installation_evidence(tmp_path, monkeypatch):
+    from linux.ai.product_status import normalize_payload
+
+    desktop = normalize_payload("claude-desktop", {
+        "claudeDesktop": {"installed": False, "launcherOk": False, "desktopEntryOk": False},
+    })
+    assert desktop["hasStatus"] is True
+    assert desktop["installationState"] == "unknown"
+    assert desktop["origin"] == "unknown"
+    assert desktop["health"] == "unknown"
+
+    usagebar = normalize_payload("usagebar", {
+        "available": True, "version": "1.2", "configPath": str(tmp_path / "config.toml"),
+        "configExists": True,
+    })
+    assert usagebar["installationState"] == "present"
+    assert usagebar["origin"] == "unknown"
+    assert usagebar["configurationState"] == "unknown"
+    config_path = tmp_path / "managed-config.toml"
+    config_path.write_text("# PhaseZero managed ai-usagebar config.\n", encoding="utf-8")
+    managed_usagebar = normalize_payload("usagebar", {
+        "available": True, "version": "1.2", "configPath": str(config_path),
+        "configExists": True,
+    })
+    assert managed_usagebar["configurationState"] == "ready"
+
+    home = tmp_path / "home"
+    xdg_state = home / ".local/state"
+    binary = home / ".local/bin/ai-memory"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("fixture", encoding="utf-8")
+    manifest_path = xdg_state / "phasezero/ai/ai-memory-install.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps({"path": str(binary), "version": "1.31.1"}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_state))
+    memory = normalize_payload("ai-memory", {
+        "installed": True, "commandPath": str(binary), "version": "ai-memory 1.31.1",
+        "configuredMarker": True, "serverReachable": False,
+        "integrations": {"ok": True},
+    })
+    assert memory["installationState"] == "present"
+    assert memory["origin"] == "phasezero"
+    assert memory["configurationState"] == "ready"
+    assert memory["health"] == "offline"
+
+    codex = normalize_payload("codex-desktop", {"codexDesktop": {"installedVersion": "1.0"}})
+    assert codex["installationState"] == "unknown"
+    assert codex["origin"] == "unknown"
 
 
 def test_ollama_has_one_canonical_host_installer_across_legacy_contexts():
