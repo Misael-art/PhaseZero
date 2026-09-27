@@ -1806,3 +1806,22 @@ declarar mock resolvido. Nova fixture remove mock do resolver: cria arquivo vazi
 `ai-usagebar.exe` somente sob o install root temporário, usa resolver real, limita
 `PATH` a diretório temporário vazio e mocka apenas o probe de execução. A suíte
 focada fica antes da suíte inteira para diagnóstico rápido. Aguardando CI.
+
+CI `36308931570` (push) e `36308934156` (PR), HEAD
+`1460ee7570b0e0920e30d420c86e223062733b62` — 2026-09-27: todos os jobs passaram.
+Pester 3.4.0: bloco focado `AI coding tool support` passou com 35/0 em ambos eventos;
+suíte completa passou com 801/0, 2 skipped, 0 pending no push (1347,77 s) e PR
+(1931,7 s). Fixtures herméticas de credential store Windows: 9 passaram,
+16 deselecionadas. A resolução de `ai-usagebar.exe` usa fixture sob install root
+temporário e PATH vazio; somente o probe da execução é mockado. Sem mudança em código
+de produto para esta correção. Python, `shell-test`, `homelab-shell-test`, Arch
+disposable, `windows-vm-shell-test` hermético, lint, ShellCheck 0.9/0.11, secret
+scan, package smoke, Compose e Homelab disposable passaram. O job Windows não equivale
+a G2 Windows. Esta execução também confirma a correção REV-002: staging ignora
+sidecars SQLite transitórios durante cópia sob escrita concorrente e o `.backup`
+live continua substituindo cada banco. Nenhum processo, pacote, configuração, sessão
+ou VM do host de desenvolvimento foi alterado. PXA-004/005 continuam `in_progress`
+por cancelamento/crash com package manager real e Windows G2 não executados.
+PXA-006/G3 segue sem conta/sessão/cota real; PXA-008 segue fail-closed; PXA-010
+permanece fora do catálogo. Windows G2 continua **não realizada** conforme pedido
+do operador, sem ler ou iniciar a ISO.
