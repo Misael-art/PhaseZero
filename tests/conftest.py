@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 import traceback
+from weakref import ref
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,34 +31,73 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
     """Opt-in CI diagnostic: attach each live pz QProcess launch to its test."""
     if os.environ.get("PZ_TRACE_QPROCESS_STARTS") == "1":
         from PySide6.QtCore import QProcess
+        from shiboken6 import isValid
 
         original_start = QProcess.start
+        tracked = []
+        log_path = os.environ.get("PZ_TRACE_QPROCESS_LOG")
+
+        def record(lines: list[str]) -> None:
+            if log_path:
+                with open(log_path, "a", encoding="utf-8") as log:
+                    log.write("\n".join(lines) + "\n")
+            else:
+                print("\n".join(lines), flush=True)
 
         def traced_start(process, *args, **kwargs):
             program = str(args[0]) if args else str(process.program())
             if program.endswith("/linux/pz"):
                 arguments = list(args[1:]) if args else list(process.arguments())
-                log_path = os.environ.get("PZ_TRACE_QPROCESS_LOG")
+                info = {
+                    "test": request.node.nodeid,
+                    "program": program,
+                    "argc": len(arguments),
+                    "stack": [
+                        f"{frame.filename}:{frame.lineno} in={frame.name}"
+                        for frame in traceback.extract_stack(limit=8)[:-1]
+                    ],
+                }
+                state = {"value": process.state(), "pid": 0, "reported": False}
+                process_ref = ref(process)
 
-                def record(line: str) -> None:
-                    if log_path:
-                        with open(log_path, "a", encoding="utf-8") as log:
-                            log.write(line + "\n")
-                    else:
-                        print(line, flush=True)
+                def report_live(reason: str) -> None:
+                    if state["reported"] or state["value"] == QProcess.NotRunning:
+                        return
+                    state["reported"] = True
+                    status = getattr(state["value"], "name", str(state["value"]))
+                    lines = [
+                        f"PZ_QPROCESS_LIVE test={info['test']} "
+                        f"program={info['program']} argc={info['argc']} "
+                        f"state={status} pid={state['pid']} reason={reason}"
+                    ]
+                    lines.extend(f"  at={frame}" for frame in info["stack"])
+                    record(lines)
 
-                record(
-                    f"PZ_QPROCESS_TRACE test={request.node.nodeid} "
-                    f"program={program} argc={len(arguments)}"
-                )
-                for frame in traceback.extract_stack(limit=8)[:-1]:
-                    record(
-                        f"PZ_QPROCESS_TRACE at={frame.filename}:{frame.lineno} "
-                        f"in={frame.name}"
-                    )
+                def on_state_changed(value) -> None:
+                    state["value"] = value
+                    live_process = process_ref()
+                    if live_process is not None and isValid(live_process):
+                        state["pid"] = int(live_process.processId())
+
+                process.stateChanged.connect(on_state_changed)
+                process.destroyed.connect(lambda *_args: report_live("destroyed"))
+                tracked.append((process_ref, state, report_live))
+                result = original_start(process, *args, **kwargs)
+                state["value"] = process.state()
+                state["pid"] = int(process.processId())
+                return result
             return original_start(process, *args, **kwargs)
 
         monkeypatch.setattr(QProcess, "start", traced_start)
+        yield
+        for process_ref, state, report_live in tracked:
+            live_process = process_ref()
+            if live_process is not None and isValid(live_process):
+                state["value"] = live_process.state()
+                state["pid"] = int(live_process.processId())
+                report_live("test-teardown")
+    else:
+        yield
 
 SENTINEL_NAME = "DO-NOT-TOUCH.txt"
 SENTINEL_BODY = "dados do usuário: ROMs e saves vivem aqui\n"
