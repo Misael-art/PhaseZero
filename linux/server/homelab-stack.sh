@@ -866,7 +866,10 @@ stage_volume_consistent() {
     # directories (01XXXX/index + chunks); any of those shapes must never
     # be classified consistent from a plain file copy.
     local mount="$1" stage="$2" db rel tmp blk tsdb=false
-    if ! cp -a "$mount/." "$stage/"; then
+    # SQLite can unlink/recreate -wal and -shm while writers checkpoint.
+    # They are never part of the staged snapshot: the live .backup below
+    # replaces each database, and copying a disappearing sidecar makes cp fail.
+    if ! tar -C "$mount" --exclude='*-wal' --exclude='*-shm' -cf - . | tar -C "$stage" -xf -; then
         return 1
     fi
     if find "$stage" -maxdepth 4 \( -name 'PG_VERSION' -o -name 'ibdata1' -o -name 'mysql' \) -print -quit 2>/dev/null | grep -q .; then
