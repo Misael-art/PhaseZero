@@ -1747,3 +1747,13 @@ registrar diagnóstico na próxima execução. Não equivale a teste Windows G2 
 Fontes: [Qt for X11 requirements](https://doc.qt.io/qt-6/linux-requirements.html),
 [Ubuntu libxcb-cursor0](https://packages.ubuntu.com/noble/libxcb-cursor0),
 [Ubuntu libxkbcommon-x11-0](https://packages.ubuntu.com/noble/libxkbcommon-x11-0).
+
+CI shell-suite audit — 2026-09-27 01:33 -03:00: `shell-test` job `108547915785`
+falhou em quatro fixtures (57 restantes passaram). Hermes falha era resolução de
+raiz já corrigida acima. Dois fixtures executavam diretamente scripts mode 100644;
+agora chamam Bash. `linux-ai-runtime-shim` usava grep de janela fixa que ficou
+defasado após guardas de grant; agora extrai corpos completos e confirma que gate
+permanece antes do helper de runtime. Quatro fixtures (`linux-ai-proxies`,
+`linux-ai-runtime-shim`, `linux-openclaw-grant-gate`, `linux-hermes-grant-gate`)
+passaram localmente. Sem alteração na autorização: setup, teste de inferência e
+ações OpenClaw seguem bloqueados sem grants por requisição.

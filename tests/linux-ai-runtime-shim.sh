@@ -61,8 +61,12 @@ grep -q 'repointed to isolated Node v24' "$WORK/warn.log"
 # Idempotent: no warning once the shim is right.
 repair_runtime_shim 2> "$WORK/warn2.log"
 [ ! -s "$WORK/warn2.log" ]
-# Start/restart and the live probe both heal before launching units.
-grep -A3 '^service_action()' "$ROOT/linux/ai/proxy-suite.sh" | grep -q 'repair_runtime_shim'
-grep -A4 '^test_proxies()' "$ROOT/linux/ai/proxy-suite.sh" | grep -q 'repair_runtime_shim'
+# Guarded handlers retain shim repair after the request-grant gate.
+service_action_body="$(sed -n '/^service_action() {/,/^}/p' "$ROOT/linux/ai/proxy-suite.sh")"
+test_proxies_body="$(sed -n '/^test_proxies() {/,/^}/p' "$ROOT/linux/ai/proxy-suite.sh")"
+grep -q 'connection_grant_blocked' <<< "$service_action_body"
+grep -q 'repair_runtime_shim' <<< "$service_action_body"
+grep -q 'connection_grant_blocked' <<< "$test_proxies_body"
+grep -q 'repair_runtime_shim' <<< "$test_proxies_body"
 
 echo "PASS: proxy runtime shim isolated from 9Router"

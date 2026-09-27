@@ -292,5 +292,5 @@ for pid in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
     [ "$mcommit" = "$scommit" ] || { echo "FAIL: manifest pin drift for $pid"; exit 1; }
 done
 echo "  manifest contract ok"
-"$ROOT/tests/linux-omniroute-grant-gate.sh"
+bash "$ROOT/tests/linux-omniroute-grant-gate.sh"
 echo "linux-ai-proxies smoke ok"

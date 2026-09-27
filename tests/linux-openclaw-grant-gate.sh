@@ -74,7 +74,7 @@ fi
 test "$rc" -eq 69
 jq -e '.usageBlocked == true' "$TMP_ROOT/out" >/dev/null
 
-"$ROOT/linux/ai/setup-openclaw-optional.sh" setup >"$TMP_ROOT/out" 2>"$TMP_ROOT/err"
+bash "$ROOT/linux/ai/setup-openclaw-optional.sh" setup >"$TMP_ROOT/out" 2>"$TMP_ROOT/err"
 grep -q 'SKIP: OpenClaw use blocked' "$TMP_ROOT/err"
 "$ROOT/linux/ai/setup-openclaw.sh" dry-run | jq -e '.allowed == false and .usageBlocked == true and .planned == []' >/dev/null
 
