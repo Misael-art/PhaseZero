@@ -1726,3 +1726,13 @@ não foi aberta, lida, calculado hash, montada ou iniciada; nenhuma VM foi criad
 nem processo interrompido. Seguir com as etapas independentes que não requerem VM.
 Windows G2 continua pendente; retomar apenas quando host tiver folga suficiente e
 snapshot descartável em filesystem validado.
+
+CI `36293218770` no HEAD `82ba92b` — 2026-09-27 01:16 -03:00: ShellCheck 0.9/0.11,
+lint, Arch disposable, Windows VM shell hermético e outros jobs concluídos verdes;
+`homelab-shell-test` revelou que Hermes router/provider retornavam 70 antes do gate
+de grants ao procurar `common.sh` em caminho específico do host. Corrigido localmente:
+os dois scripts agora sobem pelos diretórios ancestrais, honram `PZ_ROOT` embutido e
+preservam fallback runtime. `bash tests/linux-hermes-grant-gate.sh`, `bash -n` dos
+scripts e `git diff --check` passaram. A CI deste HEAD ainda estava em execução ao
+registrar; a correção aguarda envio e CI própria. Resultado Hermes prova só dispatcher
+hermético, sem conta/sessão/cota; PXA-006/G3 permanece gate externo.

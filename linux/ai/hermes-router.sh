@@ -21,15 +21,17 @@ set -euo pipefail
 # installed under runtime/, PZ_ROOT is the repo parent of linux/ai, so walk up
 # until we find linux/lib/common.sh rather than trusting a fixed-depth relative.
 PZ_ROOT=""
-for _p in "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "/mnt/sdcard/Projects/PhaseZero" ; do
-    if [ -f "$_p/linux/lib/common.sh" ]; then
-        PZ_ROOT="$_p"
-        break
-    fi
-    if [ -f "$(dirname "$_p")/linux/lib/common.sh" ]; then
-        PZ_ROOT="$(dirname "$_p")"
-        break
-    fi
+for _root_candidate in "${PZ_ROOT:-}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "/mnt/sdcard/Projects/PhaseZero"; do
+    [ -n "$_root_candidate" ] || continue
+    _p="$_root_candidate"
+    while [ "$_p" != "/" ]; do
+        if [ -f "$_p/linux/lib/common.sh" ]; then
+            PZ_ROOT="$_p"
+            break
+        fi
+        _p="$(dirname "$_p")"
+    done
+    [ -n "$PZ_ROOT" ] && break
 done
 if [ -z "$PZ_ROOT" ] || [ ! -f "$PZ_ROOT/linux/lib/common.sh" ]; then
     echo "ERROR: cannot locate PhaseZero common.sh (PZ_ROOT=$PZ_ROOT)" >&2
