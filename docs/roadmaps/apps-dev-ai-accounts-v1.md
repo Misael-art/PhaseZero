@@ -1790,3 +1790,11 @@ de `tar` excluindo sufixos de sidecar SQLite `-wal`/`-shm`, que não são backup
 seriam removidos/substituídos pelo `.backup` live. `bash -n` e `git diff --check` passaram;
 teste comportamental em runners CI ainda pendente. Não mascarar `REV-002` se staging
 de outros arquivos falhar.
+
+CI `36306515900` (push), HEAD `bcb89a7` — 2026-09-27 09:07 UTC: Python, shell,
+Homelab descartável, lint e secret scan passaram; Pester repetiu a mesma falha
+(800 passaram, 1 falhou): filtragem `-ParameterFilter` ainda produziu `absent`.
+Tentativa anterior não validada; não declarar fix. Próxima correção usa variáveis
+injetadas pelo Pester no bloco mock (sem declarar `param()`), conforme documentação
+oficial, e adiciona execução focada de `Describe 'AI coding tool support'` antes da
+suíte completa para feedback rápido. Alteração de fixture/workflow aguarda CI.
