@@ -1683,3 +1683,16 @@ hash, leitura, montagem ou boot. `/mnt/sdcard` é `fuseblk`; não usei como dest
 qcow2 porque essa semântica não foi validada. Nenhuma VM iniciada ou processo
 interrompido. Retomar G2 depois do gate de armazenamento e com maior folga de RAM,
 usando snapshot descartável em filesystem suportado.
+
+PXA-004/005 regressão G1 — 2026-09-27 00:19 -03:00: no HEAD `f85c442`,
+`tests/test_capabilities.py`, `tests/test_development_page.py`,
+`tests/test_development_cancel.py` e `tests/test_development_journey_e2e.py`:
+70 passaram em 14,45 s, com `QT_QPA_PLATFORM=offscreen` e HOME/XDG separados
+sob `/tmp`. `git diff --check` passou; `ps` não encontrou pytest, `linux/pz` ou
+`capabilities apply` residual; diretório temporário removido. Prova G1 apenas:
+nenhum pacman, serviço, VM ou pacote do host foi executado. PXA-004 segue
+`in_progress` por crash/cancelamento dentro do gerenciador real e Windows G2;
+PXA-005 segue `in_progress` por cancelamento com pacman real, host limpo e demais
+gates G2/G4. `gh run list --branch codex/apps-dev-ai-accounts-impl` não retornou
+execuções e `git ls-remote --heads origin codex/apps-dev-ai-accounts-impl` não
+retornou branch: CI remota ainda não cobre este HEAD local.
