@@ -1736,3 +1736,14 @@ preservam fallback runtime. `bash tests/linux-hermes-grant-gate.sh`, `bash -n` d
 scripts e `git diff --check` passaram. A CI deste HEAD ainda estava em execução ao
 registrar; a correção aguarda envio e CI própria. Resultado Hermes prova só dispatcher
 hermético, sem conta/sessão/cota; PXA-006/G3 permanece gate externo.
+
+CI `36293218770` Python — 2026-09-27 01:18 -03:00: suíte completa passou: 1312
+passed, 2 skipped, 15 subtests em 412,67 s. Step estrito Xvfb abortou ao criar
+`QApplication` no teste de hit-test 1280×800 (exit 134; job `108547213687`). Log não
+identificou biblioteca ausente; causa XCB é hipótese, ainda sem prova. Qt documenta
+dependências do plugin `xcb`, incluindo cursor, xkbcommon-x11 e utilitários XCB;
+workflow ampliado com libs runtime correspondentes e `QT_DEBUG_PLUGINS=1` para
+registrar diagnóstico na próxima execução. Não equivale a teste Windows G2 nem G4.
+Fontes: [Qt for X11 requirements](https://doc.qt.io/qt-6/linux-requirements.html),
+[Ubuntu libxcb-cursor0](https://packages.ubuntu.com/noble/libxcb-cursor0),
+[Ubuntu libxkbcommon-x11-0](https://packages.ubuntu.com/noble/libxkbcommon-x11-0).
