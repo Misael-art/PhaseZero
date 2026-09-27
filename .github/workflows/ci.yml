@@ -525,6 +525,15 @@ jobs:
             exit 1
           }
 
+      - name: Run focused AI tools Pester block
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          Import-Module Pester -RequiredVersion 3.4.0
+          $result = Invoke-Pester -Path .\tests\ai-tools.tests.ps1 -TestName 'AI coding tool support' -PassThru
+          if ([int]$result.TotalCount -eq 0 -or [int]$result.FailedCount -gt 0) { exit 1 }
+
       - name: Run Pester
         shell: powershell
         run: |
