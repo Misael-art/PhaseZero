@@ -419,7 +419,7 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 não realizado nesta avaliação de host (RAM disponível igual ao mínimo guest; registro abaixo). Nenhuma integração, pacote ou rota ativados. |
+| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditoria documental v6.1.0 em 2026-09-27 não encontrou mudança no limite same-user; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 não realizado nesta avaliação de host (RAM disponível igual ao mínimo guest; registro abaixo). Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
@@ -1649,3 +1649,26 @@ Btrfs ainda aberto (603 erros acumulados no último registro). Repetir G2 em hos
 com folga de RAM, I/O estável e snapshot descartável após resolver o gate Btrfs.
 PXA-004/005/010/014 Windows G2 permanecem pendentes; seguir apenas ciclos
 independentes e herméticos.
+
+PXA-010 reavaliação upstream v6.1.0 — 2026-09-27 00:03 -03:00: leitura somente
+de README, architecture, security model, release notes e release-validation no tag
+fixo. Browser-only continua sem broker/MCP/túnel; Full usa token MCP vinculado ao
+turno, mas mantém gateway bruto `exec` do Codex. O modelo de segurança ainda declara
+Responses loopback alcançável por processo do mesmo usuário, exige estação single-user
+confiável e não promete defesa contra usuário local comprometido. Login continua no
+perfil Electron próprio; sem importação de cookie/perfil. A identidade MCP direta segue
+`Codex Native2`; tunnel é referenciado por ID, não nome visível. README v6.1.0 ainda
+instrui `Authentication: None` + `Allow all actions` e permite flag explícita de
+auto-approval; não adotar esses defaults. Também confirma pacotes sem assinatura de
+plataforma, medidor de uso local estimado e limites de plano. Release-validation declara
+CI insuficiente para sessão ChatGPT, conector vivo ou turno completo; gate Windows pede
+conta real e qualquer item não executado bloqueia release estável. A release corrige
+reconhecimento de rewrites equivalentes de rota no Windows e aprimora instruções de
+sandbox/aprovações, mas não remove exposição same-user. v6.0.0 continua pin de auditoria;
+v6.1.0 não aprovado para instalação sem novo gate de pacote/Arch/Windows e ciclo de
+reversão. Fontes: [README](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.0/README.md),
+[arquitetura](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.0/docs/architecture.md),
+[modelo de segurança](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.0/docs/security-model.md),
+[release-validation](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.0/docs/release-validation.md),
+[release v6.1.0](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.0).
+Nenhum pacote baixado ou executado; conta, rota, túnel e broker não utilizados.
