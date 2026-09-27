@@ -1491,13 +1491,14 @@ if command -v sqlite3 >/dev/null 2>&1; then
         done
     ) &
     rev2_writer=$!
+    rev2_err="$TMP/rev2-backup.stderr"
     rev2_out="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$TMP/rev2-bk" \
         PZ_HOMELAB_VOLUMES_OVERRIDE='rev2_vol' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$REV2" \
-        "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev2-bk/bk" 2>/dev/null | grep -v '^INFO:' || true)"
+        "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev2-bk/bk" 2>"$rev2_err" | grep -v '^INFO:' || true)"
     touch "$TMP/rev2-stop"
     wait "$rev2_writer" 2>/dev/null || true
     echo "$rev2_out" | jq -e '.ok == true and .consistent == true and .volumes[0].consistent == true and .volumes[0].method == "staged-tar+sqlite-live-hotbackup" and .volumes[0].reason == null' >/dev/null \
-        || { echo "FAIL: sqlite backup not consistent live hot-backup (REV-002): $rev2_out"; exit 1; }
+        || { echo "FAIL: sqlite backup not consistent live hot-backup (REV-002): $rev2_out"; cat "$rev2_err"; exit 1; }
     REV2R="$TMP/rev2-restore"; rm -rf "$REV2R"; mkdir -p "$REV2R"
     PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_VOLUMES_OVERRIDE='rev2_vol' \
         PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$REV2R" \
