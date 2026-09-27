@@ -299,13 +299,10 @@ Describe 'AI coding tool support' {
     It 'does not mark AI Usagebar configured when the Windows binary is blocked by policy' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 
+        Mock Resolve-BootstrapAiToolCommandPath { return '' }
         Mock Resolve-BootstrapAiToolCommandPath {
-            param([System.Collections.IDictionary]$CatalogEntry, [string]$InstallRoot)
-            if (@($CatalogEntry['CommandNames']) -contains 'ai-usagebar') {
-                return 'C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe'
-            }
-            return ''
-        }
+            return 'C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe'
+        } -ParameterFilter { $CatalogEntry['ToolName'] -eq 'ai-usagebar' }
         Mock Invoke-BootstrapAiUsagebarCommandProbe {
             return [ordered]@{
                 ok = $false
