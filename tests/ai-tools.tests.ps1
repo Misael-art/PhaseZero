@@ -301,7 +301,7 @@ Describe 'AI coding tool support' {
 
         Mock Resolve-BootstrapAiToolCommandPath {
             param([System.Collections.IDictionary]$CatalogEntry, [string]$InstallRoot)
-            if ([string]$CatalogEntry['ToolName'] -eq 'ai-usagebar') {
+            if (@($CatalogEntry['CommandNames']) -contains 'ai-usagebar') {
                 return 'C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe'
             }
             return ''
