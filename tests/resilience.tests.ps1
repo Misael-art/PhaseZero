@@ -1756,8 +1756,13 @@ Python 3.13       Python.Python.3.13   3.13.13  winget
             Mock Invoke-NativeFirstLine { throw 'OpenClaw must not run' }
             Mock Ensure-BootstrapNodeCore { throw 'Node setup must not run' }
 
-            { Ensure-OpenClaw -NpmCmd $npm } | Should Throw '*connection-grant-not-enforceable*'
-            { Invoke-BootstrapComponent -Name 'openclaw' -State @{ Completed = @{} } } | Should Throw '*connection-grant-not-enforceable*'
+            $ensureMessage = ''
+            try { Ensure-OpenClaw -NpmCmd $npm } catch { $ensureMessage = [string]$_.Exception.Message }
+            $ensureMessage | Should Match 'connection-grant-not-enforceable'
+
+            $componentMessage = ''
+            try { Invoke-BootstrapComponent -Name 'openclaw' -State @{ Completed = @{} } } catch { $componentMessage = [string]$_.Exception.Message }
+            $componentMessage | Should Match 'connection-grant-not-enforceable'
 
             Assert-MockCalled Invoke-NpmWithLog -Times 0 -Exactly
             Assert-MockCalled Invoke-NativeFirstLine -Times 0 -Exactly

@@ -139,7 +139,6 @@ Describe 'AI coding tool support' {
 
         Assert-MockCalled Install-BootstrapAiNpmTool -Times 0 -Exactly
         Assert-MockCalled Invoke-BootstrapAiNativeCommand -Times 0 -Exactly
-        { Install-BootstrapAiNpmTool -ToolName 'openclaw' -CatalogEntry (Get-BootstrapAiToolCatalog)['openclaw'] -InstallRoot $script:AiToolsTestRoot -DryRun } | Should Throw '*connection-grant-not-enforceable*'
         $uninstall = Invoke-BootstrapAiToolAction -ToolName 'openclaw' -Action 'uninstall' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $script:AiToolsTestRoot -DryRun -Yes
         [string]$uninstall.status | Should Be 'planned'
         [string]$uninstall.message | Should Match 'npm uninstall -g --prefix'
@@ -169,6 +168,20 @@ Describe 'AI coding tool support' {
         [string]$openClawReport.smoke.status.status | Should Be 'blocked'
         Assert-MockCalled Invoke-NativeFirstLine -Times 0 -Exactly
         Assert-MockCalled Invoke-BootstrapDoctorCommandProbe -Times 0 -Exactly
+    }
+
+    It 'blocks direct OpenClaw npm helper before dry-run or mutation' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $message = ''
+        try {
+            Install-BootstrapAiNpmTool -ToolName 'openclaw' -CatalogEntry (Get-BootstrapAiToolCatalog)['openclaw'] -InstallRoot $script:AiToolsTestRoot -DryRun | Out-Null
+        } catch {
+            $message = [string]$_.Exception.Message
+        }
+
+        $message | Should Match 'connection-grant-not-enforceable'
+        @(Get-ChildItem -LiteralPath $script:AiToolsTestRoot -Force).Count | Should Be 0
     }
 
     It 'declares ai-jail as an opt-in WSL sandbox tool and plans a dry-run install' {
@@ -640,25 +653,26 @@ Describe 'AI coding tool support' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 
         $catalog = Get-BootstrapAiToolCatalog
-        $sourceDir = Join-Path $script:AiToolsTestRoot 'sources\ai-usagebar-0.7.1'
-        $releaseDir = Join-Path $sourceDir 'target\release'
-        $binDir = Join-Path $script:AiToolsTestRoot 'win-bin'
-        $configDir = Join-Path $script:AiToolsTestRoot 'config'
-        $null = New-Item -Path (Join-Path $sourceDir '.git') -ItemType Directory -Force
-        $null = New-Item -Path $releaseDir -ItemType Directory -Force
-        Set-Content -LiteralPath (Join-Path $releaseDir 'ai-usagebar.exe') -Value 'fake exe'
-        Set-Content -LiteralPath (Join-Path $releaseDir 'ai-usagebar-tui.exe') -Value 'fake exe'
 
         Mock Test-BootstrapHostIsWindows { return $true }
         Mock Install-BootstrapAiUsagebarViaWsl { throw "Falha ao instalar ai-usagebar no WSL/Linux (exit=127). wsl: Failed to translate 'F:\Projects\PhaseZero' /bin/sh: bash: not found" }
-        Mock Get-BootstrapAiUsagebarWindowsBinDir { return $binDir }
-        Mock Get-BootstrapAiUsagebarNativeConfigPathSet { return @(Join-Path $configDir 'config.toml') }
-        Mock Ensure-PathUserContains { }
-        Mock Refresh-SessionPath { }
-        Mock Resolve-CommandPath { return 'C:\Tools\git.exe' } -ParameterFilter { $Name -eq 'git.exe' -or $Name -eq 'git' }
-        Mock Resolve-CommandPath { return 'C:\Tools\cargo.exe' } -ParameterFilter { $Name -eq 'cargo.exe' -or $Name -eq 'cargo' }
-        Mock Invoke-BootstrapAiNativeCommand { return [ordered]@{ exitCode = 0; timedOut = $false; stdout = ''; stderr = ''; firstLine = 'ok' } }
-        Mock Invoke-BootstrapAiUsagebarCommandProbe { return [ordered]@{ ok = $true; status = 'installed'; path = $CommandPath; version = 'v0.4.0'; message = 'ok' } }
+        $script:UsagebarCargoBlockedReason = ''
+        Mock Install-BootstrapAiUsagebarViaCargo {
+            param(
+                [System.Collections.IDictionary]$CatalogEntry,
+                [string]$InstallRoot,
+                [string]$ProjectRoot,
+                [string]$BlockedReason
+            )
+            [void]$CatalogEntry
+            [void]$InstallRoot
+            [void]$ProjectRoot
+            $script:UsagebarCargoBlockedReason = $BlockedReason
+            $message = 'ai-usagebar instalado por fallback Cargo na tag oficial.'
+            $fallbackNote = Get-BootstrapAiUsagebarWslFallbackNote -Reason $BlockedReason
+            if (-not [string]::IsNullOrWhiteSpace($fallbackNote)) { $message = "$message $fallbackNote" }
+            return [ordered]@{ status = 'installed'; message = $message }
+        }
 
         $result = Install-BootstrapAiUsagebar -CatalogEntry $catalog['ai-usagebar'] -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot
 
@@ -668,5 +682,8 @@ Describe 'AI coding tool support' {
         [string]$result.message | Should Not Match 'Falha ao instalar'
         [string]$result.message | Should Not Match 'Failed to translate'
         [string]$result.message | Should Not Match 'bash: not found'
+        $script:UsagebarCargoBlockedReason | Should Match 'Failed to translate'
+        Assert-MockCalled Install-BootstrapAiUsagebarViaCargo -Times 1 -Exactly
+        Remove-Variable -Scope Script -Name UsagebarCargoBlockedReason -ErrorAction SilentlyContinue
     }
 }
