@@ -31,7 +31,10 @@ def _window(qapp):
     # starting host probes; tests that assert a fetch override it per instance.
     status_patcher = patch("linux.ui_native.status_loader.StatusLoader.fetch", return_value=None)
     status_patcher.start()
-    window = MainWindow(ROOT)
+    # Homelab schedules its own QProcess probe from build(), outside StatusLoader.
+    # Capture a no-op callback during construction so layout tests stay hermetic.
+    with patch("linux.ui_native.pages.homelab.HomelabPage.refresh_hosts", lambda _self: None):
+        window = MainWindow(ROOT)
     return window, patcher, status_patcher
 
 
