@@ -1767,3 +1767,16 @@ gate Btrfs segue aberto (603 erros de checksum no registro anterior). Não criei
 VM, não interrompi processos e não abri/li/calcultei hash/montei a ISO
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`.
 Windows G2 segue pendente; continuar ciclos independentes sem VM.
+
+CI `36303834701` no HEAD `2f20bcb` — 2026-09-27 08:13 UTC: Python, ShellCheck
+0.9/0.11, lint, Arch clean-host, `shell-test`, `homelab-shell-test`, package-smoke,
+apps descartáveis, integração Homelab descartável, secret scan e `windows-vm-shell-test`
+passaram. O job Windows só executa shell hermético; não é G2 Windows. `shell-test`
+passou após a falha isolada de `REV-002` no HEAD anterior; stderr adicional não foi
+emitido, portanto causa da primeira falha permanece desconhecida. Pester: 800 passaram,
+1 falhou, 2 pendentes. Falha `does not mark AI Usagebar configured when the Windows
+binary is blocked by policy`: esperava `blocked`, recebeu `absent` (`tests/ai-tools.tests.ps1:323`).
+O mock declara `param()` no scriptblock; Pester injeta parâmetros mockados pela assinatura,
+e o filtro de chamada deve usar `-ParameterFilter` ([Mock, documentação oficial Pester](https://github.com/pester/Pester/wiki/Mock)).
+Corrigi fixture com mock padrão vazio e mock específico filtrado por `ToolName`; sem
+alteração na função de produto. HEAD fix aguarda CI própria.
