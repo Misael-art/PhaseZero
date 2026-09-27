@@ -55,13 +55,14 @@ def status_payload(installed_ids: set[str] | None = None) -> dict:
 
 
 @pytest.fixture
-def page(qapp, catalog):
+def page(qapp, catalog, monkeypatch):
     by_id = {action.id: action for action in catalog}
     widget = LinuxHubPage(ROOT, CommandRunner(ROOT), [], by_id)
+    # build() queues reload with a zero-delay timer; cancel_all() before that
+    # timer fires cannot cancel the future QProcess. These tests feed status
+    # by hand, so intercept the host query before constructing the page.
+    monkeypatch.setattr(widget.status_loader, "fetch", lambda *_args, **_kwargs: None)
     widget.build()
-    # `build` agenda o refetch real; o teste alimenta o estado à mão para não
-    # depender do host.
-    widget.status_loader.cancel_all()
     return widget
 
 

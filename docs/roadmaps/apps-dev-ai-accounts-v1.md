@@ -1917,16 +1917,17 @@ PXA-014 probes incidentais remanescentes — 2026-09-27: a suíte CI do SHA
 `ef4ee75` emitiu `QProcess: Destroyed while process (.../linux/pz) is still
 running`. `tests/test_first_pairing.py` tinha um timer de descoberta Homelab que
 não pertence ao caso de senha; `no_homelab_startup_probe` foi aplicado ao módulo.
-Isso não foi suficiente: suíte ampla CI dos SHAs `96ae46f` e `f04f4de` passou
-(1312 passed, 2 skipped, 15 subtests; Xvfb 100/150/200%), mas o aviso persistiu.
-Rastreamento confirmou o padrão: MainWindow abre dashboard, `OverviewPage.reload()`
-chama `StatusLoader.fetch_action()`, que alcança `StatusLoader.fetch()` e inicia
-`linux/pz`. Um patch só no teste de provisionamento também não cobriu demais telas.
-Agora a fixture compartilhada suprime `StatusLoader.fetch()` junto do probe
-Homelab, apenas em testes UI que não exercitam probes; testes de despacho instalam
-seus próprios spies. `tests/test_provision_player.py` ainda mocka explicitamente
-`fetch_action`. `tests/test_provision_player.py`, `tests/test_first_pairing.py` e
-`tests/test_homelab_journey.py`: 75 passaram localmente em 50,97 s,
-`QT_QPA_PLATFORM=offscreen`; verificação imediata encontrou zero processo
-`linux/pz` residual. Próxima suíte ampla e ausência do aviso ainda aguardam CI; não
-declarar teardown QProcess resolvido antes desse log.
+Isso não foi suficiente: suítes amplas CI dos SHAs `96ae46f`, `f04f4de` e
+`995112c` passaram (1312 passed, 2 skipped, 15 subtests; Xvfb 100/150/200%), mas
+o aviso persistiu. Um probe era comum às MainWindows de teste: dashboard chama
+`OverviewPage.reload()` → `StatusLoader.fetch_action()` → `StatusLoader.fetch()`.
+A fixture compartilhada agora intercepta `fetch` junto da descoberta Homelab.
+Outra tela direta escapava dessa fixture: `tests/test_linux_hub_ui.py` chamava
+`build()`, que agenda `reload()` com timer zero; `cancel_all()` antes do timer não
+cancelava esse fetch futuro. O fixture dessa página agora intercepta `fetch` antes
+de `build()`. `tests/test_provision_player.py` também mantém mock explícito para
+`fetch_action`. Suíte focada de provisionamento/pareamento/jornada Homelab: 75
+passaram em 50,97 s, zero `linux/pz` residual. Linux Hub: 14 passaram em 2,53 s,
+zero `linux/pz` residual. `QT_QPA_PLATFORM=offscreen`, HOME/XDG temporários. CI
+ampla após a correção direta Linux Hub ainda pendente; não declarar teardown QProcess
+resolvido antes de logs sem aviso.
