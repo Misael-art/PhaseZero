@@ -461,6 +461,9 @@ jobs:
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
           export PZ_TRACE_QPROCESS_STARTS=1
+          export PZ_TRACE_QPROCESS_LOG="$RUNNER_TEMP/pz-qprocess-trace.log"
+          : > "$PZ_TRACE_QPROCESS_LOG"
+          trap 'cat "$PZ_TRACE_QPROCESS_LOG"' EXIT
           # timeout-method=thread, not the default signal method: SIGALRM only
           # interrupts the main thread once it returns to Python bytecode, so a
           # test blocked in a subprocess or a socket read is never reclaimed.
@@ -468,7 +471,7 @@ jobs:
           # with no failing test named, which is exactly what happened on
           # e91bcaf. The thread method dumps every thread's stack and kills the
           # process, so the culprit appears in the log.
-          /tmp/pz-venv/bin/python -m pytest --capture=tee-sys tests/ -q -vv \
+          /tmp/pz-venv/bin/python -m pytest tests/ -q -vv \
             --timeout=90 --timeout-method=thread
 
       - name: Verify UI hit-test at 100%, 150%, and 200% on isolated Xvfb

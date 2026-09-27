@@ -37,16 +37,23 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
             program = str(args[0]) if args else str(process.program())
             if program.endswith("/linux/pz"):
                 arguments = list(args[1:]) if args else list(process.arguments())
-                print(
+                log_path = os.environ.get("PZ_TRACE_QPROCESS_LOG")
+
+                def record(line: str) -> None:
+                    if log_path:
+                        with open(log_path, "a", encoding="utf-8") as log:
+                            log.write(line + "\n")
+                    else:
+                        print(line, flush=True)
+
+                record(
                     f"PZ_QPROCESS_TRACE test={request.node.nodeid} "
-                    f"program={program} argc={len(arguments)}",
-                    flush=True,
+                    f"program={program} argc={len(arguments)}"
                 )
                 for frame in traceback.extract_stack(limit=8)[:-1]:
-                    print(
+                    record(
                         f"PZ_QPROCESS_TRACE at={frame.filename}:{frame.lineno} "
-                        f"in={frame.name}",
-                        flush=True,
+                        f"in={frame.name}"
                     )
             return original_start(process, *args, **kwargs)
 

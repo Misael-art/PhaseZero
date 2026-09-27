@@ -1951,7 +1951,7 @@ passou (1312 passed, 2 skipped, 15 subtests; Xvfb hit-test 2/2 em 100/150/200%),
 mas continuou emitindo o aviso `QProcess: Destroyed while process (.../linux/pz)
 is still running`. Nenhuma linha `PZ_QPROCESS_TRACE` apareceu: pytest capturava
 stdout de testes aprovados, escondendo o diagnóstico. Instrumentação agora evita
-registrar argumentos (podem conter dados sensíveis) e o próximo job usa
-`--capture=tee-sys` para expor nodeid/programa/quantidade de argumentos/stack.
-O processo causador ainda não foi localizado; não declarar correção antes de
-CI sem aviso.
+registrar argumentos (podem conter dados sensíveis) e grava somente
+nodeid/programa/quantidade de argumentos/stack em arquivo temporário do runner,
+publicado no encerramento do passo. O processo causador ainda não foi localizado;
+não declarar correção antes de CI sem aviso.
