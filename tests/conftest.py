@@ -16,12 +16,41 @@ from __future__ import annotations
 
 import os
 import subprocess
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
+    """Opt-in CI diagnostic: attach each live pz QProcess launch to its test."""
+    if os.environ.get("PZ_TRACE_QPROCESS_STARTS") == "1":
+        from PySide6.QtCore import QProcess
+
+        original_start = QProcess.start
+
+        def traced_start(process, *args, **kwargs):
+            program = str(args[0]) if args else str(process.program())
+            if program.endswith("/linux/pz"):
+                arguments = list(args[1:]) if args else list(process.arguments())
+                print(
+                    f"PZ_QPROCESS_TRACE test={request.node.nodeid} "
+                    f"program={program} args={arguments!r}",
+                    flush=True,
+                )
+                for frame in traceback.extract_stack(limit=8)[:-1]:
+                    print(
+                        f"PZ_QPROCESS_TRACE at={frame.filename}:{frame.lineno} "
+                        f"in={frame.name}",
+                        flush=True,
+                    )
+            return original_start(process, *args, **kwargs)
+
+        monkeypatch.setattr(QProcess, "start", traced_start)
 
 SENTINEL_NAME = "DO-NOT-TOUCH.txt"
 SENTINEL_BODY = "dados do usuário: ROMs e saves vivem aqui\n"

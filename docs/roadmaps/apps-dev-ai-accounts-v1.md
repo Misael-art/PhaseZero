@@ -1930,4 +1930,6 @@ de `build()`. `tests/test_provision_player.py` também mantém mock explícito p
 passaram em 50,97 s, zero `linux/pz` residual. Linux Hub: 14 passaram em 2,53 s,
 zero `linux/pz` residual. `QT_QPA_PLATFORM=offscreen`, HOME/XDG temporários. CI
 ampla após a correção direta Linux Hub ainda pendente; não declarar teardown QProcess
-resolvido antes de logs sem aviso.
+resolvido antes de logs sem aviso. A próxima execução ativa diagnóstico opt-in
+`PZ_TRACE_QPROCESS_STARTS`, que associa cada início de `linux/pz` a nodeid e stack
+do teste; remover instrumentação após localizar a origem restante.
