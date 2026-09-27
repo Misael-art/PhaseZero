@@ -1913,13 +1913,18 @@ Node respondeu e `pnpm --version` reportou `11.26.0`. Só o container Arch foi a
 PXA-004/005 permanecem `in_progress`; esse cenário não fecha G2 completo nem substitui
 Windows G2, prova de crash dentro do gestor, cancelamento pela UI real ou G4.
 
-PXA-014 probe incidental remanescente — 2026-09-27: a suíte CI em
-`ef4ee75` ainda emitiu `QProcess: Destroyed while process (.../linux/pz) is still
-running`. Rastreamento achou `tests/test_first_pairing.py`: a jornada de senha
-constrói `HomelabPage` real, mas não testa a consulta inicial de hosts; o timer
-pendente podia iniciar `linux/pz` durante outro teste Qt. Aplicado
-`no_homelab_startup_probe` apenas nesse módulo; interações reais de pareamento
-seguem intactas. `tests/test_first_pairing.py` + `tests/test_homelab_journey.py`:
-37 passaram localmente em 0,88 s, `QT_QPA_PLATFORM=offscreen`, HOME/XDG em
-TemporaryDirectory removido após execução. Regressão ampla e confirmação CI deste
-ajuste ainda pendentes.
+PXA-014 probes incidentais remanescentes — 2026-09-27: a suíte CI do SHA
+`ef4ee75` emitiu `QProcess: Destroyed while process (.../linux/pz) is still
+running`. `tests/test_first_pairing.py` tinha um timer de descoberta Homelab que
+não pertence ao caso de senha; `no_homelab_startup_probe` foi aplicado ao módulo.
+Isso foi uma fonte possível, mas não suficiente: suíte ampla CI do SHA `96ae46f`
+passou (1312 passed, 2 skipped, 15 subtests) e matriz Xvfb passou em 100/150/200%,
+mas o aviso persistiu. Segundo probe encontrado em
+`test_provision_player.test_player_action_intercepted_in_request_action`: a janela
+MainWindow iniciava o dashboard, que chama `OverviewPage.reload()` e
+`StatusLoader.fetch_action()` para sistema real, alheio ao teste. Agora esse caso
+mocka `StatusLoader.fetch_action`; `tests/test_provision_player.py`,
+`tests/test_first_pairing.py` e `tests/test_homelab_journey.py`: 75 passaram
+localmente em 52,88 s, `QT_QPA_PLATFORM=offscreen`; verificação imediata encontrou
+zero processo `linux/pz` residual. Próxima suíte ampla e ausência do aviso ainda
+aguardam CI; não declarar teardown QProcess resolvido antes desse log.

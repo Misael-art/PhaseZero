@@ -347,6 +347,7 @@ def test_player_action_intercepted_in_request_action(qapp) -> None:
     assert not player_action[0].elevated
 
     with (
+        patch("linux.ui_native.status_loader.StatusLoader.fetch_action"),
         patch("linux.ui_native.main_window.ProvisionPlayerWindow.open") as mock_open,
         patch("linux.ui_native.main_window.CommandRunner.start") as mock_start,
         patch.object(WindowsInstallDialog, "exec", return_value=WindowsInstallDialog.Accepted),
