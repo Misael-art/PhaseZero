@@ -1908,3 +1908,14 @@ Validação local: parse AST, guarda fora do CI recusa execução, `git diff --c
 nenhuma transação pacman executada no host. Resultado real CI ainda pendente; PXA-004/
 005 permanecem `in_progress` e esse container não fecha G2 completo nem substitui
 Windows G2, cancelamento pela UI real ou G4.
+
+PXA-014 probe incidental remanescente — 2026-09-27: a suíte CI em
+`ef4ee75` ainda emitiu `QProcess: Destroyed while process (.../linux/pz) is still
+running`. Rastreamento achou `tests/test_first_pairing.py`: a jornada de senha
+constrói `HomelabPage` real, mas não testa a consulta inicial de hosts; o timer
+pendente podia iniciar `linux/pz` durante outro teste Qt. Aplicado
+`no_homelab_startup_probe` apenas nesse módulo; interações reais de pareamento
+seguem intactas. `tests/test_first_pairing.py` + `tests/test_homelab_journey.py`:
+37 passaram localmente em 0,88 s, `QT_QPA_PLATFORM=offscreen`, HOME/XDG em
+TemporaryDirectory removido após execução. Regressão ampla e confirmação CI deste
+ajuste ainda pendentes.
