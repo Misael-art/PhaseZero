@@ -1955,3 +1955,6 @@ registrar argumentos (podem conter dados sensíveis) e grava somente
 nodeid/programa/quantidade de argumentos/stack em arquivo temporário do runner,
 publicado no encerramento do passo. O processo causador ainda não foi localizado;
 não declarar correção antes de CI sem aviso.
+Demais jobs do run passaram; Pester focused 35/0 e suíte completa 801 aprovados,
+0 falhas, 2 ignorados. Resultado CI geral: sucesso; aviso QProcess permanece o
+único defeito conhecido desta frente.
