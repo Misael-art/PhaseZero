@@ -35,7 +35,7 @@ Describe 'Bootstrap quality gates' {
         }
         # Baseline medida com PSScriptAnalyzer 1.25.0: 921 warnings no Windows
         # Server 2025 runner atual. Errors continuam em 0; qualquer warning novo
-        # precisa atualizar o baseline com evidência e revisão do delta.
+        # precisa atualizar o baseline com evidencia e revisao do delta.
         ([int]$warnings.Count -le 921) | Should Be $true
     }
 

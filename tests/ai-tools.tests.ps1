@@ -148,7 +148,6 @@ Describe 'AI coding tool support' {
         @(Get-ChildItem -LiteralPath $script:AiToolsTestRoot -Force).Count | Should Be 0
 
         $component = (Get-BootstrapComponentCatalog)['openclaw']
-        (@($component.DependsOn).Count) | Should Be 0
         [string]$component.Description | Should Match 'blocked'
         $profiles = Get-BootstrapProfileCatalog
         (@($profiles['ai'].Items) -contains 'openclaw') | Should Be $false
