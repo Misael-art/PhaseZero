@@ -27,6 +27,20 @@ SENTINEL_NAME = "DO-NOT-TOUCH.txt"
 SENTINEL_BODY = "dados do usuário: ROMs e saves vivem aqui\n"
 
 
+@pytest.fixture
+def no_homelab_startup_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated MainWindow tests from launching Homelab's own QProcess.
+
+    MainWindow builds every page, and HomelabPage queues ``refresh_hosts``
+    independently of StatusLoader. UI tests that do not exercise Homelab must
+    suppress that incidental host probe while retaining the real page widgets.
+    """
+    monkeypatch.setattr(
+        "linux.ui_native.pages.homelab.HomelabPage.refresh_hosts",
+        lambda _self: None,
+    )
+
+
 @dataclass
 class HostSandbox:
     """Fake-home isolado com snapshot/diff de filesystem."""

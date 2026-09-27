@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 from linux.ai.account_adapters import router_provider_accounts
 from linux.ai.account_contract import Connection, Evidence, Quota

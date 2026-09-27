@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QTimer, QProcess, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 sys.path.insert(0, str(ROOT))
 
 from linux.ui_native import provision_player as pp_mod

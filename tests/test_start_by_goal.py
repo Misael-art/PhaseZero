@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from linux.ui_native.pages.dashboard import JOURNEYS, ONBOARDING_STEPS, DashboardPage
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 ONBOARD_FIRST_STEP = "discover"
 
 

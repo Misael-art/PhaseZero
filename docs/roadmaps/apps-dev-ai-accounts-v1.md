@@ -1861,3 +1861,37 @@ exit 0; nenhum aviso QProcess nem processo `linux/pz` após a execução; HOME/X
 temporários removidos. `git diff --check` passou antes do commit. Repetir CI no novo
 HEAD ainda necessário; não tratar avisos do SHA anterior como eliminados. G2 Windows,
 reader real, escalas/temas físicos e G4 continuam pendentes.
+
+PXA-014 fixture geral de UI — 2026-09-27: o aviso persistiu na suíte Python porque
+vários módulos constroem `MainWindow`, que também agenda o probe próprio do Homelab.
+Fixture reutilizável `no_homelab_startup_probe` adicionada ao `tests/conftest.py` e
+aplicada às jornadas de UI que não testam probes Homelab; a página e seus controles
+continuam reais. Testes Homelab de comportamento seguem sem esse bloqueio; somente o
+teste de geometria da janela real suprime o probe incidental. Regressão focada em 13
+módulos (`cancel_safety`, `start_by_goal`, `boot_selector_async`, `accounts_page`,
+`development_journey_e2e`, `emulation_library_ui`, `development_cancel`,
+`development_page`, `native_navigation`, `provision_player`, `homelab_player`,
+`product_registry_ui`, `accessibility_gate`): 257 passaram em 268,70 s, exit 0,
+Python 3.14.7/PySide6 6.11.2, `QT_QPA_PLATFORM=offscreen`; sem aviso QProcess e sem
+processo `linux/pz` residual. HOME/XDG temporários sob
+`/run/user/1000/codex-desktop/tmp/pxa014-qprocess-U5k3Yx` foram removidos. `git diff
+--check` passou. A confirmação CI desta expansão ainda falta. Isso fecha apenas o
+probe incidental nessas fixtures; não prova leitores reais, sessão G4, display físico
+ou G2 Windows.
+
+Windows G2 reavaliado — 2026-09-27 18:04 -03:00: etapa **não realizada** após
+consulta read-only do host: 14 GiB RAM total, 7,4 GiB disponíveis, swap 22 GiB com
+2,4 GiB usados, load 2,17/3,11/2,54, processo Flatpak em 200% CPU e Qoder/Electron
+ativos. `/mnt/sdcard` tem 238 GiB livres, mas usa `fuseblk`; armazenamento QCOW2
+continua sem validação e o registro Btrfs anterior segue aberto. Não iniciar VM nem
+interromper processos. ISO fornecida permaneceu intocada: sem `stat`, leitura, hash,
+montagem ou boot. G2 segue pendente; continuar etapas que não requerem VM.
+
+PXA-010 revalidação de segurança — 2026-09-27: as restrições reiteradas pelo operador
+coincidem com a revisão de arquitetura já registrada na seção 4: inferência Web e
+túnel de ferramentas são canais separados; túnel sem porta pública; direitos Read +
+Manage para administrar e Read + Use para executar; sessão de browser própria; chave
+mínima no cofre; elegibilidade do workspace e aprovações por tarefa antes de Full.
+PXA-010 permanece `in_progress`, experimental e fora do catálogo; nenhum pacote
+upstream, sessão, conta, túnel, broker, rota ou processo foi usado. v6.1.1 não foi
+validada; v6.0.0 segue referência documental.

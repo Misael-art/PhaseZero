@@ -1145,6 +1145,7 @@ def test_ui_pages_have_no_duplicate_method_definitions():
 # scrolling — across the 800 -> 1280 -> 800 alternation.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("no_homelab_startup_probe")
 def test_pages_reflow_in_real_window_with_theme(app):
     from unittest.mock import patch
 
