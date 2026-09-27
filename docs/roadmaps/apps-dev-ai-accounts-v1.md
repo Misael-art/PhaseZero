@@ -423,7 +423,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `planned` | `c7cdcf4`: gate local de acessibilidade agora corta subprocessos de status enquanto mantém widgets reais; `tests/test_accessibility_gate.py tests/test_native_tokens.py`: 72 passaram em 40,66 s, exit 0. G2 Arch/Windows integral, CI remota, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige outro caminho: `HomelabPage.build()` agenda `refresh_hosts` próprio via QProcess, fora de `StatusLoader`. Em `7c39c69`, CI completa passou (1312 testes + matriz Xvfb), mas logs ainda emitiram avisos de QProcess vivo; fixture em `f4dafee` captura callback no-op durante construção. `tests/test_product_registry_ui.py`: 37 passaram localmente, exit 0, sem aviso nem `linux/pz` residual. CI do novo HEAD pendente. G2 Arch/Windows integral, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -1846,3 +1846,18 @@ pytest ficou CPU-bound no teardown; `faulthandler` não encontrou frame Python
 zero pytest, `linux/pz` ou pasta temporária residual. Resultado combinado não conta
 como execução limpa; execução remota no SHA atual deve confirmar teardown.
 G4, leitor de tela audível e Windows G2 continuam pendentes.
+
+PXA-014 fixture QProcess/Homelab — 2026-09-27: CI push `36344812758` e CI PR
+`36344814872`, ambos no SHA `7c39c69`, terminaram verdes; Pester 3.4 teve
+801 aprovados, 0 falhas, 2 skipped, 0 pending. A suíte Python teve 1312 aprovados,
+2 skipped e 15 subtests; matriz Xvfb de hit-test aprovou 100/150/200%. Porém os logs
+emitiram `QProcess: Destroyed while process (.../linux/pz) is still running` após
+pytest e cada execução Xvfb. A causa restante era `HomelabPage.build()` agendar
+`refresh_hosts` por `QTimer.singleShot`; esse QProcess próprio não passa por
+`StatusLoader.fetch`, então o mock em `_window()` era incompleto. Commit `f4dafee`
+captura callback no-op durante construção de `MainWindow`, mantendo widgets reais.
+Validação local: `tests/test_product_registry_ui.py` — 37 passaram em 17,82 s,
+exit 0; nenhum aviso QProcess nem processo `linux/pz` após a execução; HOME/XDG
+temporários removidos. `git diff --check` passou antes do commit. Repetir CI no novo
+HEAD ainda necessário; não tratar avisos do SHA anterior como eliminados. G2 Windows,
+reader real, escalas/temas físicos e G4 continuam pendentes.
