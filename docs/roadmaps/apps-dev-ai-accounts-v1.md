@@ -1825,3 +1825,24 @@ por cancelamento/crash com package manager real e Windows G2 não executados.
 PXA-006/G3 segue sem conta/sessão/cota real; PXA-008 segue fail-closed; PXA-010
 permanece fora do catálogo. Windows G2 continua **não realizada** conforme pedido
 do operador, sem ler ou iniciar a ISO.
+
+PXA-014 fixture de probes — CI `36311133535` / SHA `2f54693` concluiu toda suíte
+Python e matriz Xvfb; ao fim, log emitiu `QProcess: Destroyed while process
+(.../linux/pz) is still running`. Auditoria local achou `_window()` em
+`tests/test_product_registry_ui.py` mockando `StatusLoader.fetch_product_status`,
+mas a inicialização de páginas também chama `StatusLoader.fetch` diretamente.
+Fixture corrigida para tornar `fetch` read-only no-op; testes que verificam despacho
+substituem o método por instância. `tests/test_product_registry_ui.py`: 37 passaram
+em 25,31 s; processo pytest encerrou com código 0; verificação `ps` posterior não
+achou pytest nem `linux/pz`. HOME/XDG ficaram em `TemporaryDirectory` sob
+`/run/user/1000/codex-desktop/tmp/pz-product-ui-c2udiwj1`, removido ao sair do
+contexto. Nenhum probe real foi iniciado. Regressão agora aguarda CI para confirmar
+fim dos avisos/processos. Hit-test estrito remoto no SHA anterior passou 2 casos por
+escala 100/150/200%, com Xvfb lógico 1280×800 e físico 1280×800/1920×1200/2560×1600;
+isso cobre controles do host Apps, não toda a interface nem display físico.
+Suíte local combinada com acessibilidade/tokens reportou 109 testes verdes, mas
+pytest ficou CPU-bound no teardown; `faulthandler` não encontrou frame Python
+(Qt/C++). Interrompi somente o grupo isolado da suíte após 150 s. `ps` confirmou
+zero pytest, `linux/pz` ou pasta temporária residual. Resultado combinado não conta
+como execução limpa; execução remota no SHA atual deve confirmar teardown.
+G4, leitor de tela audível e Windows G2 continuam pendentes.

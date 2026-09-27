@@ -27,7 +27,9 @@ def _window(qapp):
 
     patcher = patch.object(MainWindow, "_host_summary")
     patcher.start()
-    status_patcher = patch("linux.ui_native.status_loader.StatusLoader.fetch_product_status")
+    # Page initialization can call fetch() directly. Keep these UI tests from
+    # starting host probes; tests that assert a fetch override it per instance.
+    status_patcher = patch("linux.ui_native.status_loader.StatusLoader.fetch", return_value=None)
     status_patcher.start()
     window = MainWindow(ROOT)
     return window, patcher, status_patcher
