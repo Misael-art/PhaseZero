@@ -419,7 +419,7 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditoria documental v6.1.0 em 2026-09-27 não encontrou mudança no limite same-user; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 não realizado nesta avaliação de host (RAM disponível igual ao mínimo guest; registro abaixo). Nenhuma integração, pacote ou rota ativados. |
+| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditoria documental v6.1.0 em 2026-09-27 não encontrou mudança no limite same-user; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado: amostra 2026-09-27 tem 6,7 GiB disponíveis, porém imagem fica em Btrfs com diagnóstico aberto e guest deixaria 2,7 GiB para host (registro abaixo). Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
@@ -1672,3 +1672,14 @@ reversão. Fontes: [README](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.
 [release-validation](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.0/docs/release-validation.md),
 [release v6.1.0](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.0).
 Nenhum pacote baixado ou executado; conta, rota, túnel e broker não utilizados.
+
+Windows G2 reavaliado — 2026-09-27 00:08 -03:00: etapa continua **não realizada**.
+Host após reboot: 14 GiB RAM total, 6,7 GiB disponível, 32 MiB swap usada, load
+0,48/1,29/1,12. Qoder, Electron, Plasma e Codex ativos. Guest mínimo de 4 GiB
+deixaria 2,7 GiB para host, sem margem confortável para a sessão atual. A ISO está
+em `/home` Btrfs com compressão zstd; diagnóstico anterior mantém 603 erros de
+checksum acumulados, causa não resolvida. `stat` apenas (8.172.068.864 bytes); sem
+hash, leitura, montagem ou boot. `/mnt/sdcard` é `fuseblk`; não usei como destino
+qcow2 porque essa semântica não foi validada. Nenhuma VM iniciada ou processo
+interrompido. Retomar G2 depois do gate de armazenamento e com maior folga de RAM,
+usando snapshot descartável em filesystem suportado.
