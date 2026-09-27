@@ -1930,6 +1930,8 @@ de `build()`. `tests/test_provision_player.py` também mantém mock explícito p
 passaram em 50,97 s, zero `linux/pz` residual. Linux Hub: 14 passaram em 2,53 s,
 zero `linux/pz` residual. `QT_QPA_PLATFORM=offscreen`, HOME/XDG temporários. CI
 ampla após a correção direta Linux Hub ainda pendente; não declarar teardown QProcess
-resolvido antes de logs sem aviso. A próxima execução ativa diagnóstico opt-in
-`PZ_TRACE_QPROCESS_STARTS`, que associa cada início de `linux/pz` a nodeid e stack
-do teste; remover instrumentação após localizar a origem restante.
+resolvido antes de logs sem aviso. No SHA `6f828d9`, env de diagnóstico foi
+adicionado por engano ao job Homelab separado, não ao `python-test`; o aviso persistiu
+sem traces. Agora `PZ_TRACE_QPROCESS_STARTS` está no passo correto e associa início
+de `linux/pz` a nodeid e stack; repetir CI antes de concluir causa e remover
+instrumentação após localizar a origem restante.

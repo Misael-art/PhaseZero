@@ -272,7 +272,6 @@ jobs:
         run: |
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
-          export PZ_TRACE_QPROCESS_STARTS=1
           /tmp/pz-venv/bin/python -m pytest tests/test_homelab_player.py \
             tests/test_homelab_agent_contract.py \
             tests/test_homelab_web_contract.py -q \
@@ -461,6 +460,7 @@ jobs:
         run: |
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
+          export PZ_TRACE_QPROCESS_STARTS=1
           # timeout-method=thread, not the default signal method: SIGALRM only
           # interrupts the main thread once it returns to Python bytecode, so a
           # test blocked in a subprocess or a socket read is never reclaimed.
