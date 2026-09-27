@@ -39,7 +39,7 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
                 arguments = list(args[1:]) if args else list(process.arguments())
                 print(
                     f"PZ_QPROCESS_TRACE test={request.node.nodeid} "
-                    f"program={program} args={arguments!r}",
+                    f"program={program} argc={len(arguments)}",
                     flush=True,
                 )
                 for frame in traceback.extract_stack(limit=8)[:-1]:
