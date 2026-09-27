@@ -1905,9 +1905,13 @@ confere pnpm ainda ausente, retoma o plano, valida execução, repete sem reinst
 e reverte pnpm preservando Node.js antes de remover Node.js. HOME/XDG/PZ ficam em
 diretório temporário; log declara filesystem, banco/cache/log pacman e estado tocados.
 Validação local: parse AST, guarda fora do CI recusa execução, `git diff --check`;
-nenhuma transação pacman executada no host. Resultado real CI ainda pendente; PXA-004/
-005 permanecem `in_progress` e esse container não fecha G2 completo nem substitui
-Windows G2, cancelamento pela UI real ou G4.
+nenhuma transação pacman executada no host. CI push `36352420256`, job Arch
+`108713528380`, SHA `fabd4e5c2c7bc0a14baaf2b1f25d6156261e465d`: sucesso. Log confirma
+pedido durante `pacman -S nodejs`, conclusão no limite seguro, retomada de pnpm,
+reaplicação idempotente e rollback preservando Node.js antes de removê-lo; runtime
+Node respondeu e `pnpm --version` reportou `11.26.0`. Só o container Arch foi alterado.
+PXA-004/005 permanecem `in_progress`; esse cenário não fecha G2 completo nem substitui
+Windows G2, prova de crash dentro do gestor, cancelamento pela UI real ou G4.
 
 PXA-014 probe incidental remanescente — 2026-09-27: a suíte CI em
 `ef4ee75` ainda emitiu `QProcess: Destroyed while process (.../linux/pz) is still
