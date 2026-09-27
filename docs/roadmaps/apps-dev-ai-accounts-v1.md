@@ -1757,3 +1757,13 @@ permanece antes do helper de runtime. Quatro fixtures (`linux-ai-proxies`,
 `linux-ai-runtime-shim`, `linux-openclaw-grant-gate`, `linux-hermes-grant-gate`)
 passaram localmente. Sem alteração na autorização: setup, teste de inferência e
 ações OpenClaw seguem bloqueados sem grants por requisição.
+
+Windows G2 reavaliado — 2026-09-27 04:38 -03:00: etapa **não realizada** por
+decisão do operador enquanto há processos ativos no host. Checagem somente leitura:
+14 GiB RAM total, 7,9 GiB disponíveis, swap 3,1 GiB usada; Electron, Qoder,
+Codex e Plasma ativos; nenhum processo QEMU/libvirt encontrado. Guest mínimo de
+4 GiB deixaria 3,9 GiB disponíveis no snapshot atual e aumentaria contenção. O
+gate Btrfs segue aberto (603 erros de checksum no registro anterior). Não criei
+VM, não interrompi processos e não abri/li/calcultei hash/montei a ISO
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`.
+Windows G2 segue pendente; continuar ciclos independentes sem VM.
