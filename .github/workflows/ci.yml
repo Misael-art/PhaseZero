@@ -378,6 +378,11 @@ jobs:
           out="$(pz server homelab prepare --dry-run --json 2>/dev/null)"
           jq -e '.action == "prepare" and .dryRun == true' <<<"$out" >/dev/null
 
+      - name: Verify real pacman cancellation and recovery in disposable Arch
+        env:
+          PZ_ENABLE_ARCH_PACMAN_G2: "1"
+        run: python "$GITHUB_WORKSPACE/tests/pacman_cancel_g2.py"
+
   package-smoke:
     runs-on: ubuntu-latest
     needs: shell-lint

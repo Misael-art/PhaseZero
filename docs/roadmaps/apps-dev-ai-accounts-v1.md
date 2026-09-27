@@ -1895,3 +1895,16 @@ mínima no cofre; elegibilidade do workspace e aprovações por tarefa antes de 
 PXA-010 permanece `in_progress`, experimental e fora do catálogo; nenhum pacote
 upstream, sessão, conta, túnel, broker, rota ou processo foi usado. v6.1.1 não foi
 validada; v6.0.0 segue referência documental.
+
+PXA-004/005 cancelamento com pacote real — 2026-09-27: adicionado
+`tests/pacman_cancel_g2.py`, executado somente pelo job `arch-clean-host` em
+container Arch descartável, com guardas para GitHub Actions, job correto, root e
+`/etc/arch-release`. O cenário planeja `development-web-js`, observa `pacman -S`
+real instalando Node.js, grava pedido de cancelamento, aguarda o limite seguro,
+confere pnpm ainda ausente, retoma o plano, valida execução, repete sem reinstalar
+e reverte pnpm preservando Node.js antes de remover Node.js. HOME/XDG/PZ ficam em
+diretório temporário; log declara filesystem, banco/cache/log pacman e estado tocados.
+Validação local: parse AST, guarda fora do CI recusa execução, `git diff --check`;
+nenhuma transação pacman executada no host. Resultado real CI ainda pendente; PXA-004/
+005 permanecem `in_progress` e esse container não fecha G2 completo nem substitui
+Windows G2, cancelamento pela UI real ou G4.
