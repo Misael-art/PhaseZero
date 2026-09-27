@@ -1780,3 +1780,13 @@ O mock declara `param()` no scriptblock; Pester injeta parâmetros mockados pela
 e o filtro de chamada deve usar `-ParameterFilter` ([Mock, documentação oficial Pester](https://github.com/pester/Pester/wiki/Mock)).
 Corrigi fixture com mock padrão vazio e mock específico filtrado por `ToolName`; sem
 alteração na função de produto. HEAD fix aguarda CI própria.
+
+CI `36305805946` (push) e `36305808166` (PR), HEAD `19ada00` — 2026-09-27:
+`homelab-shell-test` passou no push e falhou no PR em REV-002. stderr capturado:
+`cp: cannot stat .../data.db-wal: No such file or directory`; a fixture executava
+escritas concorrentes e checkpoint removia WAL durante `cp -a`, fazendo staging falhar
+antes do SQLite `.backup` no mount vivo. Corrigido `stage_volume_consistent` para stream
+de `tar` excluindo sufixos de sidecar SQLite `-wal`/`-shm`, que não são backup válido e
+seriam removidos/substituídos pelo `.backup` live. `bash -n` e `git diff --check` passaram;
+teste comportamental em runners CI ainda pendente. Não mascarar `REV-002` se staging
+de outros arquivos falhar.
