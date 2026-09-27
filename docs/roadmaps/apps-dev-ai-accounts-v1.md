@@ -1935,3 +1935,23 @@ adicionado por engano ao job Homelab separado, não ao `python-test`; o aviso pe
 sem traces. Agora `PZ_TRACE_QPROCESS_STARTS` está no passo correto e associa início
 de `linux/pz` a nodeid e stack; repetir CI antes de concluir causa e remover
 instrumentação após localizar a origem restante.
+
+Windows G2 reavaliado — 2026-09-27 20:01 -03:00: etapa **não realizada**.
+Consulta read-only: 14 GiB RAM total, 4,4 GiB disponíveis, 3,5 GiB swap usada,
+load 1,93/2,69/2,84; Qoder, Edge, Electron e Plasma ativos. Um guest Windows com
+4 GiB deixaria margem mínima ao host. O gate de armazenamento da VM segue aberto:
+histórico Btrfs com erros de checksum/AIO e destino QCOW2 em `/mnt/sdcard`
+(`fuseblk`) sem semântica validada. A ISO fornecida não foi aberta, lida,
+hasheada, montada ou iniciada; nenhuma VM foi criada nem processo interrompido.
+Não executar Windows G2 nesta sessão; manter gate pendente e avançar somente em
+etapas independentes sem VM.
+
+CI `36357140492`, SHA `a282320` — 2026-09-27 20:10 -03:00: `python-test`
+passou (1312 passed, 2 skipped, 15 subtests; Xvfb hit-test 2/2 em 100/150/200%),
+mas continuou emitindo o aviso `QProcess: Destroyed while process (.../linux/pz)
+is still running`. Nenhuma linha `PZ_QPROCESS_TRACE` apareceu: pytest capturava
+stdout de testes aprovados, escondendo o diagnóstico. Instrumentação agora evita
+registrar argumentos (podem conter dados sensíveis) e o próximo job usa
+`--capture=tee-sys` para expor nodeid/programa/quantidade de argumentos/stack.
+O processo causador ainda não foi localizado; não declarar correção antes de
+CI sem aviso.
