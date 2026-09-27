@@ -497,6 +497,8 @@ wait_ready() {
     return 1
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains provisioning code behind its request-bound grant gate.
 provision() {
     odysseus_usage_blocked
     return 69
@@ -618,6 +620,8 @@ check_update() {
           policy:"manual-allowlisted-commit",secretsRedacted:true}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains update code behind its request-bound grant gate.
 update_odysseus() {
     odysseus_usage_blocked
     return 69
@@ -788,6 +792,8 @@ require_runtime_provenance() {
     }
 }
 
+# shellcheck disable=SC2317
+# PXA-008 keeps workspace access behind its request-bound grant gate.
 open_ui() {
     odysseus_usage_blocked
     return 69

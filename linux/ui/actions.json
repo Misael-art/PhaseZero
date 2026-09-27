@@ -2608,7 +2608,7 @@
     },
     {
       "name": "ai.webui",
-      "label": "Instalar Open WebUI",
+      "label": "Uso bloqueado — Open WebUI",
       "command": "linux/pz ai setup webui",
       "mutable": true,
       "require_plan": true,
@@ -2616,7 +2616,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz ai status"
+      "plan_command": "linux/pz ai webui status"
     },
     {
       "name": "ai.webui-status",
@@ -2631,7 +2631,7 @@
     },
     {
       "name": "ai.webui-open",
-      "label": "Abrir Open WebUI",
+      "label": "Uso bloqueado — Open WebUI",
       "command": "linux/pz ai webui open",
       "mutable": false,
       "require_plan": false,
@@ -3573,6 +3573,61 @@
       "input_label": ""
     },
     {
+      "name": "ai.memory-status",
+      "label": "Status ai-memory",
+      "command": "linux/pz ai product-status ai-memory",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.usagebar-status",
+      "label": "Status UsageBar",
+      "command": "linux/pz ai product-status usagebar",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.desktop.claude.status",
+      "label": "Status Claude Desktop",
+      "command": "linux/pz ai product-status claude-desktop",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.desktop.codex.status",
+      "label": "Status Codex Desktop",
+      "command": "linux/pz ai product-status codex-desktop",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.desktop.qwen.status",
+      "label": "Status Qwen Code Desktop",
+      "command": "linux/pz ai product-status qwen-code-desktop",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "ai.proxies-credentials-mimo",
       "label": "Salvar chave MiMo bloqueado",
       "command": "linux/pz ai proxies set-credentials mimo-ai-proxy",
@@ -3883,7 +3938,7 @@
     },
     {
       "name": "server.hermes.start",
-      "label": "Iniciar Hermes",
+      "label": "Uso Hermes remoto bloqueado",
       "command": "linux/pz server hermes start",
       "mutable": true,
       "require_plan": true,

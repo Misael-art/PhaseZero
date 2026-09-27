@@ -392,7 +392,10 @@ class LinuxHubPage(BasePage):
         else:
             action = tuning_action(item, enabled)
         self._pending[action.id] = (item.id, kind)
-        self.request_action(action)
+        # Toggle actions already carry their plan/apply contract. Passing them
+        # through BasePage would reinterpret the capability target as a product
+        # shortcut and navigate away before the preview can run.
+        self.action_requested.emit(action)
 
     def cancel_pending_action(self, action_id: str) -> None:
         entry = self._pending.pop(action_id, None)

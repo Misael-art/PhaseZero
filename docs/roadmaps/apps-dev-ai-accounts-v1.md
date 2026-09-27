@@ -1718,3 +1718,11 @@ Fontes: [release v6.1.1](https://github.com/miuuyy/codex-chatgpt-web/releases/ta
 [arquitetura](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.1/docs/architecture.md),
 [modelo de segurança](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.1/docs/security-model.md),
 [release-validation](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.1/docs/release-validation.md).
+
+Windows G2 reavaliado — 2026-09-27 00:52 -03:00: etapa **não realizada**, a
+pedido do operador, para evitar pressão adicional enquanto há trabalhos e processos
+ativos no host. A ISO fornecida em `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
+não foi aberta, lida, calculado hash, montada ou iniciada; nenhuma VM foi criada
+nem processo interrompido. Seguir com as etapas independentes que não requerem VM.
+Windows G2 continua pendente; retomar apenas quando host tiver folga suficiente e
+snapshot descartável em filesystem validado.

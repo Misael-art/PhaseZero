@@ -813,6 +813,8 @@ mimo_official_provider_values() {
     jq -r '[.baseUrl,.model] | @tsv' "$MIMO_PROVIDER_CONFIG"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 mimo_chat_probe() {
     connection_grant_blocked
     return 69
@@ -831,6 +833,8 @@ mimo_chat_probe() {
     [ "$http_code" = 200 ]
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 configure_mimo_official_clients() {
     connection_grant_blocked
     return 69
@@ -1027,6 +1031,8 @@ configure_zcode_ide() {
     pz_info "zcode: recorded $(printf '%s' "$rows_json" | jq 'length') PhaseZero proxy providers in $ZCODE_STORE"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 configure_ides() {
     connection_grant_blocked
     return 69
@@ -1251,6 +1257,8 @@ login_tsx() {
     fi
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 quick_chat_ok() {
     connection_grant_blocked
     return 69
@@ -1291,6 +1299,8 @@ wait_for_login_window() {
     return 1
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 start_proxy_service() {
     connection_grant_blocked
     return 69
@@ -1315,6 +1325,8 @@ start_proxy_service() {
     return 1
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 wait_proxy_chat() {
     connection_grant_blocked
     return 69
@@ -1688,6 +1700,8 @@ record_login_status() {
     chmod 600 "$state"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 proxy_chat_probe() {
     connection_grant_blocked
     return 69
@@ -1711,6 +1725,8 @@ proxy_chat_probe() {
 # and needs a Qwen session), so we (1) warm every service in parallel, (2) wait
 # for the TCP port, then (3) classify: service up/down, models ok/needs-login,
 # chat ok/needs-login. Chat and qwen's models require a one-time `npm run login`.
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 test_proxies() {
     connection_grant_blocked
     return 69
@@ -1800,6 +1816,8 @@ _ensure_steps_add() {
 # One-click Control Center path: install if missing, start, open headed login
 # when the proxy still needs a browser session. Stdout is a single JSON object
 # so the simple UI can show `summary`/`next` without npm/git noise.
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 ensure_one() {
     connection_grant_blocked
     return 69
@@ -2103,6 +2121,8 @@ ensure_one() {
     [ "$ok" = true ]
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 ensure_selected() {
     connection_grant_blocked
     return 69
@@ -2183,6 +2203,8 @@ open_mimo_studio() {
         '{schemaVersion:1,ok:false,ready:false,completed:false,resumable:true,status:"needs-credentials",summary:"Portal oficial Xiaomi MiMo aberto.",next:"Abra API Service, crie uma chave e cole-a na Central. Não use DevTools, cookies ou tokens de sessão.",studioUrl:$url,needsUser:"api-key"}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 set_proxy_credentials() {
     connection_grant_blocked
     return 69
@@ -2240,6 +2262,8 @@ set_proxy_credentials() {
           validation:{httpCode:$code},needsUser:"none"}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 open_opencode_proxy() {
     connection_grant_blocked
     return 69

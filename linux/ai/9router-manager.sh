@@ -708,6 +708,8 @@ find_secrets_manifest() {
     return 1
 }
 
+# shellcheck disable=SC2317
+# PXA-008 keeps legacy provider writes unreachable until request-bound grants exist.
 sync_secrets() {
     connection_grant_blocked
     return 69
@@ -738,6 +740,8 @@ sync_secrets() {
         '{manifest:$manifest,imported:$imported,skipped:$skipped,secretsRedacted:true}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 provider_remove() {
     connection_grant_blocked
     return 69
@@ -770,6 +774,8 @@ tier_models_json() {
       | jq -R -s 'split("\n") | map(select(length>0))'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 upsert_combo() {
     connection_grant_blocked
     return 69
@@ -785,6 +791,8 @@ upsert_combo() {
     rm -f "$payload"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_sync() {
     connection_grant_blocked
     return 69
@@ -801,6 +809,8 @@ combo_list() {
     api_request GET /api/combos | jq '{combos:(.combos // .data // [])|map({id,name,models})}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_create() {
     connection_grant_blocked
     return 69
@@ -815,6 +825,8 @@ combo_create() {
     rm -f "$payload"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_switch() {
     connection_grant_blocked
     return 69
@@ -827,6 +839,8 @@ combo_switch() {
     jq -cn --arg combo "$name" --arg settings "$SETTINGS_FILE" '{activeCombo:$combo,settings:$settings}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 ensure_active_combo() {
     connection_grant_blocked
     return 69
