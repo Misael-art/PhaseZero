@@ -1798,3 +1798,11 @@ Tentativa anterior não validada; não declarar fix. Próxima correção usa var
 injetadas pelo Pester no bloco mock (sem declarar `param()`), conforme documentação
 oficial, e adiciona execução focada de `Describe 'AI coding tool support'` antes da
 suíte completa para feedback rápido. Alteração de fixture/workflow aguarda CI.
+
+CI `36308401794` (push), HEAD `f959469` — 2026-09-27 09:17 UTC: bloco focado
+rodou 34 testes e reproduziu a falha (33 passaram, 1 falhou; `absent` em vez de
+`blocked`). O workaround com parâmetros injetados também não funcionou; não
+declarar mock resolvido. Nova fixture remove mock do resolver: cria arquivo vazio
+`ai-usagebar.exe` somente sob o install root temporário, usa resolver real, limita
+`PATH` a diretório temporário vazio e mocka apenas o probe de execução. A suíte
+focada fica antes da suíte inteira para diagnóstico rápido. Aguardando CI.
