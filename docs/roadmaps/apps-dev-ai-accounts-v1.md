@@ -1974,7 +1974,14 @@ subtests), com aviso único. Trace session-scoped localizou PID 43531 ainda
 `settle` → `HomelabPage._on_status_done` → `_apply_status` → `refresh_apps` →
 `_spawn`. O teste verifica só layout Windows VM e não precisa iniciar probes
 Homelab. `tests/test_windows_vm_ui.py` agora usa `no_homelab_startup_probe`.
-Repetir CI e retirar instrumentação diagnóstica apenas após log sem aviso.
+CI `36364098642`, SHA `255752b`: Python passou (1312 passed, 2 skipped, 15
+subtests) e Xvfb passou nas três escalas, mas o aviso persistiu. Novo trace
+localizou caminho exato: o probe de status do Homelab concluiu dentro de
+`settle`, `_apply_status` iniciou `refresh_apps`, que lançou PID 43352 ainda
+ativo na desmontagem. A fixture suprimia `refresh_hosts` e `StatusLoader.fetch`,
+mas deixava `refresh_apps` encadear outro subprocesso. Fixture agora também
+suprime `refresh_apps` para módulos que não testam probes; manter tracing e
+repetir CI antes de qualquer remoção diagnóstica.
 No `36362207054`, só o job Python tinha concluído verde no momento desta nota;
 restante da CI seguia em execução. O run `36357140492` anterior completou verde:
 Pester focused 35/0 e suíte completa 801 aprovados, 0 falhas, 2 ignorados.

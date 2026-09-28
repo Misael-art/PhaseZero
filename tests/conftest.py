@@ -150,12 +150,16 @@ def no_homelab_startup_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
     MainWindow builds every page, and HomelabPage queues ``refresh_hosts``
     independently of StatusLoader. The initial dashboard also fetches status
-    through StatusLoader. UI tests that do not exercise host probes suppress
-    both process paths while retaining the real page widgets; dispatch tests
-    replace ``fetch`` explicitly.
+    and its completion starts ``refresh_apps``. UI tests that do not exercise
+    host probes suppress these process paths while retaining real page widgets;
+    dispatch tests replace ``fetch`` explicitly.
     """
     monkeypatch.setattr(
         "linux.ui_native.pages.homelab.HomelabPage.refresh_hosts",
+        lambda _self: None,
+    )
+    monkeypatch.setattr(
+        "linux.ui_native.pages.homelab.HomelabPage.refresh_apps",
         lambda _self: None,
     )
     monkeypatch.setattr(
