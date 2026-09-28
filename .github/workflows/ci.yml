@@ -460,10 +460,6 @@ jobs:
         run: |
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
-          export PZ_TRACE_QPROCESS_STARTS=1
-          export PZ_TRACE_QPROCESS_LOG="$RUNNER_TEMP/pz-qprocess-trace.log"
-          : > "$PZ_TRACE_QPROCESS_LOG"
-          trap 'cat "$PZ_TRACE_QPROCESS_LOG"' EXIT
           # timeout-method=thread, not the default signal method: SIGALRM only
           # interrupts the main thread once it returns to Python bytecode, so a
           # test blocked in a subprocess or a socket read is never reclaimed.

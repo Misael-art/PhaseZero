@@ -1982,6 +1982,10 @@ ativo na desmontagem. A fixture suprimia `refresh_hosts` e `StatusLoader.fetch`,
 mas deixava `refresh_apps` encadear outro subprocesso. Fixture agora também
 suprime `refresh_apps` para módulos que não testam probes; manter tracing e
 repetir CI antes de qualquer remoção diagnóstica.
+CI PR `36366981830`, SHA `2f86647`: todos os jobs passaram; Python 1312/2/15,
+Xvfb com 2 testes por escala 100/150/200%, sem aviso QProcess nem linhas de
+trace. Causa e fixture confirmadas. Removida instrumentação temporária de
+`tests/conftest.py` e `.github/workflows/ci.yml`; executar CI final no SHA limpo.
 No `36362207054`, só o job Python tinha concluído verde no momento desta nota;
 restante da CI seguia em execução. O run `36357140492` anterior completou verde:
 Pester focused 35/0 e suíte completa 801 aprovados, 0 falhas, 2 ignorados.
