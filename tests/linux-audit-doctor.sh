@@ -4,7 +4,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Ignore caller XDG config; cases set their own temporary override when needed.
 unset XDG_CONFIG_HOME
 REPO="$(cd "$HERE/.." && pwd)"
-MOCK_BIN="$HERE/.bin"
+TEST_SCRATCH="$(mktemp -d "$HERE/.audit-doctor.XXXXXX")"
+printf '  scratch: %s\n' "$TEST_SCRATCH"
+MOCK_BIN="$TEST_SCRATCH/bin"
+MOCK_HOME="$TEST_SCRATCH/home"
 DOCTOR="$REPO/linux/audit/doctor.sh"
 PASS=0 FAIL=0
 STUBBED_FILES=()
@@ -16,7 +19,7 @@ mock_cleanup() {
         fi
     done
     STUBBED_FILES=()
-    rm -rf "$MOCK_BIN" "$HERE/.mock-home" "$HERE/.xdg" "$HERE/.xdg_none"
+    rm -rf "$TEST_SCRATCH"
 }
 trap mock_cleanup EXIT
 
@@ -39,14 +42,14 @@ mock_install_free() { mock_install free "$1"; }
 
 mock_run() {
     local output rc
-    mkdir -p "$HERE/.mock-home"
+    mkdir -p "$MOCK_HOME"
     # Never turn a timeout or an interrupted run into empty, successful output.
     if output=$(
-        HOME="$HERE/.mock-home" \
-        XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HERE/.mock-home/.config}" \
-        XDG_DATA_HOME="$HERE/.mock-home/.local/share" \
-        XDG_STATE_HOME="$HERE/.mock-home/.local/state" \
-        XDG_CACHE_HOME="$HERE/.mock-home/.cache" \
+        HOME="$MOCK_HOME" \
+        XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$MOCK_HOME/.config}" \
+        XDG_DATA_HOME="$MOCK_HOME/.local/share" \
+        XDG_STATE_HOME="$MOCK_HOME/.local/state" \
+        XDG_CACHE_HOME="$MOCK_HOME/.cache" \
         PZ_DOCTOR_CMD_TIMEOUT=2 \
         PATH="$MOCK_BIN:/usr/bin:/bin" \
             timeout 90 bash "$DOCTOR" 2>/dev/null
@@ -271,7 +274,7 @@ test_subsystem_never_waydroid() {
     stub_all_subscripts
     mock_install_free "$(FREE_VALID)"
     mock_install_df "$(DF_BASIC)"
-    export XDG_CONFIG_HOME="$HERE/.xdg"
+    export XDG_CONFIG_HOME="$TEST_SCRATCH/xdg"
     mkdir -p "$XDG_CONFIG_HOME/phasezero"
     printf 'SUBSYSTEM_WAYDROID=never\n' > "$XDG_CONFIG_HOME/phasezero/subsystems.conf"
     local output
@@ -290,7 +293,7 @@ test_subsystem_partial_waydroid() {
     stub_all_subscripts
     mock_install_free "$(FREE_VALID)"
     mock_install_df "$(DF_BASIC)"
-    export XDG_CONFIG_HOME="$HERE/.xdg"
+    export XDG_CONFIG_HOME="$TEST_SCRATCH/xdg"
     mkdir -p "$XDG_CONFIG_HOME/phasezero"
     printf 'SUBSYSTEM_WAYDROID=partial\n' > "$XDG_CONFIG_HOME/phasezero/subsystems.conf"
     local output
@@ -313,7 +316,7 @@ test_optional_subsystem_stays_quiet_without_config() {
     stub_all_subscripts
     mock_install_free "$(FREE_VALID)"
     mock_install_df "$(DF_BASIC)"
-    export XDG_CONFIG_HOME="$HERE/.xdg_none"
+    export XDG_CONFIG_HOME="$TEST_SCRATCH/xdg_none"
     mkdir -p "$XDG_CONFIG_HOME/phasezero"
     local output
     output=$(mock_run) || return 1
