@@ -423,7 +423,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige outro caminho: `HomelabPage.build()` agenda `refresh_hosts` próprio via QProcess, fora de `StatusLoader`. Em `7c39c69`, CI completa passou (1312 testes + matriz Xvfb), mas logs ainda emitiram avisos de QProcess vivo; fixture em `f4dafee` captura callback no-op durante construção. `tests/test_product_registry_ui.py`: 37 passaram localmente, exit 0, sem aviso nem `linux/pz` residual. CI do novo HEAD pendente. G2 Arch/Windows integral, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` removeu trace, mas `shell-test` falhou em `linux-audit-doctor` (caso Waydroid sem saída/resumo), separado da suíte Python/Xvfb. Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único; suíte 9/9, `bash -n`, ShellCheck e `git diff --check` passaram. CI do novo HEAD pendente. G2 Arch/Windows integral, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -1990,3 +1990,28 @@ No `36362207054`, só o job Python tinha concluído verde no momento desta nota;
 restante da CI seguia em execução. O run `36357140492` anterior completou verde:
 Pester focused 35/0 e suíte completa 801 aprovados, 0 falhas, 2 ignorados.
 Aviso QProcess segue defeito conhecido; essas suítes não fecham G2 Windows ou G4.
+
+PXA-014 regressão do harness shell — CI `36369508016`, SHA `074c4dd`, 2026-09-28:
+Python e matriz Xvfb passaram; `shell-test` falhou somente em
+`linux-audit-doctor::subsystem_partial_waydroid`, que esperava WARN e recebeu saída
+Waydroid vazia, sem imprimir `=== Summary ===`. O harness antigo usava timeout externo
+de 30 s e suprimia qualquer erro (`|| true`), portanto log é compatível com timeout ou
+execução interrompida; não prova qual ocorreu. Em worktree isolado baseado em
+`origin/main` `889d132`, commit `ae54dde` e complemento `8ad9b04` (cherry-picks
+`ce667c3`/`8e64755`) tornaram timeout e falta de resumo erros explícitos, propagaram
+falha nas nove chamadas, elevaram limite externo a 90 s, fixaram timeout de comandos
+internos em 2 s, isolaram HOME/XDG em `mktemp` único por execução e substituíram probes
+de host por stubs rápidos. `XDG_CONFIG_HOME` herdado é ignorado; somente casos apontam
+para config temporária. `tests/linux-audit-doctor.sh`: 9/9 em 22,91 s;
+`bash -n`, ShellCheck e `git diff --check` passaram. CI no novo HEAD ainda pendente.
+
+Windows G2 reavaliado — 2026-09-28 05:25 -03:00: etapa **não realizada** por margem
+insuficiente e risco aos trabalhos ativos, sem iniciar VM ou interromper processos.
+Consulta read-only: 14 GiB RAM, 3,8 GiB disponíveis, swap 6,2 GiB usada; `vmstat
+1 3` registrou si=16 e si=124 (so=0) nos dois últimos intervalos; load
+2,83/2,74/2,43. Qoder, Electron, Plasma e Codex ativos; nenhum QEMU/VirtualBox já
+rodando. Guest Windows exige 4 GiB, acima da memória disponível. `/mnt/sdcard` está
+em `fuseblk`; gate de armazenamento QCOW2 segue sem validação. ISO
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` permaneceu
+intocada: não consultada com `stat`, lida, hasheada, montada ou iniciada. G2 Windows
+continua pendente; avançar somente ciclos independentes herméticos.
