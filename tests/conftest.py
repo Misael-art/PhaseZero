@@ -57,13 +57,26 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
                         for frame in traceback.extract_stack(limit=8)[:-1]
                     ],
                 }
-                state = {"value": process.state(), "pid": 0, "reported": set()}
+                state = {
+                    "value": process.state(),
+                    "pid": 0,
+                    "ever_running": False,
+                    "live_at_teardown": False,
+                    "finished": False,
+                    "reported": set(),
+                }
                 process_ref = ref(process)
 
                 def report_live(reason: str) -> None:
+                    active = state["value"] != QProcess.NotRunning
+                    if reason == "destroyed":
+                        active = active or (
+                            (state["ever_running"] or state["live_at_teardown"])
+                            and not state["finished"]
+                        )
                     if (
                         reason in state["reported"]
-                        or state["value"] == QProcess.NotRunning
+                        or not active
                     ):
                         return
                     state["reported"].add(reason)
@@ -71,23 +84,34 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
                     lines = [
                         f"PZ_QPROCESS_LIVE test={info['test']} "
                         f"program={info['program']} argc={info['argc']} "
-                        f"state={status} pid={state['pid']} reason={reason}"
+                        f"state={status} pid={state['pid']} "
+                        f"ever_running={state['ever_running']} "
+                        f"live_at_teardown={state['live_at_teardown']} "
+                        f"finished={state['finished']} reason={reason}"
                     ]
                     lines.extend(f"  at={frame}" for frame in info["stack"])
                     record(lines)
 
                 def on_state_changed(value) -> None:
                     state["value"] = value
+                    if value == QProcess.Running:
+                        state["ever_running"] = True
                     live_process = process_ref()
                     if live_process is not None and isValid(live_process):
                         state["pid"] = int(live_process.processId())
 
+                def on_finished(*_args) -> None:
+                    state["finished"] = True
+
                 process.stateChanged.connect(on_state_changed)
+                process.finished.connect(on_finished)
                 process.destroyed.connect(lambda *_args: report_live("destroyed"))
                 tracked.append((process_ref, state, report_live))
                 result = original_start(process, *args, **kwargs)
                 state["value"] = process.state()
                 state["pid"] = int(process.processId())
+                if state["value"] == QProcess.Running:
+                    state["ever_running"] = True
                 return result
             return original_start(process, *args, **kwargs)
 
@@ -98,6 +122,10 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
             if live_process is not None and isValid(live_process):
                 state["value"] = live_process.state()
                 state["pid"] = int(live_process.processId())
+                if state["value"] == QProcess.Running:
+                    state["ever_running"] = True
+                if state["value"] != QProcess.NotRunning:
+                    state["live_at_teardown"] = True
                 report_live("test-teardown")
     else:
         yield
