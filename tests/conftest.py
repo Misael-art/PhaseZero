@@ -57,13 +57,16 @@ def trace_linux_pz_qprocess_starts(request, monkeypatch) -> None:
                         for frame in traceback.extract_stack(limit=8)[:-1]
                     ],
                 }
-                state = {"value": process.state(), "pid": 0, "reported": False}
+                state = {"value": process.state(), "pid": 0, "reported": set()}
                 process_ref = ref(process)
 
                 def report_live(reason: str) -> None:
-                    if state["reported"] or state["value"] == QProcess.NotRunning:
+                    if (
+                        reason in state["reported"]
+                        or state["value"] == QProcess.NotRunning
+                    ):
                         return
-                    state["reported"] = True
+                    state["reported"].add(reason)
                     status = getattr(state["value"], "name", str(state["value"]))
                     lines = [
                         f"PZ_QPROCESS_LIVE test={info['test']} "

@@ -1953,9 +1953,11 @@ is still running`. Nenhuma linha `PZ_QPROCESS_TRACE` apareceu: pytest capturava
 stdout de testes aprovados, escondendo o diagnóstico. Instrumentação agora evita
 registrar argumentos (podem conter dados sensíveis) e grava somente
 processos ainda vivos no teardown: nodeid/programa/quantidade de argumentos/estado/
-PID/stack, em arquivo temporário do runner publicado no encerramento do passo.
-O processo causador ainda não foi localizado; não declarar correção antes de CI
-sem aviso.
+PID/stack, e evento separado na destruição ainda viva. Arquivo temporário do runner
+é publicado no encerramento do passo. A execução `36360295316` reportou vários
+processos ainda em `Starting`/`Running` no fim de testes de navegação, acessibilidade,
+AI routing e janelas Windows; isso ainda não distingue o único aviso de destruição
+ao fim da suíte. Não declarar correção antes de CI sem aviso.
 Demais jobs do run passaram; Pester focused 35/0 e suíte completa 801 aprovados,
 0 falhas, 2 ignorados. Resultado CI geral: sucesso; aviso QProcess permanece o
 único defeito conhecido desta frente.
