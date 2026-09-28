@@ -1,4 +1,4 @@
-"""Disposable Arch CI probe: real pacman cancellation boundary and recovery.
+"""Disposable Arch CI probe: real pacman cancellation and crash recovery.
 
 Not collected by pytest. The explicit guards prevent accidental package
 transactions on a developer host.
@@ -74,6 +74,115 @@ def _running_install(target: str) -> int | None:
         ):
             return int(entry.name)
     return None
+
+
+def _proc_state(pid: int) -> str | None:
+    try:
+        for line in (Path("/proc") / str(pid) / "status").read_text().splitlines():
+            if line.startswith("State:"):
+                return line.split()[1]
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return None
+    return None
+
+
+def _kill_worker_during_install(
+    process: subprocess.Popen[str], target: str,
+) -> tuple[int, str, str]:
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        pacman_pid = _running_install(target)
+        if pacman_pid is not None:
+            os.kill(process.pid, signal.SIGSTOP)
+            stop_deadline = time.monotonic() + 10
+            while time.monotonic() < stop_deadline:
+                if _proc_state(process.pid) in {"T", "t"}:
+                    if _running_install(target) != pacman_pid:
+                        os.kill(process.pid, signal.SIGKILL)
+                        process.communicate(timeout=10)
+                        raise RuntimeError(
+                            f"pacman transaction ended before worker crash: {target}"
+                        )
+                    os.kill(process.pid, signal.SIGKILL)
+                    stdout, stderr = process.communicate(timeout=10)
+                    if process.returncode != -signal.SIGKILL:
+                        raise RuntimeError(
+                            f"apply worker was not killed: returncode={process.returncode}"
+                        )
+                    return pacman_pid, stdout, stderr
+                if process.poll() is not None:
+                    break
+                time.sleep(0.01)
+            if process.poll() is None:
+                _stop_process_group(process)
+            raise RuntimeError(f"could not stop apply worker during pacman: {target}")
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"apply exited before real pacman install for {target}: "
+                f"stdout={stdout!r} stderr={stderr!r}"
+            )
+        time.sleep(0.05)
+    _stop_process_group(process)
+    raise RuntimeError(f"real pacman install did not start for worker crash: {target}")
+
+
+def _wait_for_install_exit(pid: int, target: str, timeout: int = 900) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _running_install(target) != pid:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"orphaned pacman install timed out: {target}")
+
+
+def _clear_stale_pacman_lock() -> None:
+    live_pacman: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        argv = [os.fsdecode(value) for value in raw if value]
+        if (
+            argv
+            and Path(argv[0]).name == "pacman"
+            and _proc_state(int(entry.name)) not in {None, "Z", "X"}
+        ):
+            live_pacman.append(int(entry.name))
+    if live_pacman:
+        raise RuntimeError(f"refusing to clear pacman lock while processes run: {live_pacman}")
+
+    lock = Path("/var/lib/pacman/db.lck")
+    if lock.is_symlink():
+        raise RuntimeError("refusing to clear unexpected pacman lock symlink")
+    if lock.exists():
+        if not lock.is_file():
+            raise RuntimeError("refusing to clear unexpected pacman lock type")
+        lock.unlink()
+        print("removed stale pacman db.lck in guarded disposable Arch container", flush=True)
+
+
+def _stop_orphaned_install(group_id: int, pid: int, target: str) -> None:
+    if _running_install(target) != pid:
+        return
+    try:
+        if os.getpgid(pid) != group_id:
+            return
+        os.killpg(group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and _running_install(target) == pid:
+        time.sleep(0.05)
+    if _running_install(target) == pid:
+        try:
+            if os.getpgid(pid) == group_id:
+                os.killpg(group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _stop_process_group(process: subprocess.Popen[str]) -> None:
@@ -259,9 +368,93 @@ def _run() -> None:
         ):
             raise RuntimeError(f"final rollback left packages installed: {rollback_node!r}")
 
+        crash_plan = create_plan(
+            profile_ids=["development-web-js"], facts=facts, provider=provider,
+        )
+        if not crash_plan.get("ok") or crash_plan.get("status") != "ready":
+            raise RuntimeError(f"Arch crash-recovery profile did not plan: {crash_plan!r}")
+        crash_worker = subprocess.Popen(
+            [
+                sys.executable, str(Path(__file__).resolve()), "_apply",
+                str(crash_plan["id"]), str(crash_plan["confirmToken"]),
+                str(temp_root / "crash-cancel-unused"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        crash_pacman_pid: int | None = None
+        try:
+            crash_pacman_pid, crash_stdout, crash_stderr = (
+                _kill_worker_during_install(crash_worker, "nodejs")
+            )
+            if crash_stdout or crash_stderr:
+                print(
+                    "Killed apply worker output captured before crash: "
+                    f"stdout={crash_stdout!r} stderr={crash_stderr!r}",
+                    flush=True,
+                )
+            _wait_for_install_exit(crash_pacman_pid, "nodejs")
+            _clear_stale_pacman_lock()
+        except BaseException:
+            _stop_process_group(crash_worker)
+            if crash_pacman_pid is not None:
+                _stop_orphaned_install(crash_worker.pid, crash_pacman_pid, "nodejs")
+            raise
+        orphaned_nodejs = _is_installed("nodejs")
+        print(
+            "post-crash package observation: "
+            f"nodejs={'installed without worker record' if orphaned_nodejs else 'absent'}",
+            flush=True,
+        )
+        if _is_installed("pnpm"):
+            raise RuntimeError("orphaned real pacman transaction left unexpected packages")
+
+        crash_resumed = apply_plan(
+            crash_plan["id"], confirmation=crash_plan["confirmToken"],
+            facts=facts, provider=provider,
+        )
+        expected_owned = ["development.pnpm"]
+        if not orphaned_nodejs:
+            expected_owned.insert(0, "development.nodejs")
+        if (
+            crash_resumed.get("status") != "complete"
+            or [item["capabilityId"] for item in crash_resumed["installedByOperation"]]
+            != expected_owned
+            or not _is_installed("nodejs")
+            or not _is_installed("pnpm")
+        ):
+            raise RuntimeError(
+                f"real resume adopted package from crashed worker: {crash_resumed!r}"
+            )
+        subprocess.run(
+            ["node", "--eval", "process.stdout.write('crash-resume-node-ok')"],
+            check=True,
+        )
+        subprocess.run(["pnpm", "--version"], check=True)
+        crash_rollback = rollback_operation(
+            crash_resumed["id"], confirmation=crash_resumed["rollbackToken"],
+            facts=facts, provider=provider,
+        )
+        if (
+            crash_rollback.get("status") != "complete"
+            or _is_installed("nodejs") != orphaned_nodejs
+            or _is_installed("pnpm")
+        ):
+            raise RuntimeError(
+                f"crash recovery rollback removed unowned Node.js: {crash_rollback!r}"
+            )
+        if orphaned_nodejs:
+            subprocess.run(["pacman", "-Rns", "--noconfirm", "nodejs"], check=True)
+        if _is_installed("nodejs") or _is_installed("pnpm"):
+            raise RuntimeError("crash-recovery cleanup left test packages installed")
+
         print(
             "PASS: real pacman completed active Node.js transaction, honored cancel "
-            "at the safe boundary, resumed pnpm, repeated idempotently, and rolled back."
+            "at the safe boundary, resumed pnpm, repeated idempotently, and rolled back; "
+            "a killed apply worker recovered the interrupted transaction without "
+            "claiming preexisting Node.js."
         )
     finally:
         shutil.rmtree(temp_root)
