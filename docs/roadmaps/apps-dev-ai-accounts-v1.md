@@ -1958,8 +1958,16 @@ posterior sem término. Arquivo temporário do runner é publicado no encerramen
 passo. `36360295316` reportou 104 QProcess ainda em `Starting`/`Running` nos testes,
 mas sem atribuir aviso de destruição. `36361325579` repetiu aviso único e mesmo
 problema: `destroyed` chegou após estado `NotRunning`, sem evento de término
-registrado. Próxima CI distingue processos que finalizaram dos destruídos ativos.
-Não declarar correção antes de CI sem aviso.
-Demais jobs do run passaram; Pester focused 35/0 e suíte completa 801 aprovados,
-0 falhas, 2 ignorados. Resultado CI geral: sucesso; aviso QProcess permanece o
-único defeito conhecido desta frente.
+registrado. `36362207054`, SHA `8adee21`, passou Python (1312/2/15), mas manteve
+aviso; houve 105 registros vivos ao fim de teste e nenhum callback `destroyed`.
+Hipótese: probe/timer chega ao descarte da aplicação depois do fixture por teste
+restaurar o hook. O trace agora fica ativo por sessão, atravessa teardown de Qt,
+registra `finished` e diferencia encerramento natural de destruição ativa. Próxima
+CI valida ou rejeita essa hipótese. Não declarar correção antes de CI sem aviso.
+Validação local da fixture session-scoped: `test_ui_modules_import` passou uma vez
+com trace desligado e uma vez com trace ligado; arquivo de trace vazio conforme
+esperado. HOME/XDG separados em raiz temporária, removida depois do teste.
+No `36362207054`, só o job Python tinha concluído verde no momento desta nota;
+restante da CI seguia em execução. O run `36357140492` anterior completou verde:
+Pester focused 35/0 e suíte completa 801 aprovados, 0 falhas, 2 ignorados.
+Aviso QProcess segue defeito conhecido; essas suítes não fecham G2 Windows ou G4.
