@@ -1967,6 +1967,14 @@ CI valida ou rejeita essa hipótese. Não declarar correção antes de CI sem av
 Validação local da fixture session-scoped: `test_ui_modules_import` passou uma vez
 com trace desligado e uma vez com trace ligado; arquivo de trace vazio conforme
 esperado. HOME/XDG separados em raiz temporária, removida depois do teste.
+CI `36363237650`, SHA `511af12`: Python passou (1312 passed, 2 skipped, 15
+subtests), com aviso único. Trace session-scoped localizou PID 43531 ainda
+`Running` na saída da sessão; origem:
+`tests/test_windows_vm_ui.py::test_windows_vm_page_reflows_without_cut_cta` →
+`settle` → `HomelabPage._on_status_done` → `_apply_status` → `refresh_apps` →
+`_spawn`. O teste verifica só layout Windows VM e não precisa iniciar probes
+Homelab. `tests/test_windows_vm_ui.py` agora usa `no_homelab_startup_probe`.
+Repetir CI e retirar instrumentação diagnóstica apenas após log sem aviso.
 No `36362207054`, só o job Python tinha concluído verde no momento desta nota;
 restante da CI seguia em execução. O run `36357140492` anterior completou verde:
 Pester focused 35/0 e suíte completa 801 aprovados, 0 falhas, 2 ignorados.
