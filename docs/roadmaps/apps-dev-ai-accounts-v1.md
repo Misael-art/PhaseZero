@@ -1971,6 +1971,15 @@ com backup antes de remover o launcher. Este comportamento impede adoção diret
 scripts no fluxo automático PhaseZero. Os hashes comprovam correspondência ao manifesto,
 não identidade do publicador nem segurança do binário. Fontes: [install-launcher.sh](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install-launcher.sh), [install-launcher.ps1](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install-launcher.ps1), [install.sh](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install.sh), [checksums.txt](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/checksums.txt) e [README](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/README.md). Nenhum pacote, login, túnel, broker, rota, VM ou ISO foi usado/alterado.
 
+PXA-010 revisão estática do fluxo de remoção v6.1.3 — 2026-09-29: README manda remover
+a integração em Settings antes de desinstalar o launcher. No código pinado,
+`deactivateCodexIntegration` restaura rota do Codex e marca o journal inativo.
+`uninstallCodexIntegration` verifica rota restaurada quando já inativa, ou restaura a
+rota gerenciada quando ativa, antes de apagar journal/cache; falha reverte snapshots.
+`verifyRestoredRoute` rejeita sobrescrever valores de configuração alterados pelo
+usuário após desconexão. É leitura estática, sem executar runtime/testes upstream.
+Fontes: [codex-integration.ts](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/src/codex-integration.ts), [codex-integration-route.ts](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/src/codex-integration-route.ts) e [README](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/README.md). O rollout PhaseZero deve preservar essa ordem e parar com conflito visível.
+
 PXA-004/005 cancelamento com pacote real — 2026-09-27: adicionado
 `tests/pacman_cancel_g2.py`, executado somente pelo job `arch-clean-host` em
 container Arch descartável, com guardas para GitHub Actions, job correto, root e
