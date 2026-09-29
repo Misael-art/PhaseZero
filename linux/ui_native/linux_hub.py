@@ -169,7 +169,7 @@ def build_capability_items(
         raise HubOverlayError(
             f"overlay aponta para capabilities inexistentes: {', '.join(sorted(unknown))}"
         )
-    has_status = bool(payload.get("hasStatus", True))
+    has_status = payload.get("hasStatus") is True
     for raw in payload.get("capabilities", ()):
         capability_id = str(raw.get("id", ""))
         entry = entries.get(capability_id, {})
@@ -198,7 +198,11 @@ def build_capability_items(
             conflicts=tuple(str(value) for value in raw.get("conflicts", ())),
             available=bool(raw.get("applicable", False)),
             reason=str(raw.get("reason", "")),
-            installed=bool(raw.get("installed", False)) if has_status else None,
+            installed=(
+                raw.get("installed")
+                if has_status and isinstance(raw.get("installed"), bool)
+                else None
+            ),
             source_kind=str(source.get("kind", "")),
             source_name=str(source.get("name", "")),
         ))

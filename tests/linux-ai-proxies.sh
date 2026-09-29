@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
+export WORK
 trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home"
 # proxy-suite.sh resolves opencode/zcode/ide-defaults under $XDG_CONFIG_HOME, so
@@ -15,6 +16,20 @@ printf '{}\n' > "$HOME/.config/opencode/opencode.json"
 printf '{}\n' > "$HOME/.config/opencode/opencode.jsonc"
 printf '%s\n' '{"selectedModelsByProfileId":{"local":{"chat":"[PhaseZero Proxy] Kimi — old","edit":null,"apply":"External model"}}}' \
     > "$HOME/.continue/index/globalContext.json"
+
+expect_grant_block() {
+    local output rc
+    set +e
+    output="$("$@" 2>&1)"
+    rc=$?
+    set -e
+    [ "$rc" -eq 69 ] || {
+        printf 'FAIL: expected grant block (exit 69), got %s: %s\n' "$rc" "$output" >&2
+        return 1
+    }
+    jq -e '.status == "blocked" and .blockedReason == "connection-grant-not-enforceable"' \
+        <<< "$output" >/dev/null
+}
 
 grep -q 'apply_loopback_patch' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'PZ_BIND_HOST' "$ROOT/linux/ai/proxy-suite.sh"
@@ -38,6 +53,21 @@ plan="$("$ROOT/linux/pz" ai proxies plan all)"
 grep -Eq '^would install kimiproxy .* at commit [0-9a-f]{40} ' <<< "$plan"
 auth="$("$ROOT/linux/pz" ai proxies auth all)"
 [ "$(jq 'length' <<< "$auth")" -eq 11 ]
+scoped_auth="$("$ROOT/linux/pz" ai proxies auth qwenproxy)"
+[ "$(jq 'length' <<< "$scoped_auth")" -eq 1 ]
+jq -e '.[0].id == "qwenproxy"' <<< "$scoped_auth" >/dev/null
+product_status="$("$ROOT/linux/pz" ai proxies product-status qwenproxy)"
+jq -e '
+  .schemaVersion == 1 and .hasStatus == true and
+  .installationState == "unknown" and .origin == "unknown" and
+  .configurationState == "needed" and .manager == "phasezero-ai-proxy-suite" and
+  (keys | sort) == ["configurationState","hasStatus","health","installationState",
+                    "manager","origin","schemaVersion"]
+' <<< "$product_status" >/dev/null
+if "$ROOT/linux/pz" ai proxies product-status all >/dev/null 2>&1; then
+    echo "FAIL: product status accepted aggregate target"
+    exit 1
+fi
 jq -e '
   .[] | select(.id == "qwenproxy") |
   .webValidation.required == true and
@@ -51,19 +81,20 @@ jq -e '
   .webValidation.status == "missing-credentials" and
   .webValidation.missing == ["api-key"]
 ' <<< "$auth" >/dev/null
+jq -e '
+  .[] | select(.id == "9router") |
+  .webValidation.command == "blocked:connection-grant-not-enforceable"
+' <<< "$auth" >/dev/null
 if grep -Eq 'SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|API_KEY|phasezero-qwen' <<< "$auth"; then
     echo "FAIL: credentials leaked into proxies auth output"
     exit 1
 fi
-"$ROOT/linux/pz" ai proxies configure-ides >/dev/null
-jq -e '.provider."phasezero-deepseek".models."deepseek-v4-flash"' "$HOME/.config/opencode/opencode.json" >/dev/null
-jq -e '[.models[] | select((.title // "") | startswith("[PhaseZero Proxy] "))] | length == 11' "$HOME/.continue/config.json" >/dev/null
-jq -e '.models[] | select(.model == "deepseek-v4-flash") | .apiBase == "http://127.0.0.1:3012/v1" and .provider == "openai"' "$HOME/.continue/config.json" >/dev/null
-jq -e '.models[0].model == "deepseek-v4-flash"' "$HOME/.continue/config.json" >/dev/null
-jq -e '.selectedModelsByProfileId.local.chat | contains("DeepSeek")' "$HOME/.continue/index/globalContext.json" >/dev/null
-jq -e '.selectedModelsByProfileId.local.edit | contains("DeepSeek")' "$HOME/.continue/index/globalContext.json" >/dev/null
-jq -e '.selectedModelsByProfileId.local.apply == "External model"' "$HOME/.continue/index/globalContext.json" >/dev/null
-[ "$(stat -c '%a' "$HOME/.continue/config.json")" = 600 ]
+before_opencode="$(sha256sum "$HOME/.config/opencode/opencode.json" | awk '{print $1}')"
+before_continue_context="$(sha256sum "$HOME/.continue/index/globalContext.json" | awk '{print $1}')"
+expect_grant_block "$ROOT/linux/pz" ai proxies configure-ides
+[ "$(sha256sum "$HOME/.config/opencode/opencode.json" | awk '{print $1}')" = "$before_opencode" ]
+[ "$(sha256sum "$HOME/.continue/index/globalContext.json" | awk '{print $1}')" = "$before_continue_context" ]
+[ ! -e "$HOME/.continue/config.json" ]
 mkdir -p "$HOME/.local/share/phasezero/ai-proxies/deepsproxy/.git" \
     "$HOME/.local/share/phasezero/ai-proxies/deepsproxy/deepseek_profile/Default"
 printf 'session-data\n' > "$HOME/.local/share/phasezero/ai-proxies/deepsproxy/deepseek_profile/Default/Cookies"
@@ -77,17 +108,28 @@ detailed="$("$ROOT/linux/pz" ai proxies detailed-status)"
 jq -e '.schemaVersion == 1 and (.proxies | length == 11)' <<< "$detailed" >/dev/null
 jq -e '.proxies[] | select(.id == "deepsproxy") | .webValidation.kind == "browser-session"' <<< "$detailed" >/dev/null
 jq -e '.ide | has("envDefaults") and has("opencodeProviders") and has("continueModels") and has("zcodeProviders")' <<< "$detailed" >/dev/null
-jq -e '.ide.envDefaults == true and .ide.opencodeProviders >= 1 and .ide.continueModels == 11' <<< "$detailed" >/dev/null
+jq -e '.ide.envDefaults == false and .ide.opencodeProviders == 0 and .ide.continueModels == 0 and .ide.zcodeProviders == 0' <<< "$detailed" >/dev/null
 jq -e '.provenance.trustMode == "snapshot-pin" and .provenance.semanticAudit == false and (.provenance.sources | length == 4)' <<< "$detailed" >/dev/null
 if grep -Eq 'API_KEY=|Bearer ' <<< "$detailed"; then
     echo "FAIL: credentials leaked into detailed auth output"
     exit 1
 fi
-grep -q 'restart) service_action restart ;;' "$ROOT/linux/ai/proxy-suite.sh"
-grep -q 'ensure|use|prepare) ensure_selected' "$ROOT/linux/ai/proxy-suite.sh"
+grep -q 'configure-ides|ides|configure|ensure|use|prepare|open|open-client|launch|set-credentials|credentials|start|enable|restart|test|verify' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'SuccessExitStatus=143' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'emit_login_json' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'login_window_kind' "$ROOT/linux/ai/proxy-suite.sh"
+login_watcher="$(sed -n '/^watch_login_completion() {/,/^}$/p' "$ROOT/linux/ai/proxy-suite.sh")"
+grep -q 'record_login_authenticated' <<< "$login_watcher"
+if grep -Eq 'start_proxy_service|wait_proxy_chat|quick_chat_ok' <<< "$login_watcher"; then
+    echo "FAIL: browser login starts service or sends inference"
+    exit 1
+fi
+login_impl="$(sed -n '/^login_proxy() {/,/^}$/p' "$ROOT/linux/ai/proxy-suite.sh")"
+if grep -Eq 'quick_chat_ok|proxy_chat_probe|start_proxy_service' <<< "$login_impl"; then
+    echo "FAIL: login route sends inference or starts consumer"
+    exit 1
+fi
+grep -q 'serviceAfterLogin:"stopped"' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'set_proxy_credentials' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'open_opencode_proxy' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'qwenproxy.db' "$ROOT/linux/ai/proxy-suite.sh"
@@ -112,16 +154,14 @@ grep -q '"\$NODE_BIN" "\$tsx" src/login.ts' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'session_artifact_present "\$id"' "$ROOT/linux/ai/proxy-suite.sh"
 # Remove deliberately incomplete auth-only fixture before provenance-gated ensure.
 rm -rf "$HOME/.local/share/phasezero/ai-proxies/deepsproxy"
-ensure="$("$ROOT/linux/pz" ai proxies ensure qwenproxy --dry-run)"
-jq -e '.schemaVersion == 1 and .dryRun == true and .id == "qwenproxy" and (.summary|length>0)' <<< "$ensure" >/dev/null
-jq -e '.ok == false and .ready == false and .completed == false and .resumable == true' <<< "$ensure" >/dev/null
-jq -e '.steps | map(.name) | index("install") != null and index("login") != null' <<< "$ensure" >/dev/null
-if grep -Eq 'API_KEY=|Bearer |SERVICE_TOKEN' <<< "$ensure"; then
-    echo "FAIL: credentials leaked into proxies ensure output"
-    exit 1
-fi
-ensure_all="$("$ROOT/linux/pz" ai proxies ensure all --dry-run)"
-jq -e '.schemaVersion == 1 and .dryRun == true and (.proxies|length==4) and (.summary|length>0)' <<< "$ensure_all" >/dev/null
+expect_grant_block "$ROOT/linux/pz" ai proxies ensure qwenproxy --dry-run
+expect_grant_block "$ROOT/linux/pz" ai proxies ensure all --dry-run
+expect_grant_block "$ROOT/linux/pz" ai proxies open qwenproxy
+expect_grant_block "$ROOT/linux/pz" ai proxies start qwenproxy
+expect_grant_block "$ROOT/linux/pz" ai proxies test qwenproxy
+expect_grant_block "$ROOT/linux/pz" ai proxies test all
+expect_grant_block "$ROOT/linux/pz" ai proxies restart qwenproxy
+expect_grant_block "$ROOT/linux/pz" ai proxies enable all
 
 # Trusted-source manifest must pin four exact snapshots, never a moving branch.
 jq -e '
@@ -158,48 +198,25 @@ PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
     "$ROOT/linux/pz" ai proxies provenance mimo-ai-proxy \
     | jq -e '.sources[0].ready == true and .sources[0].commitMatch == true' >/dev/null
 
-# Official MiMo setup validates the API, protects the key, wires OpenCode by
-# file reference, and requires no local scraper service.
+# MiMo credentials cannot enter a legacy file or wire consumers until the
+# secret-store reference and per-request grant adapter are connected.
 cat > "$WORK/bin/curl" <<'SH'
 #!/usr/bin/env bash
+printf 'called\n' >> "$WORK/curl-called"
 printf '200'
 SH
 chmod +x "$WORK/bin/curl"
-printf '%s\n' '{"apiKey":"sk-phasezero-test-key","baseUrl":"https://api.xiaomimimo.com/v1","model":"mimo-v2.5-pro"}' \
-  | PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies set-credentials mimo-ai-proxy \
-  | jq -e '.ok == true and .status == "configured"' >/dev/null
-[ "$(stat -c '%a' "$HOME/.config/phasezero/ai-providers/mimo/api-key")" = 600 ]
-[ "$(cat "$HOME/.config/phasezero/ai-providers/mimo/api-key")" = sk-phasezero-test-key ]
-jq -e '.provider."phasezero-mimo-official".options.apiKey | startswith("{file:")' \
-  "$HOME/.config/opencode/opencode.json" >/dev/null
-if grep -q 'sk-phasezero-test-key' "$HOME/.config/opencode/opencode.json"; then
-    echo "FAIL: OpenCode config embeds the MiMo secret instead of referencing the key file"
-    exit 1
-fi
-mimo_ready="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy)"
-jq -e '.ok == true and .ready == true and (.steps[1].detail | contains("desnecessário"))' \
-    <<< "$mimo_ready" >/dev/null
-jq -e '.inference.probed == true and .inference.httpCode == "200"' \
-    <<< "$mimo_ready" >/dev/null
-
-# PZ-AUD-020: a stored key without a real answer is never ready.
-cat > "$WORK/bin/curl" <<'SH'
-#!/usr/bin/env bash
-for a in "$@"; do
-    case "$a" in
-        */chat/completions) printf '401'; exit 0 ;;
-        */models) printf '200'; exit 0 ;;
-    esac
-done
-printf '200'
-SH
-chmod +x "$WORK/bin/curl"
-mimo_dead="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy 2>/dev/null || true)"
-jq -e '.ok == false and .ready == false and .resumable == true and .needsUser == "api-key"' \
-    <<< "$mimo_dead" >/dev/null
-if grep -q 'sk-phasezero-test-key' <<< "$mimo_dead"; then
-    echo "FAIL: MiMo probe failure leaked the key"; exit 1
-fi
+set +e
+mimo_key_result="$(printf '%s\n' '{"apiKey":"sk-fixture-only-key","baseUrl":"https://api.xiaomimimo.com/v1","model":"mimo-v2.5-pro"}' \
+  | PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies set-credentials mimo-ai-proxy 2>&1)"
+mimo_key_rc=$?
+set -e
+[ "$mimo_key_rc" -eq 69 ]
+jq -e '.status == "blocked" and .blockedReason == "connection-grant-not-enforceable"' \
+    <<< "$mimo_key_result" >/dev/null
+[ ! -e "$HOME/.config/phasezero/ai-providers/mimo/api-key" ]
+[ ! -e "$WORK/curl-called" ]
+expect_grant_block env PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy
 
 # A commit mismatch blocks runtime before systemctl can start anything.
 git -C "$HOME/.local/share/phasezero/ai-proxies/mimo-ai-proxy" config user.name PhaseZero
@@ -211,12 +228,8 @@ printf '%s\n' called >> "$WORK/systemctl-called"
 exit 0
 SH
 chmod +x "$WORK/bin/systemctl"
-set +e
-PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" PATH="$WORK/bin:$PATH" \
-    "$ROOT/linux/pz" ai proxies start mimo-ai-proxy >/dev/null 2>&1
-tamper_rc=$?
-set -e
-[ "$tamper_rc" -eq 69 ]
+expect_grant_block env PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
+    PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies start mimo-ai-proxy
 [ ! -e "$WORK/systemctl-called" ]
 PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
     "$ROOT/linux/pz" ai proxies provenance mimo-ai-proxy \
@@ -279,4 +292,5 @@ for pid in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
     [ "$mcommit" = "$scommit" ] || { echo "FAIL: manifest pin drift for $pid"; exit 1; }
 done
 echo "  manifest contract ok"
+bash "$ROOT/tests/linux-omniroute-grant-gate.sh"
 echo "linux-ai-proxies smoke ok"

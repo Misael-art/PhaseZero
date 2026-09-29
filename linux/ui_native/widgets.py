@@ -1475,6 +1475,52 @@ class StatefulDialog(QDialog):
         return button
 
 
+def _format_space_bytes(value: object) -> str:
+    if not isinstance(value, int) or value < 0:
+        return "não informado"
+    if value < 1024:
+        return f"{value} B"
+    amount = float(value)
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
+        amount /= 1024
+        if amount < 1024 or unit == "TiB":
+            return f"{amount:.1f} {unit}"
+    return "não informado"
+
+
+def _capability_space_lines(payload: object) -> list[str]:
+    if not isinstance(payload, dict) or payload.get("kind") != "plan":
+        return []
+    space = payload.get("space")
+    if not isinstance(space, dict):
+        return []
+    targets = space.get("targets")
+    if not isinstance(targets, dict) or not targets:
+        targets = {"total": space}
+    lines = ["Espaço estimado antes da alteração"]
+    scope_labels = {"system": "Sistema", "user": "Usuário", "total": "Total"}
+    for scope, target in targets.items():
+        if not isinstance(target, dict):
+            continue
+        label = scope_labels.get(str(scope), str(scope))
+        lines.append(
+            f"{label}: baixar {_format_space_bytes(target.get('downloadBytes'))} · "
+            f"instalação {_format_space_bytes(target.get('installedBytes'))} · "
+            f"livre {_format_space_bytes(target.get('availableBytes'))}"
+        )
+    completeness = str(space.get("estimateCompleteness") or "")
+    if completeness == "direct-packages-lower-bound":
+        note = "Estimativa parcial: dependências transitivas podem acrescentar espaço."
+    elif completeness == "resolved-local-package-indexes":
+        note = "Estimativa do gerenciador com índices locais; eles podem estar desatualizados."
+    elif completeness == "mixed":
+        note = "Estimativa parcial: mistura resolução de transação e metadados diretos."
+    else:
+        note = "Estimativa parcial; confirme espaço e metadados antes de aplicar."
+    lines.append(note)
+    return lines
+
+
 class PreviewDialog(StatefulDialog):
     def __init__(
         self,
@@ -1519,6 +1565,12 @@ class PreviewDialog(StatefulDialog):
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        for index, line in enumerate(_capability_space_lines(result.parsed)):
+            space_label = QLabel(line)
+            space_label.setObjectName("capabilitySpaceSummary" if index == 0 else "capabilitySpaceDetail")
+            space_label.setAccessibleName(line)
+            space_label.setWordWrap(True)
+            self.body.addWidget(space_label)
         if not preview_ok:
             items = [str(item) for item in blockers] if isinstance(blockers, list) else []
             for item in items[:8]:

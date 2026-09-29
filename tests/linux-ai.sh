@@ -50,7 +50,7 @@ test -f "$XDG_CONFIG_HOME/Cursor/User/mcp.json"
 test -f "$XDG_CONFIG_HOME/zed/settings.json"
 test -f "$XDG_CONFIG_HOME/ai.z.zcode/store.json"
 test -f "$HOME/.hermes/config.yaml"
-test -f "$HOME/.openclaw/config.json"
+test ! -e "$HOME/.openclaw/config.json"
 jq -e 'has("mcpServers") | not' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null
 jq -e '.mcp."ai-memory".url | test("^http://127.0.0.1:49374/mcp$")' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null
 jq -e '.servers."ai-memory".url | test("^http://127.0.0.1:49374/mcp$")' "$PZ_WORKSPACE_ROOT/.vscode/mcp.json" >/dev/null
@@ -59,14 +59,12 @@ jq -e '.mcpServers."ai-memory".command == "npx"' "$XDG_CONFIG_HOME/Cursor/User/m
 jq -e '.context_servers."ai-memory".url | test("^http://127.0.0.1:49374/mcp$")' "$XDG_CONFIG_HOME/zed/settings.json" >/dev/null
 jq -e '."mcp-storage" | fromjson | .state.config.mcp.mcpServers."ai-memory".url | test("^http://127.0.0.1:49374/mcp$")' "$XDG_CONFIG_HOME/ai.z.zcode/store.json" >/dev/null
 grep -q 'BEGIN PHASEZERO MCP ai-memory' "$HOME/.hermes/config.yaml"
-jq -e '.mcp.servers."ai-memory".url | test("^http://127.0.0.1:49374/mcp$")' "$HOME/.openclaw/config.json" >/dev/null
 grep -q 'BEGIN PHASEZERO MCP ai-memory' "$HOME/.codex/config.toml"
 
 "$REPO_ROOT/linux/pz" ai mcp install context7 >/dev/null
 jq -e '.mcp.context7.url == "https://mcp.context7.com/mcp"' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null
 jq -e '.servers.context7.url == "https://mcp.context7.com/mcp"' "$PZ_WORKSPACE_ROOT/.vscode/mcp.json" >/dev/null
 grep -q 'BEGIN PHASEZERO MCP context7' "$HOME/.hermes/config.yaml"
-jq -e '.mcp.servers.context7.url == "https://mcp.context7.com/mcp"' "$HOME/.openclaw/config.json" >/dev/null
 grep -q 'BEGIN PHASEZERO MCP context7' "$HOME/.codex/config.toml"
 
 "$REPO_ROOT/linux/pz" ai mcp remove context7 >/dev/null
@@ -82,10 +80,7 @@ if grep -q 'BEGIN PHASEZERO MCP context7' "$HOME/.hermes/config.yaml"; then
     echo "context7 should have been removed from hermes" >&2
     exit 1
 fi
-if jq -e '.mcp.servers.context7' "$HOME/.openclaw/config.json" >/dev/null; then
-    echo "context7 should have been removed from openclaw" >&2
-    exit 1
-fi
+test ! -e "$HOME/.openclaw/config.json"
 
 "$REPO_ROOT/linux/ai/setup-ides.sh" dry-run | jq -e '.tool == "ides"' >/dev/null
 timeout 15 "$REPO_ROOT/linux/ai/setup-ides.sh" configure >/dev/null 2>&1 || echo "WARN: setup-ides.sh configure failed (non-fatal)" >&2
@@ -127,12 +122,13 @@ PZ_DRY_RUN=1 PZ_OLLAMA_URL="http://127.0.0.1:1" "$REPO_ROOT/linux/ai/setup-openc
     | jq -e '.tool == "ai-memory" and .version == "1.31.1" and (.sha256 | length) == 64 and (.planned | index("install verified native release") != null)' >/dev/null
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
-"$REPO_ROOT/linux/ai/setup-openclaw.sh" dry-run | jq -e '.tool == "openclaw"' >/dev/null
+"$REPO_ROOT/linux/ai/setup-openclaw.sh" dry-run | jq -e '.tool == "openclaw" and .usageBlocked == true and .planned == []' >/dev/null
 "$REPO_ROOT/linux/pz" ai status | jq -e '
   (.clis.hermes.available | type == "boolean")
   and (.clis.openclaw.available | type == "boolean")
   and (.setupCatalog.essentials | map(.id) | index("9router") != null)
   and (.setupCatalog.optional | map(.id) | index("hermes") != null)
+  and ([.setupCatalog.optional[] | select(.id == "openclaw") | .usageBlocked] == [true])
   and (.setupCatalog.optional | map(.id) | index("odysseus") != null)
 ' >/dev/null
 "$REPO_ROOT/linux/pz" install dev-ai --dry-run >/dev/null

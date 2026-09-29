@@ -194,6 +194,13 @@ valid_alias() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
+valid_product_status_target() {
+    case "$1" in
+        ai-memory|usagebar|claude-desktop|codex-desktop|qwen-code-desktop) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 host_record() {
     local alias="$1" reg
     reg="$(read_registry)" || return $?
@@ -392,7 +399,21 @@ cmd_exec() {
               rc:$rc, payload:null, error:$error}'
         return 2
     fi
-    local -a inner=("${POSITIONAL[@]:1}")
+    local -a inner=("${POSITIONAL[@]:1}") remote_args=()
+    if [ "${inner[0]:-}" = "product-status" ]; then
+        if [ "${#inner[@]}" -eq 3 ] && [ "${inner[2]}" = "--json" ]; then
+            inner=("${inner[@]:0:2}")
+        fi
+        if [ "${#inner[@]}" -ne 2 ] || ! valid_product_status_target "${inner[1]:-}"; then
+            pz_error "unsupported remote product status target"
+            return 2
+        fi
+        # PXA-003: this one status-only route calls a fixed read-only adapter.
+        # All other host operations remain under `server homelab` allowlisting.
+        remote_args=(ai product-status "${inner[1]}")
+    else
+        remote_args=(server homelab "${inner[@]}")
+    fi
     local user host port
     user="$(jq -r '.user' <<< "$rec")"
     host="$(jq -r '.host' <<< "$rec")"
@@ -427,11 +448,12 @@ cmd_exec() {
     fi
     if [ "${#inner[@]}" -eq 0 ]; then
         inner=(status --json)
+        remote_args=(server homelab "${inner[@]}")
     fi
     local stdout rc2=0 errf2
     errf2="$(pz_tempfile)"
     set +e
-    stdout="$(run_remote_pz "$user" "$host" "$port" server homelab "${inner[@]}" 2>"$errf2")"
+    stdout="$(run_remote_pz "$user" "$host" "$port" "${remote_args[@]}" 2>"$errf2")"
     rc2=$?
     set -e
     err="$(tr '\n' ' ' < "$errf2" 2>/dev/null | sed 's/[[:space:]]*$//' || true)"

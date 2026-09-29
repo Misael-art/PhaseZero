@@ -103,10 +103,10 @@ class AiDevPage(BasePage):
         cards.setVerticalSpacing(14)
         cards.addWidget(self._agent_card(
             "OpenCode",
-            "Editor e CLI com 9Router e modelo free",
+            "Verificação disponível; uso gerenciado bloqueado sem vínculo da conta por requisição",
             "opencode",
-            "ai.opencode-install",
-            "Configurar",
+            "ai.opencode-verify",
+            "Verificar",
             "ai.opencode-free",
             "Modelo free",
         ), 0, 0)
@@ -140,13 +140,13 @@ class AiDevPage(BasePage):
         cards.setColumnStretch(0, 1)
         cards.setColumnStretch(1, 1)
         layout.addLayout(cards)
+        layout.addWidget(self._build_advanced_connections())
         layout.addWidget(self._build_shortcuts())
         layout.addStretch()
         scroll.setWidget(inner)
         self._layout.addWidget(scroll, 1)
         self.status_loader.status_ready.connect(self._on_status_ready)
         self.status_loader.status_failed.connect(self._on_status_failed)
-        self.reload()
 
     def _install_context_status(self) -> None:
         return
@@ -241,6 +241,33 @@ class AiDevPage(BasePage):
             button = self._action_button(aid, label, primary=False)
             if button is not None:
                 row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+        return card
+
+    def _build_advanced_connections(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("aiAdvancedConnections")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader(
+            "Conexões avançadas",
+            "Proxies, rotas e políticas. Contas e permissões ficam em Contas e conexões.",
+        ))
+        row = QHBoxLayout()
+        for category, label, object_name in (
+            ("Proxies IA", "Proxies e provedores", "openAiProxiesPage"),
+            ("Roteamento IA", "Rotas e políticas", "openAiRoutingPage"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName(object_name)
+            button.setAccessibleName(f"Abrir {label}")
+            button.setToolTip("Abrir ferramentas técnicas de IA; contas continuam independentes.")
+            button.clicked.connect(
+                lambda _checked=False, target=category: self.request_category(target)
+            )
+            row.addWidget(button)
         row.addStretch()
         layout.addLayout(row)
         return card
@@ -352,5 +379,5 @@ class AiDevPage(BasePage):
     def block_while_running(self, running: bool) -> None:
         self.refresh_button.setEnabled(not running)
         self.repair_button.setEnabled(not running)
-        if not running:
+        if not running and self.isVisible():
             self.reload()

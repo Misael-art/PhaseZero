@@ -7967,75 +7967,14 @@ bash "$tmp"
     Ensure-PathUserContains -Dir $binDir
 }
 
+function Assert-BootstrapOpenClawRequestGrant {
+    throw 'OpenClaw usage blocked: connection-grant-not-enforceable. PhaseZero cannot bind an account grant to each request.'
+}
+
 function Ensure-OpenClaw {
     param([Parameter(Mandatory = $true)][string]$NpmCmd)
 
-    $npmPrefix = & $NpmCmd prefix -g
-    if (-not $npmPrefix) { throw 'Não foi possível determinar o prefixo global do npm.' }
-
-    $openclawCmd = Join-Path $npmPrefix 'openclaw.cmd'
-    $openclawModuleDir = Join-Path (Join-Path $npmPrefix 'node_modules') 'openclaw'
-
-    if (Test-Path $openclawCmd) {
-        $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
-        Write-Log "openclaw já instalado: $ver ($openclawCmd)"
-        return
-    }
-
-    if (Test-Path $openclawModuleDir) {
-        Write-Log "Encontrada instalação parcial do OpenClaw, removendo: $openclawModuleDir" 'WARN'
-        for ($i = 0; $i -lt 5; $i++) {
-            try {
-                Remove-Item -LiteralPath $openclawModuleDir -Recurse -Force -ErrorAction Stop
-                break
-            } catch {
-                Start-Sleep -Milliseconds 500
-            }
-        }
-    }
-
-    Write-Log 'Instalando OpenClaw (openclaw) via npm -g...'
-    $exitCode = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', 'openclaw@latest')
-    if ($exitCode -ne 0) {
-        if (Test-Path $openclawCmd) {
-            $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
-            if (-not [string]::IsNullOrWhiteSpace([string]$ver)) {
-                Write-Log ("OpenClaw npm retornou exit={0}, mas o binario responde: {1} ({2}). Continuando." -f $exitCode, $ver, $openclawCmd) 'WARN'
-                return
-            }
-        }
-
-        Write-Log 'Falha ao instalar OpenClaw. Tentando limpeza e retry...' 'WARN'
-
-        foreach ($p in @($openclawModuleDir, $openclawCmd, (Join-Path $npmPrefix 'openclaw.ps1'), (Join-Path $npmPrefix 'openclaw'))) {
-            for ($i = 0; $i -lt 3; $i++) {
-                try {
-                    if (Test-Path $p) {
-                        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop
-                    }
-                    break
-                } catch {
-                    Start-Sleep -Milliseconds 300
-                }
-            }
-        }
-
-        $exitCode2 = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', 'openclaw@latest', '--force')
-        if ($exitCode2 -ne 0) {
-            if (Test-Path $openclawCmd) {
-                $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
-                if (-not [string]::IsNullOrWhiteSpace([string]$ver)) {
-                    Write-Log ("OpenClaw npm retry retornou exit={0}, mas o binario responde: {1} ({2}). Continuando." -f $exitCode2, $ver, $openclawCmd) 'WARN'
-                    return
-                }
-            }
-            throw "Falha ao instalar OpenClaw via npm (mesmo apos retry) (exit=$exitCode2)."
-        }
-    }
-
-    if (-not (Test-Path $openclawCmd)) { throw "Instalação do OpenClaw concluída, mas nao encontrei: $openclawCmd" }
-    $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
-    Write-Log "openclaw instalado: $ver ($openclawCmd)"
+    Assert-BootstrapOpenClawRequestGrant
 }
 
 function Ensure-HermesProjectOpenCloudConfig {
@@ -11503,7 +11442,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe','$env:ProgramFiles\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
-        [ordered]@{ id = 'ai-agent-byok-config'; category = 'dev-ai'; displayName = 'AI agent BYOK config'; description = 'Sincroniza manifesto de APIs para OpenCode, OpenClaw, Hermes, Kilo, Cline e Roo.'; targetApps = @('opencode','openclaw','hermes','kilo','kilocode','cline','roo code'); probePaths = @('$env:USERPROFILE\.local\share\opencode\auth.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','$env:APPDATA\Code\User\globalStorage'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
+        [ordered]@{ id = 'ai-agent-byok-config'; category = 'dev-ai'; displayName = 'AI agent BYOK config'; description = 'Sincroniza manifesto de APIs para OpenCode, Hermes, Kilo, Cline e Roo; OpenClaw aguarda grants por requisição.'; targetApps = @('opencode','hermes','kilo','kilocode','cline','roo code'); probePaths = @('$env:USERPROFILE\.local\share\opencode\auth.json','$env:USERPROFILE\.local\share\kilo\auth.json','$env:APPDATA\Code\User\globalStorage'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
         [ordered]@{ id = 'ai-agent-workflow-context-pack'; category = 'dev-ai'; displayName = 'AI workflow context pack'; description = 'Gera regras seguras sobre task splitting, hygiene de contexto, QA e modelos locais sem acao destrutiva.'; targetApps = @('opencode','openclaw','hermes','kilo','cline','roo code','continue'); probePaths = @('AGENTS.md','.clinerules','.continue'); requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'backup-file'; safetyNotes = @('Config/rules apenas', 'Nao executa comandos de sistema', 'Nao roteia Gemini fora do Antigravity'); profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file'); installComponents = @('agent-skills') }
         [ordered]@{ id = 'codex-cli-env'; category = 'dev-ai'; displayName = 'Codex CLI env'; description = 'Audita variaveis/chaves para Codex CLI e apps de agente.'; targetApps = @('codex cli','codex'); probePaths = @('$env:APPDATA\npm\codex.cmd','$env:LOCALAPPDATA\Microsoft\WindowsApps\codex.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
         [ordered]@{ id = 'github-cli-agent-auth'; category = 'dev-ai'; displayName = 'GitHub CLI agent auth'; description = 'Propaga token GitHub validado para configs de agentes como env de contexto, sem gravar GH_TOKEN global do Windows.'; targetApps = @('github cli','gh','codex','claude code','opencode','continue','vscode'); probePaths = @('$env:ProgramFiles\GitHub CLI\gh.exe','$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GitHub.cli_*\gh.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual'); installComponents = @('github-cli','bootstrap-secrets') }
@@ -11526,8 +11465,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'compose-app-template'; category = 'container-hosting'; displayName = 'Compose app template'; description = 'Gera template Compose de app atras do Traefik com rede interna, healthcheck, restart policy e log rotation.'; targetApps = @('docker','compose','traefik'); probePaths = @('.phasezero\container-hosting\templates\compose-app.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Template sem credenciais', 'Nao expoe ports no app', 'Usuario define dominio antes do deploy'); aliases = @('compose-template','compose-app','docker-compose-template'); badges = @('Docker','Seguro'); installComponents = @('docker') }
         [ordered]@{ id = 'docker-hosting-doctor'; category = 'container-hosting'; displayName = 'Docker hosting doctor'; description = 'Audita Docker Desktop, compose plugin, portas 80/443, rede proxy-net, containers e volumes sem alterar host.'; targetApps = @('docker','traefik','compose'); probePaths = @('$env:APPDATA\Docker'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('doctor','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'audit-only'; safetyNotes = @('Somente leitura', 'Nao para containers', 'Nao altera firewall'); aliases = @('docker-doctor','hosting-doctor','container-doctor'); badges = @('Docker','Seguro'); installComponents = @('docker') }
         [ordered]@{ id = 'n8n-hosting-workflow-template'; category = 'container-hosting'; displayName = 'n8n hosting workflow template'; description = 'Gera workflow/template n8n para checklist de deploy Traefik/Compose sem credenciais ou agendamento.'; targetApps = @('n8n','docker','traefik'); probePaths = @('.phasezero\container-hosting\n8n\hosting-workflow.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('backup-file','manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava credenciais', 'Nao agenda jobs', 'Importacao manual no n8n'); requiresInteractiveLogin = $true; aliases = @('n8n-hosting','hosting-workflow'); badges = @('Docker','Manual'); installComponents = @('n8n','docker') }
-        [ordered]@{ id = 'ai-edge-openai-compatible-template'; category = 'ai-edge-safe'; displayName = 'AI edge OpenAI-compatible template'; description = 'Gera gateway Hono/Node local com /v1/models, /v1/chat/completions, SSE e health para provedores BYOK/owned.'; targetApps = @('node','openai-compatible','opencode','openclaw','hermes','kilo'); probePaths = @('.phasezero\ai-edge-safe\server.js','.phasezero\ai-edge-safe\package.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('BYOK/owned-only', 'Sem scraping/cookies/bypass', 'Chaves ficam no ambiente do usuario'); aliases = @('ai-edge','openai-gateway','safe-ai-proxy'); badges = @('BYOK','Seguro'); installComponents = @('node-core','bootstrap-secrets') }
-        [ordered]@{ id = 'ai-provider-gateway-config'; category = 'ai-edge-safe'; displayName = 'AI provider gateway config'; description = 'Propaga provider OpenAI-compatible/BYOK para OpenCode, Kilo, OpenClaw, Hermes, Cline e Roo usando merges conservadores.'; targetApps = @('opencode','kilo','openclaw','hermes','cline','roo code'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','.hermes\opencloud.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'backup-file'; safetyNotes = @('Backup antes de escrever', 'Parse JSON real e preserva campos desconhecidos', 'Aborta se JSON invalido'); aliases = @('byok-gateway','ai-provider-gateway','gateway-config'); badges = @('BYOK','Seguro'); installComponents = @('bootstrap-secrets','opencode','openclaw','hermes','kilo-cli') }
+        [ordered]@{ id = 'ai-edge-openai-compatible-template'; category = 'ai-edge-safe'; displayName = 'AI edge OpenAI-compatible template'; description = 'Gera gateway Hono/Node local com /v1/models, /v1/chat/completions, SSE e health para provedores BYOK/owned.'; targetApps = @('node','openai-compatible','opencode','hermes','kilo'); probePaths = @('.phasezero\ai-edge-safe\server.js','.phasezero\ai-edge-safe\package.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('BYOK/owned-only', 'Sem scraping/cookies/bypass', 'Chaves ficam no ambiente do usuario'); aliases = @('ai-edge','openai-gateway','safe-ai-proxy'); badges = @('BYOK','Seguro'); installComponents = @('node-core','bootstrap-secrets') }
+        [ordered]@{ id = 'ai-provider-gateway-config'; category = 'ai-edge-safe'; displayName = 'AI provider gateway config'; description = 'Propaga provider OpenAI-compatible/BYOK para OpenCode, Kilo, Hermes, Cline e Roo. OpenClaw aguarda grants por requisição.'; targetApps = @('opencode','kilo','hermes','cline','roo code'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\kilo\auth.json','.hermes\opencloud.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'backup-file'; safetyNotes = @('Backup antes de escrever', 'Parse JSON real e preserva campos desconhecidos', 'Aborta se JSON invalido'); aliases = @('byok-gateway','ai-provider-gateway','gateway-config'); badges = @('BYOK','Seguro'); installComponents = @('bootstrap-secrets','opencode','hermes','kilo-cli') }
         [ordered]@{ id = 'ai-gateway-doctor'; category = 'ai-edge-safe'; displayName = 'AI gateway doctor'; description = 'Valida base URL, chave presente, /v1/models e streaming simples sem registrar valor de segredo.'; targetApps = @('openai-compatible','gateway','opencode','hermes'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('doctor','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'audit-only'; safetyNotes = @('Nao imprime chave', 'Nao usa cookies/sessoes', 'Somente endpoints autorizados pelo usuario'); aliases = @('ai-gateway-doctor','safe-ai-doctor','openai-gateway-doctor'); badges = @('BYOK','Seguro'); installComponents = @('bootstrap-secrets') }
         [ordered]@{ id = 'zen-browser-privacy-prefs'; category = 'browser-startup'; displayName = 'Zen Browser privacy prefs'; description = 'Checklist opt-in para prefs de privacidade do Zen sem sobrescrever perfil do usuario.'; targetApps = @('zen browser','zen'); probePaths = @('$env:APPDATA\zen','$env:LOCALAPPDATA\Zen Browser'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop','dev'); actions = @('manual-action','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'manual'; safetyNotes = @('Checklist manual', 'Nao altera prefs.js automaticamente', 'Preserva perfil existente'); installComponents = @('zen-browser') }
 
@@ -11930,7 +11869,7 @@ function Get-BootstrapAppTuningInstallComponents {
         'notepadpp-defaults' = @('notepadpp')
         'claude-code-defaults' = @('claude-code')
         'opencode-auth-config' = @('opencode')
-        'ai-agent-byok-config' = @('bootstrap-secrets','vscode-extensions','opencode','openclaw','hermes','kilo-cli')
+        'ai-agent-byok-config' = @('bootstrap-secrets','vscode-extensions','opencode','hermes','kilo-cli')
         'codex-cli-env' = @('codex-cli')
         'github-cli-agent-auth' = @('github-cli','bootstrap-secrets')
         'codex-desktop-repair' = @('codex-installer','codex-cli','vcpp-redist')
@@ -13162,12 +13101,12 @@ function Get-BootstrapAppCapabilityCatalog {
         }
         openClaw = [ordered]@{
             displayName = 'OpenClaw'
-            autoInstall = $true
+            autoInstall = $false
             alwaysOnRules = $true
-            authByFile = $true
-            authByEnv = $true
-            manualOnly = $false
-            notes = 'Recebe env/MCP por arquivo local preservado.'
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $true
+            notes = 'Uso bloqueado até grants de conta por requisição; instalação e propagação automática desativadas.'
         }
         hermes = [ordered]@{
             displayName = 'Hermes'
@@ -13438,6 +13377,18 @@ function Get-BootstrapAppChannelCoverageSummary {
     }
 
     foreach ($targetName in $supportedTargets) {
+        if ($targetName -eq 'openClaw') {
+            $coverageEntries += @([ordered]@{
+                id = $targetName
+                displayName = [string]$labelMap[$targetName]
+                status = 'blocked'
+                reason = 'Account grants are not bound to each OpenClaw request.'
+                byokApplied = $false
+                mcpApplied = $false
+            })
+            continue
+        }
+
         $target = @{}
         if (($ResolvedTargets -is [hashtable]) -and $ResolvedTargets.ContainsKey($targetName) -and ($ResolvedTargets[$targetName] -is [hashtable])) {
             $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets[$targetName]
@@ -16114,7 +16065,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)'; CommandNames = @('codex') }
     $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
     $catalog['mimo-code'] = New-BootstrapComponentDefinition -Name 'mimo-code' -Description 'MiMo Code CLI (fork agentico do OpenCode, Xiaomi MiMo) via npm -g. Configura provider OpenAI-compatible validado quando disponivel; senao usa MiMo Auto (gratis).' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@mimo-ai/cli'; DisplayName = 'MiMo Code (@mimo-ai/cli)'; CommandNames = @('mimo') } -RequiresNetwork $true
-    $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
+    $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw blocked until account grants can bind to each request.' -DependsOn @() -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
     # Otimizadores de terceiros (opt-in, guiados/manual-required, experimentais). NAO entram em perfis
     # seguros nem fazem mudancas opacas pelo bootstrap: o PhaseZero apenas valida presenca e orienta o
@@ -16304,7 +16255,7 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores, utilitarios e atalhos web.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp', 'webapps')
@@ -16317,7 +16268,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['server-llm-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-hermes' -Description 'LLM local + Hermes remoto, com Windows enxugado para menor RAM.' -Items @('ollama', 'hermes-remote', 'os-slim-server')
     $catalog['server-llm-homelab'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab' -Description 'LLM local + servidor caseiro, com Windows enxugado para menor RAM.' -Items @('ollama', 'homelab-stack', 'tailscale', 'os-slim-server')
     $catalog['server-llm-homelab-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab-hermes' -Description 'Tudo: LLM local + servidor caseiro + Hermes remoto, com Windows enxugado.' -Items @('ollama', 'homelab-stack', 'tailscale', 'hermes-remote', 'os-slim-server')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'agent-compat-runtime', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'agent-compat-runtime', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -17998,7 +17949,7 @@ function Get-BootstrapAiToolCatalog {
         InstallSupport = 'npm-prefix'
         MinimumNodeMajor = 22
         Aliases        = @('codeclaw')
-        Notes          = 'Instala via npm quando solicitado; Node >= 22 requerido. Onboarding, daemon/gateway e chaves ficam manuais.'
+        Notes          = 'Instalação e uso bloqueados até grants de conta por requisição serem aplicados; preserve instalações externas.'
     }
     $catalog['aionui'] = [ordered]@{
         ToolName       = 'aionui'
@@ -19083,6 +19034,9 @@ function Get-BootstrapAiToolStatusRows {
                 }
                 $version = [string]$proxy['repo']
             }
+        } elseif ($toolName -eq 'openclaw') {
+            $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
+            $status = 'blocked'
         } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
             $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
             $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
@@ -19090,6 +19044,9 @@ function Get-BootstrapAiToolStatusRows {
         } elseif ([string]$entry['InstallSupport'] -match '^manual') {
             $status = 'manual'
         }
+        $usageBlocked = ($toolName -eq 'openclaw')
+        $blockedReason = if ($usageBlocked) { 'connection-grant-not-enforceable' } else { '' }
+        if ($usageBlocked) { $status = 'blocked' }
         $rows.Add([ordered]@{
             tool        = [string]$toolName
             name        = [string]$entry['DisplayName']
@@ -19100,6 +19057,8 @@ function Get-BootstrapAiToolStatusRows {
             docs        = [string]$entry['DocsUrl']
             support     = [string]$entry['InstallSupport']
             message     = [string]$entry['Notes']
+            usageBlocked = [bool]$usageBlocked
+            blockedReason = [string]$blockedReason
         }) | Out-Null
     }
     return @($rows.ToArray())
@@ -19340,7 +19299,7 @@ function New-BootstrapAiProxyManifest {
         defaultBaseUrl = [string]$catalog['kimiproxy']['BaseUrl']
         defaultModel = [string]$catalog['kimiproxy']['DefaultModel']
         providers = @($providers.ToArray())
-        targets = @('vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','openCode','openClaw','hermes','kilo','continue')
+        targets = @('vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','openCode','hermes','kilo','continue')
         note = 'API keys live only in each proxy .env; this manifest is safe to include in support bundles.'
     }
 }
@@ -19500,7 +19459,7 @@ function New-BootstrapAiProxyResolvedTarget {
 
     $envMap = New-BootstrapAiProxyIdeEnvironment -Records $Records
     $targets = [ordered]@{}
-    foreach ($targetName in @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','openClaw','hermes')) {
+    foreach ($targetName in @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','hermes')) {
         $targets[$targetName] = [ordered]@{
             env = ConvertTo-BootstrapHashtable -InputObject $envMap
             mcpServers = [ordered]@{}
@@ -19704,121 +19663,8 @@ function Ensure-BootstrapOpenClawCompatibleConfigFile {
         [Parameter(Mandatory = $true)][hashtable]$Target,
         [Parameter(Mandatory = $true)][string]$Label
     )
-
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    $settings = @{}
-    if (Test-Path -LiteralPath $Path) {
-        try {
-            $settings = Read-BootstrapJsonFile -Path $Path
-            if (-not ($settings -is [hashtable])) { $settings = @{} }
-        } catch {
-            $backupPath = Backup-BootstrapFile -Path $Path
-            if ($backupPath) {
-                Write-Log ("{0} invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
-            }
-            $settings = @{}
-        }
-    }
-
-    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 60 -Compress)
-
-    $mcpRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'mcp'
-    $mcpServers = Ensure-BootstrapNamedMap -Parent $mcpRoot -Name 'servers'
-    if ($settings.ContainsKey('mcpServers') -and ($settings['mcpServers'] -is [hashtable])) {
-        $legacyMcp = ConvertTo-BootstrapHashtable -InputObject $settings['mcpServers']
-        foreach ($serverName in @($legacyMcp.Keys)) {
-            $mcpServers[[string]$serverName] = $legacyMcp[$serverName]
-        }
-        $null = $settings.Remove('mcpServers')
-    }
-    if ($Target.ContainsKey('mcpServers') -and ($Target['mcpServers'] -is [hashtable])) {
-        $mcpChanges = @{}
-        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $Target['mcpServers'] -Format 'standard'
-        if ($appliedMcpServers -gt 0) {
-            foreach ($serverName in @($mcpChanges.Keys)) {
-                $mcpServers[[string]$serverName] = $mcpChanges[$serverName]
-            }
-        }
-    }
-    if ($mcpServers.Count -eq 0) {
-        Remove-BootstrapEmptyNamedMap -Parent $mcpRoot -Name 'servers' | Out-Null
-        Remove-BootstrapEmptyNamedMap -Parent $settings -Name 'mcp' | Out-Null
-    }
-
-    $envRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'env'
-    $envVars = Ensure-BootstrapNamedMap -Parent $envRoot -Name 'vars'
-    foreach ($name in @($envRoot.Keys)) {
-        if ($name -in @('vars','shellEnv')) { continue }
-        $value = $envRoot[$name]
-        if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace($value)) {
-            $envVars[[string]$name] = [string]$value
-        }
-        $null = $envRoot.Remove($name)
-    }
-    if ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable])) {
-        Set-BootstrapNonEmptyStringValues -Target $envVars -Values $Target['env']
-    }
-    if ($envVars.Count -eq 0) {
-        Remove-BootstrapEmptyNamedMap -Parent $envRoot -Name 'vars' | Out-Null
-        Remove-BootstrapEmptyNamedMap -Parent $settings -Name 'env' | Out-Null
-    }
-
-    $records = @(Get-BootstrapAiProxyRecordsFromResolvedEnv -Env $envVars)
-    if ($records.Count -gt 0) {
-        $modelsRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'models'
-        $modelsRoot['mode'] = 'merge'
-        $providersMap = Ensure-BootstrapNamedMap -Parent $modelsRoot -Name 'providers'
-        foreach ($record in @($records)) {
-            $providerId = [string]$record['providerId']
-            if ([string]::IsNullOrWhiteSpace($providerId)) { continue }
-            $modelList = New-Object System.Collections.Generic.List[object]
-            foreach ($modelId in @($record['models'])) {
-                $modelText = [string]$modelId
-                if ([string]::IsNullOrWhiteSpace($modelText)) { continue }
-                $modelList.Add([ordered]@{
-                    id = $modelText
-                    name = $modelText
-                    api = 'openai-completions'
-                    baseUrl = [string]$record['baseUrl']
-                    input = @('text')
-                }) | Out-Null
-            }
-            $providersMap[$providerId] = [ordered]@{
-                baseUrl = [string]$record['baseUrl']
-                api = 'openai-completions'
-                apiKey = ('${' + [string]$record['apiKeyEnvName'] + '}')
-                models = @($modelList.ToArray())
-            }
-        }
-
-        $default = Get-BootstrapAiProxyDefaultRecord -Records $records
-        if ($null -ne $default) {
-            $agentsRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'agents'
-            $defaults = Ensure-BootstrapNamedMap -Parent $agentsRoot -Name 'defaults'
-            $defaultModel = ('{0}/{1}' -f [string]$default['providerId'], [string]$default['defaultModel'])
-            $defaults['model'] = $defaultModel
-            $defaultModels = Ensure-BootstrapNamedMap -Parent $defaults -Name 'models'
-            foreach ($record in @($records)) {
-                foreach ($modelId in @($record['models'])) {
-                    $fullModel = ('{0}/{1}' -f [string]$record['providerId'], [string]$modelId)
-                    $defaultModels[$fullModel] = [ordered]@{
-                        alias = ('PhaseZero {0}' -f [string]$record['name'])
-                    }
-                }
-            }
-        }
-    }
-
-    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 60 -Compress)
-    if ($before -eq $after) {
-        return $false
-    }
-    if (Test-Path -LiteralPath $Path) {
-        Backup-BootstrapFile -Path $Path | Out-Null
-    }
-    Write-BootstrapJsonFile -Path $Path -Value $settings
-    Write-Log ("{0} configurado com PhaseZero AI Proxy Suite: {1}" -f $Label, $Path)
-    return $true
+    Write-Log ("{0} mantido intacto: grants por requisição para OpenClaw ainda não são aplicáveis." -f $Label) 'WARN'
+    return $false
 }
 
 function Convert-BootstrapHermesYamlValue {
@@ -19919,7 +19765,7 @@ function Set-BootstrapAiProxyIdeDefault {
 
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $project = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
-    $plannedTargets = @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','openCode','openClaw','hermes','kilo','continue')
+    $plannedTargets = @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','openCode','hermes','kilo','continue')
     if ($DryRun) {
         return [ordered]@{
             status = 'planned'
@@ -21509,6 +21355,9 @@ function Install-BootstrapAiNpmTool {
         [Parameter(Mandatory = $true)][string]$InstallRoot,
         [switch]$DryRun
     )
+    if ((Normalize-BootstrapAiToolName -ToolName $ToolName) -eq 'openclaw') {
+        Assert-BootstrapOpenClawRequestGrant
+    }
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $prefix = Get-BootstrapAiNpmPrefix -InstallRoot $root
     $packageName = [string]$CatalogEntry['PackageName']
@@ -23045,12 +22894,26 @@ function Invoke-BootstrapAiToolAction {
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $project = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
 
+    if ($name -eq 'openclaw' -and $Action -notin @('validate','docs','uninstall')) {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'blocked' -InstallRoot $root -ProjectRoot $project -Message 'OpenClaw blocked: account grants are not bound to each request.' -Docs ([string]$entry['DocsUrl'])
+        $result['ready'] = $false
+        $result['usageBlocked'] = $true
+        $result['blockedReason'] = 'connection-grant-not-enforceable'
+        return $result
+    }
+
     if ($Action -eq 'validate') {
         $row = @(Get-BootstrapAiToolStatusRows -InstallRoot $root -ProjectRoot $project | Where-Object { [string]$_['tool'] -eq $name } | Select-Object -First 1)
         if ($row.Count -eq 0) {
             return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'error' -InstallRoot $root -ProjectRoot $project -Message 'Status nao encontrado.' -Docs ([string]$entry['DocsUrl']))
         }
-        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status ([string]$row[0]['status']) -InstallRoot $root -ProjectRoot $project -Message ([string]$row[0]['message']) -Docs ([string]$row[0]['docs']) -CommandPath ([string]$row[0]['commandPath']) -Version ([string]$row[0]['version']))
+        $result = New-BootstrapAiToolResult -ToolName $name -Action $Action -Status ([string]$row[0]['status']) -InstallRoot $root -ProjectRoot $project -Message ([string]$row[0]['message']) -Docs ([string]$row[0]['docs']) -CommandPath ([string]$row[0]['commandPath']) -Version ([string]$row[0]['version'])
+        if ($name -eq 'openclaw') {
+            $result['ready'] = $false
+            $result['usageBlocked'] = $true
+            $result['blockedReason'] = 'connection-grant-not-enforceable'
+        }
+        return $result
     }
 
     if ($Action -eq 'docs') {
@@ -25597,13 +25460,8 @@ function Ensure-BootstrapOpenClawSecrets {
         return $false
     }
 
-    $updated = $false
-    foreach ($path in @(Get-BootstrapOpenClawConfigPaths)) {
-        $label = if ($path -match '(?i)clawdbot') { 'Clawbot config' } else { 'OpenClaw config' }
-        if ($path -match '(?i)clawdecode') { $label = 'ClawDecode config' }
-        $updated = ((Ensure-BootstrapOpenClawCompatibleConfigFile -Path $path -Target $ResolvedTargets['openClaw'] -Label $label) -or $updated)
-    }
-    return $updated
+    Write-Log 'OpenClaw/Clawbot credential and provider propagation skipped: connection-grant-not-enforceable.' 'WARN'
+    return $false
 }
 
 function Ensure-BootstrapHermesSecrets {
@@ -29605,7 +29463,7 @@ function Ensure-BootstrapHeadroomAgentIntegration {
         '- Cursor: `headroom wrap cursor`',
         '- GitHub Copilot CLI: `headroom wrap copilot`',
         '- Gemini CLI: `headroom wrap gemini`',
-        '- OpenClaw: `headroom wrap openclaw`',
+        '- OpenClaw: blocked until each request can enforce an explicit account grant (exit 69).',
         '- OpenCode: manual proxy only; no stable Headroom wrapper is confirmed upstream yet.',
         '',
         'Proxy and automation:',
@@ -29675,7 +29533,11 @@ switch ($Action) {
     'wrap-cursor' { Invoke-Headroom -Args @('wrap','cursor') }
     'wrap-copilot' { Invoke-Headroom -Args @('wrap','copilot') }
     'wrap-gemini' { Invoke-Headroom -Args @('wrap','gemini') }
-    'wrap-openclaw' { Invoke-Headroom -Args @('wrap','openclaw') }
+    'wrap-openclaw' {
+        Write-Output '{"blocked":true,"usageBlocked":true,"reason":"connection-grant-not-enforceable"}'
+        [Console]::Error.WriteLine('OpenClaw blocked: account grants are not bound to each request.')
+        exit 69
+    }
     'mcp-install' { Invoke-Headroom -Args @('mcp','install') }
     'stats' { Invoke-Headroom -Args @('stats') }
 }
@@ -33168,8 +33030,7 @@ function Invoke-BootstrapComponent {
             Ensure-OpenCode -BashPath $State.GitInfo.Bash
         }
         'openclaw' {
-            Ensure-BootstrapNodeCore -State $State
-            Ensure-OpenClaw -NpmCmd $State.NodeInfo.NpmCmd
+            Assert-BootstrapOpenClawRequestGrant
         }
         'hermes' {
             Ensure-Hermes -State $State
@@ -34454,14 +34315,14 @@ function New-BootstrapAiMemoryDoctorReport {
 
 function Get-BootstrapAiConfigProviderEnvMap {
     return @(
-        [ordered]@{ provider = 'openai'; env = @('OPENAI_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','kilo') }
-        [ordered]@{ provider = 'anthropic'; env = @('ANTHROPIC_API_KEY'); targetApps = @('openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode') }
+        [ordered]@{ provider = 'openai'; env = @('OPENAI_API_KEY'); targetApps = @('openCode','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','kilo') }
+        [ordered]@{ provider = 'anthropic'; env = @('ANTHROPIC_API_KEY'); targetApps = @('hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode') }
         [ordered]@{ provider = 'gemini'; env = @('GEMINI_API_KEY','GOOGLE_API_KEY'); targetApps = @('continue','vsCode','cursor','windsurf','trae','roo','cline') }
-        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo','aiUsagebar') }
-        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo','aiUsagebar') }
-        [ordered]@{ provider = 'xai'; env = @('XAI_API_KEY'); targetApps = @('openClaw','continue','vsCode') }
-        [ordered]@{ provider = 'dashscope'; env = @('DASHSCOPE_API_KEY','QWEN_API_KEY'); targetApps = @('openClaw','continue') }
-        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); targetApps = @('openClaw','hermes','continue','aiUsagebar') }
+        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); targetApps = @('openCode','hermes','continue','kilo','aiUsagebar') }
+        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); targetApps = @('openCode','hermes','continue','kilo','aiUsagebar') }
+        [ordered]@{ provider = 'xai'; env = @('XAI_API_KEY'); targetApps = @('continue','vsCode') }
+        [ordered]@{ provider = 'dashscope'; env = @('DASHSCOPE_API_KEY','QWEN_API_KEY'); targetApps = @('continue') }
+        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); targetApps = @('hermes','continue','aiUsagebar') }
         [ordered]@{ provider = 'github'; env = @('GH_TOKEN','GITHUB_TOKEN'); targetApps = @('claudeCode','claudeDesktop','vsCode','cursor','windsurf','trae','continue','zed','zCode','openCode') }
     )
 }
@@ -34503,7 +34364,9 @@ function Get-BootstrapAiConfigTargetReport {
     $targets = New-Object System.Collections.Generic.List[object]
     foreach ($target in @(Get-BootstrapAiConfigKnownTargetList)) {
         $providerNames = @($Providers | Where-Object { [bool]$_['envPresent'] -and (@($_['targetApps']) -contains $target) } | ForEach-Object { [string]$_['provider'] })
-        $status = if ($target -in @('aionui')) {
+        $status = if ($target -eq 'openClaw') {
+            'blocked'
+        } elseif ($target -in @('aionui')) {
             'manualRequired'
         } elseif ($providerNames.Count -gt 0) {
             'ready'
@@ -34511,10 +34374,10 @@ function Get-BootstrapAiConfigTargetReport {
             'missing'
         }
         $manual = ($target -in @('aionui','openClaw','hermes'))
-        $reason = if ($target -eq 'aionui') {
+        $reason = if ($target -eq 'openClaw') {
+            'OpenClaw usage blocked: account grants are not bound to each request.'
+        } elseif ($target -eq 'aionui') {
             'AionUI provider store is encrypted/undocumented; use manual app settings.'
-        } elseif ($target -eq 'openClaw') {
-            'OpenClaw onboarding/config daemon remain manual unless stable CLI config set exists.'
         } elseif ($target -eq 'hermes') {
             'Hermes config writes must use hermes config set when command exists.'
         } elseif ($providerNames.Count -gt 0) {
@@ -34590,28 +34453,21 @@ function Get-BootstrapOpenClawAiConfigReport {
     $catalog = Get-BootstrapAiToolCatalog
     $entry = $catalog['openclaw']
     $cmd = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
-    $nodePath = Resolve-CommandPath -Name 'node'
-    $nodeMajor = 0
-    if ($nodePath) {
-        try {
-            $line = Invoke-NativeFirstLine -Exe $nodePath -Args @('-v') -TimeoutMs 3000
-            if ([string]$line -match 'v?(\d+)') { $nodeMajor = [int]$matches[1] }
-        } catch {
-            $nodeMajor = 0
-        }
-    }
     return [ordered]@{
+        ready = $false
+        usageBlocked = $true
+        blockedReason = 'connection-grant-not-enforceable'
         installed = -not [string]::IsNullOrWhiteSpace($cmd)
         commandPath = [string]$cmd
         minimumNodeMajor = [int]$entry['MinimumNodeMajor']
-        nodeMajor = $nodeMajor
-        nodeStatus = $(if ($nodeMajor -ge [int]$entry['MinimumNodeMajor']) { 'ready' } elseif ($nodeMajor -gt 0) { 'blocked' } else { 'missing' })
+        nodeMajor = $null
+        nodeStatus = 'not-probed'
         aliases = @($entry['Aliases'])
         onboarding = 'manual'
         daemon = 'manual-opt-in'
         smoke = [ordered]@{
-            version = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'openclaw-version' -CommandName $cmd -CommandArgs @('--version') -TimeoutMs 3000 } else { [ordered]@{ status = 'missing' } })
-            status = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'openclaw-status' -CommandName $cmd -CommandArgs @('status') -TimeoutMs 5000 } else { [ordered]@{ status = 'missing' } })
+            version = [ordered]@{ status = $(if ($cmd) { 'not-probed' } else { 'missing' }) }
+            status = [ordered]@{ status = 'blocked'; reason = 'connection-grant-not-enforceable' }
         }
     }
 }
@@ -37657,7 +37513,7 @@ if (-not $isDotSourced) {
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@qwen-code/qwen-code@latest' -DisplayName 'Qwen Code (@qwen-code/qwen-code)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@github/copilot' -DisplayName 'GitHub Copilot CLI (@github/copilot)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@openai/codex' -DisplayName 'OpenAI Codex CLI (@openai/codex)'
-        Ensure-OpenClaw -NpmCmd $nodeInfo.NpmCmd
+        Write-Log 'OpenClaw skipped: connection-grant-not-enforceable; no account grant is bound to each request.' 'WARN'
         Ensure-Hermes -State @{ NodeInfo = $nodeInfo; CloneBaseDir = $CloneBaseDir }
         Refresh-SessionPath
 
@@ -37723,7 +37579,7 @@ if (-not $isDotSourced) {
                 Write-Log "codex (PATH): $codexPath"
             }
         }
-        if (Test-Path $openclawCmd) { Write-Log "openclaw: $(& $openclawCmd --version) ($openclawCmd)" } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
+        if (Test-Path $openclawCmd) { Write-Log "openclaw: detectado ($openclawCmd); uso bloqueado sem grant por requisição" 'WARN' } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
         if (Test-Path $hermesCmd) { Write-Log "hermes: $(& $hermesCmd --version) ($hermesCmd)" } else { Write-Log "hermes: NÃO ENCONTRADO ($hermesCmd)" 'WARN' }
         $aiderExe = Resolve-CommandPath -Name 'aider'
         if ($aiderExe) { Write-Log "aider: $(Invoke-NativeFirstLine -Exe $aiderExe -Args @('--version')) ($aiderExe)" } else { Write-Log 'aider: NÃO ENCONTRADO' 'WARN' }

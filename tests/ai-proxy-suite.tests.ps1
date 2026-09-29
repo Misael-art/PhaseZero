@@ -202,6 +202,8 @@ Describe 'AI proxy suite support' {
                 LEGACY_VAR = 'kept'
             }
         })
+        $openClawPath = Join-Path $env:USERPROFILE '.openclaw\openclaw.json'
+        $openClawBefore = Get-Content -LiteralPath $openClawPath -Raw -Encoding UTF8
         try {
             $kimi = Invoke-BootstrapAiToolAction -ToolName 'kimiproxy' -Action 'configure' -InstallRoot $script:AiProxySuiteRoot -ProjectRoot $projectRoot -Yes
             $envMap = Read-BootstrapDotEnvFile -Path ([string]$kimi.envPath)
@@ -251,21 +253,19 @@ Describe 'AI proxy suite support' {
             $hermesConfig | Should Match 'provider: custom:phasezero-kimi'
             $hermesConfig | Should Match 'default: k2d6-thinking'
 
-            $openClaw = Read-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.openclaw\openclaw.json')
-            $openClaw.ContainsKey('mcpServers') | Should Be $false
-            [string]$openClaw.mcp.servers.existing.command | Should Be 'npx'
-            [string]$openClaw.env.vars.OPENAI_BASE_URL | Should Be 'http://127.0.0.1:3010/v1'
-            [string]$openClaw.env.vars.OPENAI_MODEL | Should Be 'k2d6-thinking'
-            [string]$openClaw.env.vars.LEGACY_VAR | Should Be 'kept'
-            [string]$openClaw.models.providers['phasezero-kimi'].baseUrl | Should Be 'http://127.0.0.1:3010/v1'
-            [string]$openClaw.models.providers['phasezero-kimi'].apiKey | Should Be '${KIMIPROXY_API_KEY}'
-            [string]$openClaw.agents.defaults.model | Should Be 'phasezero-kimi/k2d6-thinking'
-            [string]$openClaw.agents.defaults.models['phasezero-kimi/k2d6-thinking'].alias | Should Be 'PhaseZero KimiProxy'
+            (Get-Content -LiteralPath $openClawPath -Raw -Encoding UTF8) | Should Be $openClawBefore
+            (Test-Path -LiteralPath (Join-Path $env:APPDATA 'clawdbot\clawdbot.json5')) | Should Be $false
+            $directOpenClawWrite = Ensure-BootstrapOpenClawCompatibleConfigFile -Path $openClawPath -Target ([ordered]@{ env = [ordered]@{ OPENAI_API_KEY = $localKey } }) -Label 'OpenClaw config'
+            [bool]$directOpenClawWrite | Should Be $false
+            $directOpenClawSecrets = Ensure-BootstrapOpenClawSecrets -ResolvedTargets @{ openClaw = [ordered]@{ env = [ordered]@{ OPENAI_API_KEY = $localKey } } }
+            [bool]$directOpenClawSecrets | Should Be $false
+            (Get-Content -LiteralPath $openClawPath -Raw -Encoding UTF8) | Should Be $openClawBefore
 
-            $clawbot = Read-BootstrapJsonFile -Path (Join-Path $env:APPDATA 'clawdbot\clawdbot.json5')
-            [string]$clawbot.env.vars.OPENAI_BASE_URL | Should Be 'http://127.0.0.1:3010/v1'
-            [string]$clawbot.env.vars.OPENAI_MODEL | Should Be 'k2d6-thinking'
-            [string]$clawbot.models.providers['phasezero-kimi'].baseUrl | Should Be 'http://127.0.0.1:3010/v1'
+            $coverage = Get-BootstrapAppChannelCoverageSummary -ResolvedTargets @{ openClaw = @{ env = @{ OPENAI_API_KEY = $localKey }; mcpServers = @{ fixture = @{ command = 'fixture' } } } } -OpenAiCompatible @{ status = 'selected' }
+            $openClawCoverage = @($coverage.apps | Where-Object { [string]$_['id'] -eq 'openClaw' })[0]
+            [string]$openClawCoverage.status | Should Be 'blocked'
+            [bool]$openClawCoverage.byokApplied | Should Be $false
+            [bool]$openClawCoverage.mcpApplied | Should Be $false
 
             $json | Should Not Match ([regex]::Escape($localKey))
         } finally {

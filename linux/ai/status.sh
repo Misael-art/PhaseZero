@@ -274,7 +274,6 @@ jq -e '.tools.aiContextFrugality.configured == true' <<< "$agent_compat" >/dev/n
 jq -e '.opencode.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup opencode" >> "$recommendations"
 jq -e '.claude.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup claude" >> "$recommendations"
 jq -e '.hermes.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup hermes" >> "$recommendations"
-jq -e '.openclaw.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup openclaw" >> "$recommendations"
 bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor 2>/dev/null | jq -e '(.problems | length) == 0' >/dev/null || echo "linux/pz ai repair" >> "$recommendations"
 # shellcheck disable=SC2128 # services is a JSON string, not array
 if ! jq -e '.ollama.available == true' <<< "$clis" >/dev/null; then
@@ -365,8 +364,10 @@ jq -cn \
             action:"linux/pz ai setup claude",maturity:"preview"},
           {id:"hermes",label:"Hermes",state:(if $clis.hermes.available and $hermesConfigExists then "configured" elif $clis.hermes.available then "installed" else "optional" end),
             action:"linux/pz ai workspaces plan",maturity:"preview"},
-          {id:"openclaw",label:"OpenClaw",state:(if $clis.openclaw.available then "installed" else "optional" end),
-            action:"linux/pz ai setup openclaw",maturity:"experimental"},
+          {id:"openclaw",label:"OpenClaw",state:"blocked",installed:($clis.openclaw.available == true),
+            configured:($openclawConfigExists == true),ready:false,usageBlocked:true,
+            blockedReason:"connection-grant-not-enforceable",
+            action:"blocked:connection-grant-not-enforceable",maturity:"experimental"},
           {id:"ollama",label:"Ollama",state:(if $clis.ollama.available then "installed" else "optional" end),
             action:"linux/pz ai setup ollama",maturity:"preview"},
           {id:"odysseus",label:"Odysseus",state:(if $odysseus.ready then "ready" elif $odysseus.installed then "degraded" else "optional" end),

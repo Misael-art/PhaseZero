@@ -6,7 +6,7 @@ umask 077
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
-pz_check_deps jq >/dev/null
+pz_check_deps jq timeout >/dev/null
 
 ACTION="${1:-status}"
 case "$ACTION" in
@@ -17,44 +17,41 @@ esac
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf -- "$tmp_dir"' EXIT
 
-(
-    bash "$PZ_ROOT/linux/ai/proxy-suite.sh" auth all > "$tmp_dir/proxies.json" 2>/dev/null ||
-        jq -cn '[]' > "$tmp_dir/proxies.json"
-) &
+run_probe() {
+    local name="$1" fallback="$2" rc
+    shift 2
+    if timeout --kill-after=1s 8s "$@" > "$tmp_dir/$name.json" 2>/dev/null; then
+        printf 'ok\n' > "$tmp_dir/$name.state"
+    else
+        rc=$?
+        printf '%s\n' "$fallback" > "$tmp_dir/$name.json"
+        if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            printf 'timeout\n' > "$tmp_dir/$name.state"
+        else
+            printf 'backend-unavailable\n' > "$tmp_dir/$name.state"
+        fi
+    fi
+}
+
+run_probe proxies '[]' bash "$PZ_ROOT/linux/ai/proxy-suite.sh" auth all &
 pid_proxies=$!
-(
-    bash "$PZ_ROOT/linux/ai/9router-manager.sh" status > "$tmp_dir/router.json" 2>/dev/null ||
-        jq -cn '{installed:false,healthy:false,providers:{active:0,total:0}}' > "$tmp_dir/router.json"
-) &
+run_probe router '{"installed":false,"healthy":false,"providers":{"active":0,"total":0}}' bash "$PZ_ROOT/linux/ai/9router-manager.sh" status &
 pid_router=$!
-(
-    bash "$PZ_ROOT/linux/ai/9router-manager.sh" provider status > "$tmp_dir/providers.json" 2>/dev/null ||
-        jq -cn '{connections:[]}' > "$tmp_dir/providers.json"
-) &
+run_probe providers '{"connections":[]}' bash "$PZ_ROOT/linux/ai/9router-manager.sh" provider status &
 pid_providers=$!
-(
-    bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" status > "$tmp_dir/claude.json" 2>/dev/null ||
-        jq -cn '{claude:{installed:false,auth:{loggedIn:false}},bonsai:{installed:false,authenticated:false}}' > "$tmp_dir/claude.json"
-) &
+run_probe claude '{"claude":{"installed":false,"auth":{"loggedIn":false}},"bonsai":{"installed":false,"authenticated":false}}' bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" status &
 pid_claude=$!
-(
-    python3 "$PZ_ROOT/linux/ai/opencode_9router_manager.py" status > "$tmp_dir/opencode.json" 2>/dev/null ||
-        jq -cn '{cli:{installed:false},configuration:{configured:false},credential:{secure:false},router:{healthy:false}}' > "$tmp_dir/opencode.json"
-) &
+run_probe opencode '{"cli":{"installed":false},"configuration":{"configured":false},"credential":{"secure":false},"router":{"healthy":false}}' python3 "$PZ_ROOT/linux/ai/opencode_9router_manager.py" status &
 pid_opencode=$!
-(
-    bash "$PZ_ROOT/linux/ai/setup-hermes.sh" status > "$tmp_dir/hermes.json" 2>/dev/null ||
-        jq -cn '{installed:false,configured:false,ready:false,auth:{configured:false}}' > "$tmp_dir/hermes.json"
-) &
+run_probe hermes '{"installed":false,"configured":false,"ready":false,"auth":{"configured":false}}' bash "$PZ_ROOT/linux/ai/setup-hermes.sh" status &
 pid_hermes=$!
-(
-    bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status > "$tmp_dir/odysseus.json" 2>/dev/null ||
-        jq -cn '{installed:false,configured:false,ready:false,routerCredential:{configured:false}}' > "$tmp_dir/odysseus.json"
-) &
+run_probe openclaw '{"available":false,"configExists":false,"ready":false,"usageBlocked":true,"blockedReason":"connection-grant-not-enforceable"}' bash "$PZ_ROOT/linux/ai/setup-openclaw.sh" status &
+pid_openclaw=$!
+run_probe odysseus '{"installed":false,"configured":false,"ready":false,"routerCredential":{"configured":false}}' bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status &
 pid_odysseus=$!
 
 for pid in "$pid_proxies" "$pid_router" "$pid_providers" "$pid_claude" \
-    "$pid_opencode" "$pid_hermes" "$pid_odysseus"; do
+    "$pid_opencode" "$pid_hermes" "$pid_openclaw" "$pid_odysseus"; do
     wait "$pid" || true
 done
 
@@ -62,12 +59,21 @@ observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 registry="$(jq -cn \
     --arg observedAt "$observed_at" \
+    --arg proxiesProbe "$(cat "$tmp_dir/proxies.state")" \
+    --arg routerProbe "$(cat "$tmp_dir/router.state")" \
+    --arg providersProbe "$(cat "$tmp_dir/providers.state")" \
+    --arg claudeProbe "$(cat "$tmp_dir/claude.state")" \
+    --arg opencodeProbe "$(cat "$tmp_dir/opencode.state")" \
+    --arg hermesProbe "$(cat "$tmp_dir/hermes.state")" \
+    --arg openclawProbe "$(cat "$tmp_dir/openclaw.state")" \
+    --arg odysseusProbe "$(cat "$tmp_dir/odysseus.state")" \
     --slurpfile proxies "$tmp_dir/proxies.json" \
     --slurpfile router "$tmp_dir/router.json" \
     --slurpfile providers "$tmp_dir/providers.json" \
     --slurpfile claude "$tmp_dir/claude.json" \
     --slurpfile opencode "$tmp_dir/opencode.json" \
     --slurpfile hermes "$tmp_dir/hermes.json" \
+    --slurpfile openclaw "$tmp_dir/openclaw.json" \
     --slurpfile odysseus "$tmp_dir/odysseus.json" '
   def label_proxy:
     if . == "kimiproxy" then "Kimi Proxy"
@@ -75,6 +81,12 @@ registry="$(jq -cn \
     elif . == "deepsproxy" then "DeepSeek Proxy"
     elif . == "mimo-ai-proxy" then "Mimo Proxy"
     else . end;
+  def degrade($probe):
+    if $probe == "ok" then . else
+      .installed = null | .configured = null | .authenticated = null |
+      .ready = (if .usageBlocked == true then false else null end) |
+      .status = "unknown" | .lastVerifiedAt = null
+    end;
   def proxy_entry:
     . as $p |
     ($p.webValidation.status // "unknown") as $web |
@@ -87,7 +99,7 @@ registry="$(jq -cn \
       authenticated:$authenticated,ready:$ready,
       status:(if $ready then "ready" elif ($p.installed|not) then "missing" elif $web == "session-present" then "verify-session" elif $web == "missing-credentials" then "action-required" else "attention" end),
       method:($p.webValidation.kind // "unknown"),accountCount:null,
-      expiresAt:null,lastVerifiedAt:(if $ready then $observedAt else null end),
+      expiresAt:null,lastVerifiedAt:null,
       observedAt:$observedAt,nextAction:($p.webValidation.command // "linux/pz ai proxies ensure " + $p.id),
       secretsRedacted:true
     };
@@ -96,6 +108,7 @@ registry="$(jq -cn \
   ($claude[0] // {}) as $c |
   ($opencode[0] // {}) as $o |
   ($hermes[0] // {}) as $h |
+  ($openclaw[0] // {}) as $oc |
   ($odysseus[0] // {}) as $d |
   ([($proxies[0] // [])[] | select(.id == "kimiproxy" or .id == "qwenproxy" or .id == "deepsproxy" or .id == "mimo-ai-proxy") | proxy_entry]) as $proxyEntries |
   ([$connections | sort_by(.provider) | group_by(.provider)[] |
@@ -107,8 +120,9 @@ registry="$(jq -cn \
       required:false,installed:true,configured:($active > 0),authenticated:($healthy > 0),ready:($healthy > 0),
       status:(if $healthy > 0 then "ready" elif $active > 0 then "attention" else "disabled" end),
       method:"9router-managed",accountCount:($accounts|length),activeAccounts:$active,healthyAccounts:$healthy,
-      expiresAt:null,lastVerifiedAt:(if $healthy > 0 then $observedAt else null end),observedAt:$observedAt,
-      nextAction:"linux/pz ai 9router dashboard",secretsRedacted:true
+      expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     }
   ]) as $providerEntries |
   ([{
@@ -117,8 +131,9 @@ registry="$(jq -cn \
       authenticated:(($r.providers.active // 0) > 0),ready:($r.healthy == true),
       status:(if $r.healthy then "ready" elif $r.installed then "attention" else "missing" end),
       method:"provider-vault",accountCount:($r.providers.total // 0),expiresAt:null,
-      lastVerifiedAt:(if $r.healthy then $observedAt else null end),observedAt:$observedAt,
-      nextAction:"linux/pz ai 9router dashboard",secretsRedacted:true
+      lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     },{
       id:"client:opencode",label:"OpenCode",kind:"client",scope:"9router",required:true,
       installed:($o.cli.installed == true),configured:($o.configuration.configured == true),
@@ -126,7 +141,7 @@ registry="$(jq -cn \
       ready:($o.cli.installed == true and $o.configuration.configured == true and $o.credential.secure == true and $o.router.healthy == true),
       status:(if ($o.cli.installed == true and $o.configuration.configured == true and $o.credential.secure == true and $o.router.healthy == true) then "ready" elif $o.cli.installed then "attention" else "missing" end),
       method:"credential-reference",accountCount:null,expiresAt:null,
-      lastVerifiedAt:(if $o.router.healthy then $observedAt else null end),observedAt:$observedAt,
+      lastVerifiedAt:null,observedAt:$observedAt,
       nextAction:"linux/pz ai opencode verify",secretsRedacted:true
     },{
       id:"client:claude",label:"Claude",kind:"client",scope:"first-party",required:false,
@@ -134,7 +149,7 @@ registry="$(jq -cn \
       authenticated:($c.claude.auth.loggedIn == true),ready:($c.claude.installed == true and $c.claude.auth.loggedIn == true),
       status:(if ($c.claude.installed == true and $c.claude.auth.loggedIn == true) then "ready" elif $c.claude.installed then "action-required" else "missing" end),
       method:($c.claude.auth.authMethod // "unknown"),accountCount:null,expiresAt:null,
-      lastVerifiedAt:(if $c.claude.auth.loggedIn then $observedAt else null end),observedAt:$observedAt,
+      lastVerifiedAt:null,observedAt:$observedAt,
       nextAction:"linux/pz ai claude status",secretsRedacted:true
     },{
       id:"client:bonsai",label:"Bonsai",kind:"client",scope:"external-provider",required:false,
@@ -142,29 +157,54 @@ registry="$(jq -cn \
       authenticated:($c.bonsai.authenticated == true),ready:($c.bonsai.installed == true and $c.bonsai.authenticated == true and $c.bonsai.credentialStorePermissions.secure == true),
       status:(if ($c.bonsai.installed == true and $c.bonsai.authenticated == true and $c.bonsai.credentialStorePermissions.secure == true) then "ready" elif $c.bonsai.installed then "attention" else "missing" end),
       method:"external-session",accountCount:null,expiresAt:null,
-      lastVerifiedAt:(if $c.bonsai.authenticated then $observedAt else null end),observedAt:$observedAt,
+      lastVerifiedAt:null,observedAt:$observedAt,
       nextAction:"linux/pz ai claude login bonsai",secretsRedacted:true
     },{
       id:"workspace:hermes",label:"Hermes",kind:"workspace",scope:"agent",required:false,
-      installed:($h.installed == true),configured:($h.configured == true),authenticated:($h.auth.configured == true),ready:($h.ready == true),
-      status:(if $h.ready then "ready" elif $h.installed then "attention" else "missing" end),method:"env-reference",
-      accountCount:null,expiresAt:null,lastVerifiedAt:(if $h.ready then $observedAt else null end),observedAt:$observedAt,
-      nextAction:"linux/pz ai hermes doctor",secretsRedacted:true
+      installed:($h.installed == true),configured:($h.configured == true),
+      configurationReady:($h.configurationReady == true),authenticated:($h.auth.configured == true),ready:false,
+      status:(if $h.installed then "blocked" else "missing" end),method:"env-reference",
+      accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
+    },{
+      id:"workspace:openclaw",label:"OpenClaw",kind:"workspace",scope:"agent",required:false,
+      installed:($oc.available == true),configured:($oc.configExists == true),
+      authenticated:null,ready:false,
+      status:(if $oc.available == true then "blocked" else "missing" end),
+      method:"provider-managed",accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     },{
       id:"workspace:odysseus",label:"Odysseus",kind:"workspace",scope:"agent",required:false,
       installed:($d.installed == true),configured:($d.configured == true),authenticated:($d.routerCredential.configured == true),ready:($d.ready == true),
       status:(if $d.ready then "ready" elif $d.installed then "attention" else "blocked" end),method:"canonical-9router-reference",
-      accountCount:null,expiresAt:null,lastVerifiedAt:(if $d.ready then $observedAt else null end),observedAt:$observedAt,
-      nextAction:"linux/pz ai workspaces plan",secretsRedacted:true
+      accountCount:null,expiresAt:null,lastVerifiedAt:null,observedAt:$observedAt,
+      nextAction:"blocked:connection-grant-not-enforceable",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true
     }]) as $coreEntries |
-  ($coreEntries + $providerEntries + $proxyEntries) as $entries |
+  ([$coreEntries[] |
+    if .id == "gateway:9router" then degrade($routerProbe)
+    elif .id == "client:opencode" then degrade($opencodeProbe)
+    elif .id == "client:claude" or .id == "client:bonsai" then degrade($claudeProbe)
+    elif .id == "workspace:hermes" then degrade($hermesProbe)
+    elif .id == "workspace:openclaw" then degrade($openclawProbe)
+    elif .id == "workspace:odysseus" then degrade($odysseusProbe)
+    else . end] +
+    [$providerEntries[] | degrade($providersProbe)] +
+    [$proxyEntries[] | degrade($proxiesProbe)]) as $entries |
   {
     schemaVersion:1,observedAt:$observedAt,entries:$entries,
+    probes:{proxies:$proxiesProbe,router:$routerProbe,providers:$providersProbe,
+      claude:$claudeProbe,opencode:$opencodeProbe,hermes:$hermesProbe,openclaw:$openclawProbe,
+      odysseus:$odysseusProbe},
     summary:{
       total:($entries|length),ready:([$entries[]|select(.ready == true)]|length),
       attention:([$entries[]|select(.installed == true and .ready != true)]|length),
-      missingEssential:([$entries[]|select(.required == true and .ready != true)]|length),
-      providers:($providerEntries|length),accounts:([$providerEntries[].accountCount // 0]|add // 0)
+      missingEssential:([$entries[]|select(.required == true and .ready != true and .status != "unknown")]|length),
+      unknownEssential:([$entries[]|select(.required == true and .status == "unknown")]|length),
+      providers:(if $providersProbe == "ok" then ($providerEntries|length) else null end),
+      accounts:(if $providersProbe == "ok" then ([$providerEntries[].accountCount // 0]|add // 0) else null end)
     },
     secretsRedacted:true
   }
@@ -181,7 +221,9 @@ jq -cn --argjson registry "$registry" '
     schemaVersion:1,registry:$registry,
     issues:([
       $entries[] |
-      if (.required == true and .ready != true) then
+      if (.required == true and .status == "unknown") then
+        {severity:"warning",component:.id,message:(.label + " não pôde ser verificado"),nextAction:.nextAction}
+      elif (.required == true and .ready != true) then
         {severity:"error",component:.id,message:(.label + " essencial não está pronto"),nextAction:.nextAction}
       elif (.required != true and .installed == true and .ready != true) then
         {severity:"warning",component:.id,message:(.label + " precisa de atenção"),nextAction:.nextAction}

@@ -110,6 +110,13 @@ require_workload_release_gate() {
     return 69
 }
 
+require_connection_grant() {
+    pz_error "Hermes usage blocked: PhaseZero cannot bind an account grant to every request"
+    jq -cn '{schemaVersion:1,tool:"hermes",id:"hermes",status:"blocked",
+      usageBlocked:true,blockedReason:"connection-grant-not-enforceable",secretsRedacted:true}'
+    return 69
+}
+
 hermes_cmd() {
     command -v hermes 2>/dev/null || {
         [ -x "$LOCAL_BIN/hermes" ] && echo "$LOCAL_BIN/hermes" && return 0
@@ -546,7 +553,7 @@ path_is_local_regular() {
 
 status_json() {
     local cmd="" version="" mcp_count=0 sdk=false browser_sdk=false config_check=false doctor_ok=false
-    local installed=false configured=false ready=false auth=false config_safe=false mcp_ready=false distribution_ok=false risk=false
+    local installed=false configured=false ready=false configuration_ready=false auth=false config_safe=false mcp_ready=false distribution_ok=false risk=false
     local gateway_active=false gateway_enabled=false
     local auth_method="none"
     local config_mode="missing" env_mode="missing" state_mode="missing"
@@ -587,6 +594,8 @@ status_json() {
         [ "$distribution_ok" = true ]; then
         ready=true
     fi
+    configuration_ready="$ready"
+    ready=false
     jq -cn \
         --argjson schemaVersion 1 \
         --arg commandPath "$cmd" \
@@ -601,6 +610,7 @@ status_json() {
         --argjson available "$installed" \
         --argjson installed "$installed" \
         --argjson configured "$configured" \
+        --argjson configurationReady "$configuration_ready" \
         --argjson ready "$ready" \
         --argjson authConfigured "$auth" \
         --arg authMethod "$auth_method" \
@@ -618,8 +628,10 @@ status_json() {
         --argjson gatewayEnabled "$gateway_enabled" \
         --argjson configCheckOk "$config_check" \
         --argjson doctorOk "$doctor_ok" \
+        --arg blockedReason "connection-grant-not-enforceable" \
         '{schemaVersion:$schemaVersion,tool:"hermes",id:"hermes",available:$available,installed:$installed,
-          configured:$configured,ready:$ready,commandPath:$commandPath,version:$version,home:$hermesHome,
+          configured:$configured,configurationReady:$configurationReady,healthy:$gatewayActive,ready:$ready,
+          usageBlocked:true,blockedReason:$blockedReason,commandPath:$commandPath,version:$version,home:$hermesHome,
           configPath:$configPath,configExists:$configExists,configMode:$configMode,configPathSafe:$configPathSafe,
           envFile:$envFile,envExists:$envExists,envMode:$envMode,stateFile:$stateFile,stateExists:$stateExists,
           stateMode:$stateMode,auth:{configured:$authConfigured,method:$authMethod,secretsRedacted:true},
@@ -663,6 +675,7 @@ doctor_json() {
               if ($status.installed and ($status.browser.pythonSdk|not)) then {severity:"warning",component:"hermes",code:"hermes-browser-sdk-missing"} else empty end,
               if ($status.installed and ($status.gateway.active|not)) then {severity:"warning",component:"hermes",code:"hermes-gateway-inactive"} else empty end,
               if ($status.installed and ($status.gateway.enabled|not)) then {severity:"warning",component:"hermes",code:"hermes-gateway-disabled"} else empty end,
+              if $status.usageBlocked then {severity:"warning",component:"hermes",code:"connection-grant-not-enforceable"} else empty end,
               if ($status.configPathSafe|not) then {severity:"error",component:"hermes",code:"hermes-config-path-unsafe"} else empty end,
               if ($tailscaleAuthenticated|not) then {severity:"warning",component:"tailscale",code:"tailscale-unavailable"} else empty end
             ]),secretsRedacted:true}'
@@ -672,7 +685,7 @@ plan_json() {
     local doctor gate=false allowed=false
     doctor="$(doctor_json)"
     [ "${PZ_HOMELAB_ALLOW_HOST_WORKLOADS:-0}" = 1 ] && gate=true
-    if [ "$gate" = true ] && jq -e '.distribution.manifestValid == true and .distribution.installAllowed == true and
+    if [ "$gate" = true ] && jq -e '.usageBlocked != true and .distribution.manifestValid == true and .distribution.installAllowed == true and
         .distribution.policyAllowed == true' \
         >/dev/null 2>&1 <<< "$doctor"; then
         allowed=true
@@ -681,7 +694,8 @@ plan_json() {
         --arg home "$HERMES_HOME" --arg configPath "$HERMES_CONFIG" --arg envFile "$ENV_FILE" \
         --argjson doctor "$doctor" --argjson releaseGate "$gate" --argjson deploymentAllowed "$allowed" \
         '{schemaVersion:1,tool:"hermes",id:"hermes",mode:"read-only-plan",releaseGate:$releaseGate,
-          deploymentAllowed:$deploymentAllowed,ready:$doctor.ready,distribution:$doctor.distribution,
+          deploymentAllowed:$deploymentAllowed,ready:$doctor.ready,usageBlocked:true,
+          blockedReason:"connection-grant-not-enforceable",distribution:$doctor.distribution,
           home:$home,configPath:$configPath,envFile:$envFile,
           phases:["verify immutable source, installer and dependency chain","complete semantic security audit",
             "verify policy and release gate","stage isolated install",
@@ -690,30 +704,33 @@ plan_json() {
           blockers:(([if ($releaseGate|not) then "roadmap-host-deployment-blocked" else empty end,
             if ($doctor.distribution.manifestValid|not) then "hermes-distribution-manifest-invalid" else empty end,
             if ($doctor.distribution.installAllowed|not) then "hermes-distribution-unapproved" else empty end,
-            if ($doctor.distribution.policyAllowed|not) then "policy-denied" else empty end] +
+            if ($doctor.distribution.policyAllowed|not) then "policy-denied" else empty end,
+            if $doctor.status.usageBlocked then "connection-grant-not-enforceable" else empty end] +
             [$doctor.issues[]?.code]) | unique),secretsRedacted:true}'
 }
 
 case "${1:-setup}" in
     setup)
+        require_connection_grant
         require_workload_release_gate
         install_hermes
         configure_hermes
         install_gateway_service
         status_json
         ;;
-    install) require_workload_release_gate; install_hermes ;;
-    configure) require_workload_release_gate; configure_hermes ;;
-    mcp) require_workload_release_gate; bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync hermes ;;
+    install) require_connection_grant; require_workload_release_gate; install_hermes ;;
+    configure) require_connection_grant; require_workload_release_gate; configure_hermes ;;
+    mcp) require_connection_grant; require_workload_release_gate; bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync hermes ;;
     status) status_json ;;
     dry-run|plan) plan_json ;;
     doctor|diagnose) doctor_json ;;
     portal)
+        require_connection_grant
         require_workload_release_gate
         cmd="$(hermes_cmd || true)"
         [ -n "$cmd" ] || { pz_error "Hermes not installed"; exit 1; }
         "$cmd" setup --portal
         ;;
-    gateway) require_workload_release_gate; install_gateway_service ;;
+    gateway) require_connection_grant; require_workload_release_gate; install_gateway_service ;;
     *) echo "usage: setup-hermes.sh (setup|install|configure|mcp|gateway|status|doctor|dry-run|portal)"; exit 1 ;;
 esac

@@ -20,6 +20,7 @@ from linux.ui_native import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 # Module paths under linux/ui_native/ to audit for import-time AttributeError
 UI_MODULES: list[str] = [

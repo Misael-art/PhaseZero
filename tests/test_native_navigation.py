@@ -13,6 +13,7 @@ from linux.ui_native.widgets import Breadcrumb
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 
 @pytest.fixture(scope="module")
@@ -133,13 +134,49 @@ def test_routing_page_registered_in_sidebar_and_builds(qapp):
     ):
         window = MainWindow(ROOT)
         window.show_category("IA & Dev")
-        assert "Roteamento IA" in window.sidebar_buttons
+        assert "Roteamento IA" not in window.sidebar_buttons
+        ai_page = window.registry.page_for("IA & Dev")
+        ai_page.findChild(QPushButton, "openAiRoutingPage").click()
+        assert window.current_category == "Roteamento IA"
+        assert window.sidebar_buttons["IA & Dev"].isChecked()
+        assert "Inteligência artificial · Conexões avançadas" in window.breadcrumb.text
         page = window.registry.page_for("Roteamento IA")
         assert page is not None
         assert page.__class__.__name__ == "AiRoutingPage"
         for aid in ("ai.routing-status", "ai.routing-inventory", "ai.routing-verify",
                     "ai.routing-plan", "ai.routing-apply-all", "ai.routing-rollback"):
             assert aid in window.registry.by_id, aid
+        page.findChild(QPushButton, "backToAiHome").click()
+        assert window.current_category == "IA & Dev"
+        ai_page.findChild(QPushButton, "openAiProxiesPage").click()
+        assert window.current_category == "Proxies IA"
+        assert window.sidebar_buttons["IA & Dev"].isChecked()
+        assert "Inteligência artificial · Conexões avançadas" in window.breadcrumb.text
+        proxy_page = window.registry.page_for("Proxies IA")
+        proxy_page.findChild(QPushButton, "backToAiHome").click()
+        assert window.current_category == "IA & Dev"
+        window.close()
+
+
+def test_ai_and_account_destinations_have_separate_sidebar_groups(qapp):
+    from linux.ui_native.catalog import SIDEBAR_GROUPS
+    from linux.ui_native.main_window import MainWindow
+
+    groups = {name: categories for name, categories in SIDEBAR_GROUPS}
+    assert groups["Desenvolvimento"] == ("Desenvolvimento",)
+    assert groups["Inteligência artificial"] == ("IA & Dev",)
+    assert groups["Contas e conexões"] == ("Contas e conexões",)
+    assert "IA · Conexões avançadas" not in groups
+    assert "Proxies IA" not in {category for _group, categories in SIDEBAR_GROUPS for category in categories}
+    assert "Roteamento IA" not in {category for _group, categories in SIDEBAR_GROUPS for category in categories}
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        window.show_category("Roteamento IA")
+        assert "Inteligência artificial · Conexões avançadas" in window.breadcrumb.text
+        assert "Roteamento IA" in window.breadcrumb.text
         window.close()
 
 
@@ -148,10 +185,15 @@ def test_homelab_reachable_from_sidebar_and_registry(qapp):
     from linux.ui_native.catalog import CATEGORIES, SIDEBAR_GROUPS
     from linux.ui_native.main_window import MainWindow
 
+    from linux.ui_native.catalog import NESTED_CATEGORIES
+
     sidebar_categories = {cat for _title, cats in SIDEBAR_GROUPS for cat in cats}
     assert "Homelab" in sidebar_categories, "Homelab ausente da navegação (SIDEBAR_GROUPS)"
     # Toda categoria registrada deve ser navegável; nada pode ficar órfão.
-    orphans = [name for name, *_ in CATEGORIES if name not in sidebar_categories]
+    orphans = [
+        name for name, *_ in CATEGORIES
+        if name not in sidebar_categories and name not in NESTED_CATEGORIES
+    ]
     assert orphans == [], f"categorias fora do menu: {orphans}"
 
     with patch.object(MainWindow, "_host_summary"), patch(

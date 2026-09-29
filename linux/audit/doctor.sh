@@ -912,15 +912,8 @@ if jq -e '.agentConfigs.hermes.mcpServerCount > 0' <<< "$ai_status" >/dev/null 2
 else
     check AI_HERMES_MCP "Hermes MCP configured" WARN "run: linux/pz ai setup hermes"
 fi
-if jq -e '.agentConfigs.openclaw.mcpServerCount > 0' <<< "$ai_status" >/dev/null 2>&1; then
-    check AI_OPENCLAW_MCP "OpenClaw MCP configured" PASS "$(jq -r '.agentConfigs.openclaw.path' <<< "$ai_status")"
-else
-    check AI_OPENCLAW_MCP "OpenClaw MCP configured" WARN "run: linux/pz ai setup openclaw"
-fi
-if jq -e '.services.openclaw.active == true or .services["openclaw-gateway"].active == true' <<< "$ai_status" >/dev/null 2>&1; then
-    check AI_OPENCLAW_DAEMON "OpenClaw daemon active" PASS "user service"
-else
-    check AI_OPENCLAW_DAEMON "OpenClaw daemon active" INFO "optional: linux/ai/setup-openclaw.sh daemon"
+if jq -e '.clis.openclaw.available == true' <<< "$ai_status" >/dev/null 2>&1; then
+    check AI_OPENCLAW_USAGE "OpenClaw managed use" INFO "blocked: connection-grant-not-enforceable"
 fi
 if jq -e '.memory.installed == true' <<< "$ai_status" >/dev/null 2>&1; then
     if jq -e '.memory.serverReachable == true or .memory.configuredMarker == true or .memory.userServiceActive == true' <<< "$ai_status" >/dev/null 2>&1; then

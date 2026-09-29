@@ -35,6 +35,17 @@ class UiPreferences(QObject):
         self._settings.setValue("interface/theme", theme)
         self._settings.sync()
 
+    @property
+    def hide_account_identity(self) -> bool:
+        return self._settings.value("accounts/hideIdentity", False, type=bool)
+
+    def set_hide_account_identity(self, hidden: bool) -> None:
+        hidden = bool(hidden)
+        if hidden == self.hide_account_identity:
+            return
+        self._settings.setValue("accounts/hideIdentity", hidden)
+        self._settings.sync()
+
     def set_advanced_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)
         if enabled == self.advanced_mode:

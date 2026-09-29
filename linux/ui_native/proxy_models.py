@@ -76,6 +76,8 @@ class GatewayState:
     healthy: bool = False
     service: str = "unknown"
     detail: str = ""
+    usage_blocked: bool = False
+    blocked_reason: str = ""
 
     @property
     def label(self) -> str:
@@ -176,10 +178,18 @@ def parse_gateway_status(gateway_id: str, parsed: object) -> GatewayState:
             detail = "Autenticação pendente"
         else:
             detail = version or "Configuração validada"
+    usage_blocked = parsed.get("usageBlocked") is True
+    blocked_reason = parsed.get("blockedReason")
+    if not isinstance(blocked_reason, str):
+        blocked_reason = ""
+    if gateway_id == "hermes" and usage_blocked:
+        detail = "Uso bloqueado: grant por conexão não é aplicado a cada requisição."
     return GatewayState(
         id=gateway_id,
         installed=bool(parsed.get("installed", parsed.get("available"))),
         healthy=bool(parsed.get("healthy", parsed.get("ready"))),
         service=str(parsed.get("service", "unknown")),
         detail=detail,
+        usage_blocked=usage_blocked,
+        blocked_reason=blocked_reason,
     )

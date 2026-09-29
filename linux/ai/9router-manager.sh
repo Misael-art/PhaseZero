@@ -43,6 +43,13 @@ BACKUP_ROOT="$PROXY_ROOT/.9router-backups"
 CLIENT_WRAPPER="$LOCAL_BIN/phasezero-9router-run"
 DASHBOARD_ENTRY="${XDG_DATA_HOME:-$HOME/.local/share}/applications/phasezero-9router.desktop"
 
+connection_grant_blocked() {
+    jq -nc '{schemaVersion:1,ok:false,status:"blocked",
+      blockedReason:"connection-grant-not-enforceable",
+      summary:"Uso do 9Router bloqueado: não há vínculo de conta e consumidor aplicado por requisição.",
+      next:"Aguarde adapter com grant por requisição e rejeição de fallback."}'
+}
+
 ensure_dirs() {
     install -d -m 700 "$CONFIG_DIR" "$PROXY_ENV_DIR" "$DATA_DIR" "$STATE_DIR"
     install -d "$LOCAL_BIN" "$SYSTEMD_USER_DIR" "$INSTALL_ROOT" "$BACKUP_ROOT"
@@ -230,17 +237,8 @@ EOF
     pz_write_managed_file "$CLIENT_WRAPPER" user <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-[ -r "$ENV_FILE" ] || { echo "9Router environment missing" >&2; exit 1; }
-set -a
-source "$ENV_FILE"
-set +a
-export OPENAI_BASE_URL="$BASE_URL/v1"
-export OPENAI_API_KEY="\$PHASEZERO_9ROUTER_API_KEY"
-export ANTHROPIC_BASE_URL="$BASE_URL"
-export ANTHROPIC_API_KEY="\$PHASEZERO_9ROUTER_API_KEY"
-export ANTHROPIC_AUTH_TOKEN="\$PHASEZERO_9ROUTER_API_KEY"
-[ "\$#" -gt 0 ] || { echo "usage: phasezero-9router-run <command> [args...]" >&2; exit 2; }
-exec "\$@"
+jq -nc '{ok:false,status:"blocked",blockedReason:"connection-grant-not-enforceable",summary:"9Router client launch blocked until per-request grants are enforced."}'
+exit 69
 EOF
     chmod 0700 "$CLIENT_WRAPPER"
 
@@ -248,11 +246,11 @@ EOF
     pz_write_managed_file "$DASHBOARD_ENTRY" user <<EOF
 [Desktop Entry]
 Type=Application
-Name=9Router
-Comment=PhaseZero AI routing dashboard
+Name=9Router dashboard (uso bloqueado)
+Comment=Bloqueado: testes de provider podem consumir cota sem grant por requisição.
 Exec=$managed_pz ai 9router dashboard
 Icon=applications-science
-Terminal=false
+Terminal=true
 Categories=X-PhaseZero-WebApp;
 X-PHZ-Group=ia
 X-PhaseZero-MenuGroup=web.ai
@@ -530,7 +528,6 @@ install_9router() {
     fi
     wait_ready 90
     ensure_api_key
-    ensure_active_combo
     pz_info "9Router installed: $BASE_URL/dashboard"
 }
 
@@ -661,7 +658,7 @@ status_json() {
           combos:{total:(($combos.combos // $combos.data // [])|length),names:(($combos.combos // $combos.data // [])|map(.name))},
           usage:$usage,
           watchdog:{enabled:false,log:$healthLog},
-          nextAction:(if ($installed|not) then "linux/pz ai 9router install" elif ($health|not) then "linux/pz ai 9router start" elif (($providers.connections // [])|length)==0 then "Abra o dashboard e conecte um provider" else "linux/pz ai 9router combo sync" end)}' \
+          nextAction:(if ($installed|not) then "linux/pz ai 9router install" elif ($health|not) then "linux/pz ai 9router start" elif (($providers.connections // [])|length)==0 then "Abra o dashboard e conecte um provider" else "Uso por cliente bloqueado até grant por requisição" end)}' \
         | jq --argjson enabled "$(systemctl --user is-enabled "$WATCH_TIMER" >/dev/null 2>&1 && echo true || echo false)" '.watchdog.enabled=$enabled'
 }
 
@@ -679,28 +676,20 @@ usage_summary() {
 }
 
 test_9router() {
-    local key body code models_ok=false health_ok=false chat_status="provider-required" chat_code="" provider_count=0 model payload
+    local key body code models_ok=false health_ok=false provider_count=0
     curl -fsS --max-time 3 "$BASE_URL/api/health" >/dev/null 2>&1 && health_ok=true
     key="$(env_get PHASEZERO_9ROUTER_API_KEY)"
     body="$(curl -sS --max-time 10 -H "Authorization: Bearer $key" "$BASE_URL/v1/models" 2>/dev/null || true)"
     code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $key" "$BASE_URL/v1/models" 2>/dev/null || true)"
     jq -e '(.data // []) | type == "array"' <<< "$body" >/dev/null 2>&1 && [ "$code" = 200 ] && models_ok=true
     provider_count="$(api_request GET /api/providers 2>/dev/null | jq '(.connections // .providers // []) | map(select((.isActive // true)==true)) | length' 2>/dev/null || echo 0)"
-    if [ "$provider_count" -gt 0 ] && $models_ok; then
-        model="$(jq -r '.activeCombo // .model // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
-        [ -n "$model" ] || model="$(jq -r '.data[0].id // empty' <<< "$body")"
-        payload="$(mktemp)"
-        jq -n --arg model "$model" '{model:$model,messages:[{role:"user",content:"Reply only: OK"}],stream:false,max_tokens:8}' > "$payload"
-        chat_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 -X POST "$BASE_URL/v1/chat/completions" \
-            -H "Authorization: Bearer $key" -H 'Content-Type: application/json' --data-binary "@$payload" 2>/dev/null || true)"
-        rm -f "$payload"
-        [ "$chat_code" = 200 ] && chat_status=ok || chat_status=failed
-    fi
     jq -cn --arg endpoint "$BASE_URL/v1" --arg httpCode "$code" --argjson health "$health_ok" \
-        --arg chat "$chat_status" --arg chatHttpCode "$chat_code" --argjson providers "$provider_count" \
+        --argjson providers "$provider_count" \
         --argjson models "$models_ok" --argjson count "$(jq '(.data // []) | length' <<< "$body" 2>/dev/null || echo 0)" \
-        '{id:"9router",endpoint:$endpoint,health:$health,modelsEndpoint:$models,httpCode:$httpCode,modelCount:$count,providerCount:$providers,chat:$chat,chatHttpCode:$chatHttpCode}'
-    $health_ok && $models_ok && { [ "$provider_count" -eq 0 ] || [ "$chat_status" = ok ]; }
+        '{id:"9router",endpoint:$endpoint,health:$health,modelsEndpoint:$models,httpCode:$httpCode,
+          modelCount:$count,providerCount:$providers,chat:"blocked",
+          blockedReason:"connection-grant-not-enforceable"}'
+    $health_ok && $models_ok
 }
 
 provider_status() {
@@ -719,7 +708,11 @@ find_secrets_manifest() {
     return 1
 }
 
+# shellcheck disable=SC2317
+# PXA-008 keeps legacy provider writes unreachable until request-bound grants exist.
 sync_secrets() {
+    connection_grant_blocked
+    return 69
     local manifest provider secret name payload response imported=0 skipped=0
     manifest="${1:-}"
     [ -n "$manifest" ] || manifest="$(find_secrets_manifest || true)"
@@ -747,7 +740,11 @@ sync_secrets() {
         '{manifest:$manifest,imported:$imported,skipped:$skipped,secretsRedacted:true}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 provider_remove() {
+    connection_grant_blocked
+    return 69
     local id="${1:-}"
     [ -n "$id" ] || { pz_error "usage: pz ai 9router provider remove <connection-id>"; return 2; }
     api_request DELETE "/api/providers/$id" | jq 'del(.apiKey,.secret,.token)'
@@ -777,7 +774,11 @@ tier_models_json() {
       | jq -R -s 'split("\n") | map(select(length>0))'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 upsert_combo() {
+    connection_grant_blocked
+    return 69
     local name="$1" models="$2" combos id payload
     [ "$(jq 'length' <<< "$models")" -gt 0 ] || return 0
     combos="$(api_request GET /api/combos)"
@@ -790,7 +791,11 @@ upsert_combo() {
     rm -f "$payload"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_sync() {
+    connection_grant_blocked
+    return 69
     local free smart max
     free="$(tier_models_json free)"; smart="$(tier_models_json smart)"; max="$(tier_models_json max)"
     upsert_combo phasezero-free "$free"
@@ -804,7 +809,11 @@ combo_list() {
     api_request GET /api/combos | jq '{combos:(.combos // .data // [])|map({id,name,models})}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_create() {
+    connection_grant_blocked
+    return 69
     local name="${1:-}" csv="${2:-}" models payload
     if [ -z "$name" ] || [ -z "$csv" ]; then
         pz_error "usage: pz ai 9router combo create <name> <model1,model2>"
@@ -816,7 +825,11 @@ combo_create() {
     rm -f "$payload"
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 combo_switch() {
+    connection_grant_blocked
+    return 69
     local name="${1:-}" tmp
     [ -n "$name" ] || { pz_error "usage: pz ai 9router combo switch <name>"; return 2; }
     combo_list | jq -e --arg name "$name" '.combos[] | select(.name==$name)' >/dev/null || { pz_error "combo not found: $name"; return 1; }
@@ -826,7 +839,11 @@ combo_switch() {
     jq -cn --arg combo "$name" --arg settings "$SETTINGS_FILE" '{activeCombo:$combo,settings:$settings}'
 }
 
+# shellcheck disable=SC2317
+# PXA-008 retains this handler behind its request-bound grant gate.
 ensure_active_combo() {
+    connection_grant_blocked
+    return 69
     local combo_json current selected
     combo_json="$(combo_list)"
     current="$(jq -r '.activeCombo // .model // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
@@ -905,8 +922,8 @@ rollback_package() {
 
 client_status() {
     jq -cn --arg wrapper "$CLIENT_WRAPPER" --arg endpoint "$BASE_URL/v1" --arg model "$(jq -r '.model // "phasezero-smart"' "$SETTINGS_FILE" 2>/dev/null || echo phasezero-smart)" \
-        --argjson ready "$([ -x "$CLIENT_WRAPPER" ] && [ -n "$(env_get PHASEZERO_9ROUTER_API_KEY)" ] && echo true || echo false)" \
-        '{ready:$ready,wrapper:$wrapper,endpoint:$endpoint,model:$model,usage:"phasezero-9router-run <codex|claude|opencode|other> [args...]",secretsRedacted:true}'
+        --argjson ready false \
+        '{ready:$ready,wrapper:$wrapper,endpoint:$endpoint,model:$model,usage:"blocked until per-request connection grants are enforced",blockedReason:"connection-grant-not-enforceable",secretsRedacted:true}'
 }
 
 doctor_9router() {
@@ -932,16 +949,15 @@ doctor_9router() {
 }
 
 dashboard() {
-    command -v xdg-open >/dev/null 2>&1 || { pz_error "xdg-open missing"; return 1; }
-    xdg-open "$BASE_URL/dashboard" >/dev/null 2>&1 &
-    pz_info "9Router dashboard opened: $BASE_URL/dashboard"
+    connection_grant_blocked
+    return 69
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 case "$ACTION" in
     install|setup) install_9router ;;
     check-update|check) check_update ;;
-    update|upgrade) ensure_dirs; install_verified_package; ensure_api_key; ensure_active_combo ;;
+    update|upgrade) ensure_dirs; install_verified_package; ensure_api_key ;;
     rollback) rollback_package ;;
     doctor) doctor_9router ;;
     status) status_json ;;
@@ -972,7 +988,7 @@ case "$ACTION" in
     client)
         case "${1:-status}" in
             status|env) client_status ;;
-            run) shift; [ "$#" -gt 0 ] || { pz_error "usage: pz ai 9router client run <command> [args...]"; exit 2; }; exec "$CLIENT_WRAPPER" "$@" ;;
+            run) connection_grant_blocked; exit 69 ;;
             *) pz_error "usage: pz ai 9router client (status|run <command>)"; exit 2 ;;
         esac ;;
     watch-once) watch_once ;;

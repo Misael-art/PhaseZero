@@ -1,7 +1,7 @@
 {
   "schema": "https://phasezero.local/schemas/profile.json",
   "name": "dev-ai",
-  "description": "Developer workstation + AI toolchain setup",
+  "description": "Legacy opt-in bundle: developer tools, local AI, networking daemons and IDE setup scripts",
   "os": ["linux", "windows"],
   "packages": {
     "linux": {
@@ -71,7 +71,7 @@
       "linux/ai/setup-desktop-apps.sh",
       "linux/ai/setup-opencode.sh",
       "linux/ai/setup-hermes-optional.sh",
-      "linux/ai/setup-openclaw.sh",
+      "linux/ai/setup-openclaw-optional.sh",
       "linux/ai/setup-memory.sh",
       "linux/ai/setup-usagebar.sh",
       "linux/ai/setup-codexbar.sh",

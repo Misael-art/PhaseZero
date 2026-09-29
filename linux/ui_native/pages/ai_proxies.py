@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QStyle, QTextEdit, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QStyle, QVBoxLayout, QWidget,
 )
 
 from ..command_runner import CommandRunner
@@ -20,33 +19,37 @@ from .base import BasePage
 
 _DETAILED_KEY = "proxies.detailed-status"
 _POLL_MS = 5_000
-_MIMO_PLATFORM = "https://platform.xiaomimimo.com"
-
-ENSURE_ACTIONS: dict[str, str] = {
-    "kimiproxy": "ai.proxies-ensure-kimi",
-    "qwenproxy": "ai.proxies-ensure-qwen",
-    "deepsproxy": "ai.proxies-ensure-deeps",
-    "mimo-ai-proxy": "ai.proxies-ensure-mimo",
-}
+_CONSUMER_USAGE_BLOCKED = (
+    "Uso bloqueado: grant por conexão ainda não é aplicado em cada requisição. "
+    "Login ou proxy ativo não autoriza OpenCode, Continue ou ZCode."
+)
 STOP_ACTIONS: dict[str, str] = {
     "kimiproxy": "ai.proxies-stop-kimi",
     "qwenproxy": "ai.proxies-stop-qwen",
     "deepsproxy": "ai.proxies-stop-deeps",
     "mimo-ai-proxy": "ai.proxies-stop-mimo",
 }
-OPEN_ACTIONS: dict[str, str] = {
-    "kimiproxy": "ai.proxies-open-kimi",
-    "qwenproxy": "ai.proxies-open-qwen",
-    "deepsproxy": "ai.proxies-open-deeps",
-    "mimo-ai-proxy": "ai.proxies-open-mimo",
+_BLOCKED_CONSUMER_ACTIONS = {
+    *(f"ai.proxies-ensure-{suffix}" for suffix in ("kimi", "qwen", "deeps", "mimo", "all")),
+    *(f"ai.proxies-open-{suffix}" for suffix in ("kimi", "qwen", "deeps", "mimo")),
+    *(f"ai.proxies-start-{suffix}" for suffix in ("kimi", "qwen", "deeps", "mimo", "all")),
+    "ai.proxies-test", "ai.proxies.restart-one", "ai.proxies.test-one",
+    "ai.proxies-credentials-mimo", "ai.proxies-ides",
 }
-
 _PRIMARY_IDS = {
     "ai.proxies-ensure-kimi",
     "ai.proxies-ensure-qwen",
     "ai.proxies-ensure-deeps",
     "ai.proxies-ensure-mimo",
     "ai.proxies-ensure-all",
+    "ai.proxies-start-kimi",
+    "ai.proxies-start-qwen",
+    "ai.proxies-start-deeps",
+    "ai.proxies-start-mimo",
+    "ai.proxies-start-all",
+    "ai.proxies-test",
+    "ai.proxies.restart-one",
+    "ai.proxies.test-one",
     "ai.proxies-open-kimi",
     "ai.proxies-open-qwen",
     "ai.proxies-open-deeps",
@@ -90,87 +93,38 @@ def _set_state(widget: QWidget, state: str) -> None:
 def _friendly_proxy_copy(state: ProxyState) -> tuple[str, str, str]:
     """Return (headline, detail, semantic state) for simple-mode cards."""
     if not state.installed:
-        return "Precisa preparar", "Um clique instala, inicia e abre o login se faltar.", "warning"
+        return "Precisa preparar", "Preparação de uso indisponível até grant por conexão.", "warning"
     if state.crash_looping:
-        return "Falhando ao iniciar", "O serviço reinicia sem responder. Reinicie o proxy; se continuar, veja o log.", "error"
+        return "Falhando ao iniciar", "O serviço reinicia sem responder. Consulte o diagnóstico; ativação segue bloqueada.", "error"
     if state.auth_status == "login-running":
         return "Login no navegador", "Conclua o login na janela do Chromium.", "warning"
     if state.auth_status == "authenticated":
         if state.running:
-            return "Pronto", "Sessão válida. Pode usar nas IDEs.", "success"
-        return "Parado", "Sessão válida. Clique em Usar para ligar de novo.", "info"
+            return "Pronto", "Sessão válida; uso em IDEs segue bloqueado até grant por conexão.", "success"
+        return "Parado", "Sessão válida; ativação de consumidores segue bloqueada.", "info"
     if state.auth_status == "configured":
         if state.id == "mimo-ai-proxy" and state.auth_kind == "official-api-key":
-            return "Pronto", "API oficial configurada. Nenhum serviço local é necessário.", "success"
+            return "Pronto", "API oficial observada; uso por consumidor segue bloqueado.", "success"
         if state.running:
-            return "Pronto", "Credenciais configuradas.", "success"
-        return "Parado", "Clique em Usar para ligar.", "info"
+            return "Pronto", "Credenciais configuradas; uso por consumidor segue bloqueado.", "success"
+        return "Parado", "Ativação de consumidores segue bloqueada.", "info"
     if state.auth_status == "missing-credentials":
         if state.id == "mimo-ai-proxy":
-            return "Falta chave da API", "Abra API Service na Xiaomi e cole uma chave oficial.", "warning"
-        return "Falta credencial", "Abra o provedor e conclua a configuração.", "warning"
+            return "Falta chave da API", "Cadastre chave pelo cofre Contas; uso ainda requer grant executável.", "warning"
+        return "Falta credencial", "Conexão do provedor ainda não tem uso executável por consumidor.", "warning"
     if state.auth_status == "gui-required":
         return "Precisa do desktop", "Abra a Central no Linux gráfico para o login.", "error"
     if state.auth_status in _LOGIN_PENDING or state.auth_status == "session-present":
         if state.running:
-            return "Falta login", "Clique em Usar para abrir o navegador.", "warning"
-        return "Falta login", "Um clique inicia o proxy e abre o navegador.", "warning"
+            return "Falta login", "Sessão pendente; login não concede uso a consumidores.", "warning"
+        return "Falta login", "Sessão pendente; ativação segue bloqueada até grant por conexão.", "warning"
     if state.running:
-        return "Rodando", "Serviço local ativo.", "success"
-    return "Parado", "Clique em Usar para ligar.", "info"
-
-
-class MimoTokenDialog(QDialog):
-    """Configure Xiaomi's supported API without browser-session extraction."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Conectar Mimo")
-        self.setMinimumWidth(560)
-        layout = QVBoxLayout(self)
-        guide = QTextEdit()
-        guide.setReadOnly(True)
-        guide.setMaximumHeight(150)
-        guide.setPlainText(
-            "1. Clique em Abrir API Service e entre na conta Xiaomi.\n"
-            "2. Crie uma chave de API no portal oficial.\n"
-            "3. Cole a chave abaixo e salve.\n\n"
-            "A chave fica em arquivo protegido. Não copie cookies, cabeçalhos do "
-            "DevTools, user id ou tokens de sessão."
-        )
-        layout.addWidget(guide)
-        open_btn = QPushButton("Abrir API Service")
-        open_btn.setObjectName("primaryButton")
-        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(_MIMO_PLATFORM)))
-        layout.addWidget(open_btn)
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.Password)
-        self.api_key.setPlaceholderText("sk-… ou tp-…")
-        self.base_url = QLineEdit("https://api.xiaomimimo.com/v1")
-        self.model = QLineEdit("mimo-v2.5-pro")
-        for field, label in (
-            (self.api_key, "Chave da API"),
-            (self.base_url, "Endpoint oficial"),
-            (self.model, "Modelo"),
-        ):
-            layout.addWidget(QLabel(label))
-            field.setAccessibleName(label)
-            layout.addWidget(field)
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def payload(self) -> dict[str, str]:
-        return {
-            "apiKey": self.api_key.text().strip(),
-            "baseUrl": self.base_url.text().strip(),
-            "model": self.model.text().strip(),
-        }
+        return "Rodando", "Serviço local ativo; uso por consumidor segue bloqueado.", "success"
+    return "Parado", "Ativação de consumidores segue bloqueada até grant por conexão.", "info"
 
 
 class AiProxiesPage(BasePage):
-    """WinVM-style proxy surface: one Usar button runs install+start+login."""
+    """Read-only proxy health plus controls that do not bypass account grants."""
 
     def __init__(
         self, root: Path, runner: CommandRunner, actions: list[ActionSpec],
@@ -181,7 +135,6 @@ class AiProxiesPage(BasePage):
         self._gateway_rows: dict[str, dict[str, QWidget]] = {}
         self._gateway_state: dict[str, GatewayState] = {}
         self._proxy_state: dict[str, ProxyState] = {}
-        self._next_action_values: dict[str, str] = {}
         self._ide_values: dict[str, QLabel] = {}
         self._technical_widgets: list[QWidget] = []
         self._auth_group_labels: dict[str, QLabel] = {}
@@ -197,6 +150,10 @@ class AiProxiesPage(BasePage):
             action = self.by_id.get(action_id)
             if action is not None:
                 self.mark_represented(action)
+        back = QPushButton("‹ Inteligência artificial")
+        back.setObjectName("backToAiHome")
+        back.clicked.connect(lambda: self.request_category("IA & Dev"))
+        self._layout.addWidget(back)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -211,7 +168,7 @@ class AiProxiesPage(BasePage):
         layout.addWidget(self._build_provenance())
         layout.addWidget(SectionHeader(
             "Proxies individuais",
-            "Um clique instala, liga e abre o navegador se o login ainda faltar",
+            "Status somente leitura; uso aguarda grant por conexão aplicado a cada requisição",
         ))
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
@@ -227,7 +184,6 @@ class AiProxiesPage(BasePage):
         layout.addStretch()
         scroll.setWidget(inner)
         self._layout.addWidget(scroll, 1)
-        self.reload()
 
     def _install_context_status(self) -> None:
         return
@@ -262,10 +218,11 @@ class AiProxiesPage(BasePage):
         self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.reload)
         row.addWidget(self.refresh_button)
-        self.prepare_button = QPushButton("Preparar todos")
+        self.prepare_button = QPushButton("Uso bloqueado")
         self.prepare_button.setObjectName("primaryButton")
         self.prepare_button.setMinimumSize(160, 50)
-        self.prepare_button.clicked.connect(lambda: self.run_action("ai.proxies-ensure-all"))
+        self.prepare_button.setEnabled(False)
+        self.prepare_button.setToolTip(_CONSUMER_USAGE_BLOCKED)
         row.addWidget(self.prepare_button)
         return hero
 
@@ -280,20 +237,21 @@ class AiProxiesPage(BasePage):
         ))
         layout.addWidget(self._gateway_card(
             "hermes", "Hermes",
-            "Agente e canais remotos. Autenticação, MCPs e acesso seguro.",
+            "Uso bloqueado: Hermes aceita várias contas e endpoints, sem grant PhaseZero por requisição. Status e doctor seguem read-only.",
             "ai.hermes-doctor", "ai.hermes-doctor", "ai.hermes-status",
-            install_label="Diagnosticar", repair_label="Diagnosticar", open_label="Ver status",
+            install_label="Uso bloqueado", repair_label="Uso bloqueado", open_label="Uso bloqueado",
         ))
         layout.addWidget(self._gateway_card(
             "9router", "9Router",
-            "Painel local de modelos, cotas e fallbacks",
+            "Dashboard bloqueado: testes de provider podem enviar inferência sem grant por requisição.",
             "ai.9router-install", "ai.9router-repair", "ai.9router-dashboard",
+            open_label="Bloqueado",
         ))
         layout.addWidget(self._gateway_card(
             "odysseus", "Odysseus",
-            "Workspace experimental. Deploy exige Podman rootless, proveniência e release gate.",
+            "Uso bloqueado: workspace encaminha inferência pela credencial 9Router sem grant por requisição.",
             "ai.workspaces-plan", "ai.odysseus-doctor", "ai.odysseus-open",
-            install_label="Ver plano", repair_label="Diagnosticar", open_label="Abrir",
+            install_label="Ver plano", repair_label="Diagnosticar", open_label="Bloqueado",
         ))
         diagnostic_row = QHBoxLayout()
         diagnostic_row.addStretch()
@@ -351,11 +309,14 @@ class AiProxiesPage(BasePage):
         buttons = QHBoxLayout()
         buttons.addStretch()
         doctor = self._action_button("ai.auth-doctor", "Diagnosticar")
-        dashboard = self._action_button("ai.9router-dashboard", "Gerenciar providers")
+        dashboard_notice = QLabel(
+            "9Router e Odysseus bloqueados: dashboard/workspace podem enviar inferência sem grant por requisição."
+        )
+        dashboard_notice.setObjectName("accountGrantNotice")
+        dashboard_notice.setWordWrap(True)
         if doctor is not None:
             buttons.addWidget(doctor)
-        if dashboard is not None:
-            buttons.addWidget(dashboard)
+        buttons.addWidget(dashboard_notice, 1)
         layout.addLayout(buttons)
         return card
 
@@ -455,7 +416,9 @@ class AiProxiesPage(BasePage):
         use = QPushButton("Usar")
         use.setObjectName("primaryButton")
         use.setMinimumHeight(44)
-        use.setToolTip("Prepara o proxy e, quando estiver pronto, abre o OpenCode já no modelo.")
+        use.setText("Uso bloqueado")
+        use.setEnabled(False)
+        use.setToolTip(_CONSUMER_USAGE_BLOCKED)
         use.clicked.connect(lambda _checked=False, pid=proxy_id: self._on_use_clicked(pid))
         stop = self._action_button(STOP_ACTIONS.get(proxy_id, ""), "Parar")
         if stop is not None:
@@ -480,9 +443,9 @@ class AiProxiesPage(BasePage):
         layout.setSpacing(8)
         layout.addWidget(SectionHeader(
             "IDEs e agentes",
-            "Depois do proxy pronto, conecte OpenCode, Continue e ZCode",
+            "Configuração por IDE bloqueada até vínculo de conta por requisição",
         ))
-        self.ide_summary = QLabel("Verificando integração…")
+        self.ide_summary = QLabel(_CONSUMER_USAGE_BLOCKED)
         self.ide_summary.setObjectName("cardDescription")
         self.ide_summary.setWordWrap(True)
         layout.addWidget(self.ide_summary)
@@ -506,7 +469,7 @@ class AiProxiesPage(BasePage):
             self._technical_widgets.append(host)
         sync_row = QHBoxLayout()
         sync_row.addStretch()
-        sync_button = self._action_button("ai.proxies-ides", "Configurar IDEs (proxies)")
+        sync_button = self._action_button("ai.proxies-ides", "Uso por IDE bloqueado")
         if sync_button is not None:
             sync_row.addWidget(sync_button)
         layout.addLayout(sync_row)
@@ -519,52 +482,42 @@ class AiProxiesPage(BasePage):
         button = QPushButton(label)
         button.setObjectName("primaryButton" if action.mutable else "secondaryButton")
         button.setToolTip(action.description)
+        if action_id in _BLOCKED_CONSUMER_ACTIONS:
+            button.setEnabled(False)
+            button.setToolTip(_CONSUMER_USAGE_BLOCKED)
         button.clicked.connect(lambda _checked=False, a=action: self.request_action(a))
         return button
 
-    def consume_action_values(self, action: ActionSpec) -> dict[str, str]:
-        if action.id != "ai.proxies-credentials-mimo":
-            return {}
-        values = dict(self._next_action_values)
-        self._next_action_values = {}
-        return values
-
     def _on_use_clicked(self, proxy_id: str) -> None:
-        state = self._proxy_state.get(proxy_id)
-        if proxy_id == "mimo-ai-proxy" and (
-            state is None or state.auth_status == "missing-credentials"
-        ):
-            self._connect_mimo()
-            return
-        if state is not None and state.auth_status in {"authenticated", "configured"} and state.running:
-            self.run_action(OPEN_ACTIONS.get(proxy_id, ""))
-            return
-        self.run_action(ENSURE_ACTIONS.get(proxy_id, ""))
-
-    def _connect_mimo(self) -> None:
-        dialog = MimoTokenDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        payload = dialog.payload()
-        if not all(payload.values()):
-            return
-        import json
-        self._next_action_values = {"credentials": json.dumps(payload)}
-        credentials = self.by_id.get("ai.proxies-credentials-mimo")
-        open_action = self.by_id.get("ai.proxies-open-mimo")
-        if credentials is not None and open_action is not None:
-            self.request_actions([credentials, open_action])
-        elif credentials is not None:
-            self.request_action(credentials)
+        refs = self._cards.get(proxy_id)
+        detail = refs.get("detail") if refs else None
+        if isinstance(detail, QLabel):
+            detail.setText(_CONSUMER_USAGE_BLOCKED)
 
     def _gateway_use(self, gateway_id: str) -> None:
         refs = self._gateway_rows.get(gateway_id) or {}
         state = self._gateway_state.get(gateway_id)
+        if gateway_id == "hermes":
+            detail = refs.get("detail")
+            if isinstance(detail, QLabel):
+                detail.setText("Uso bloqueado: grant por conexão não é aplicado a cada requisição.")
+            return
         if state is None or not state.installed:
             self.run_action(str(refs.get("install") or ""))
             return
         if not state.healthy:
             self.run_action(str(refs.get("repair") or refs.get("install") or ""))
+            return
+        if gateway_id in {"9router", "odysseus"}:
+            detail = refs.get("detail")
+            if isinstance(detail, QLabel):
+                reason = (
+                    "Dashboard bloqueado: testes de provider podem enviar inferência e consumir cota "
+                    "sem grant por requisição."
+                    if gateway_id == "9router" else
+                    "Uso bloqueado: workspace encaminha inferência pela credencial 9Router sem grant por requisição."
+                )
+                detail.setText(reason)
             return
         self.run_action(str(refs.get("open") or ""))
 
@@ -602,13 +555,21 @@ class AiProxiesPage(BasePage):
             use = refs.get("use")
             stop = refs.get("stop")
             if isinstance(use, QPushButton):
-                use.setEnabled(not running)
+                use.setEnabled(False)
+                use.setText("Uso bloqueado")
+                use.setToolTip(_CONSUMER_USAGE_BLOCKED)
             if isinstance(stop, QPushButton):
                 stop.setEnabled(not running)
-        for refs in self._gateway_rows.values():
+        for gateway_id, refs in self._gateway_rows.items():
             use = refs.get("use")
             if isinstance(use, QPushButton):
-                use.setEnabled(not running)
+                state = self._gateway_state.get(gateway_id)
+                permanently_blocked = bool(
+                    gateway_id == "hermes"
+                    or state is not None and state.id in {"9router", "odysseus"}
+                    and state.installed and state.healthy
+                )
+                use.setEnabled(not running and not permanently_blocked)
         if not running and self.isVisible():
             self.reload()
 
@@ -650,6 +611,12 @@ class AiProxiesPage(BasePage):
                 status = refs.get("status")
                 if isinstance(status, QLabel):
                     status.setText("Status indisponível")
+                if gateway_id == "hermes":
+                    use = refs.get("use")
+                    if isinstance(use, QPushButton):
+                        use.setText("Uso bloqueado")
+                        use.setEnabled(False)
+                        use.setToolTip("Grant por conexão não pode ser aplicado a cada requisição Hermes.")
         elif action_id == "ai.auth-registry":
             self.auth_summary.setText("Autenticação indisponível. Tente atualizar.")
             _set_state(self.auth_summary, "error")
@@ -665,8 +632,11 @@ class AiProxiesPage(BasePage):
         ready = int(summary.get("ready") or 0)
         total = int(summary.get("total") or len(entries))
         attention = int(summary.get("attention") or 0)
-        accounts = int(summary.get("accounts") or 0)
+        accounts = summary.get("accounts")
+        account_label = f"{int(accounts)} contas catalogadas" if isinstance(accounts, int) else "contas não informadas"
         missing_essential = int(summary.get("missingEssential") or 0)
+        probes = parsed.get("probes") if isinstance(parsed.get("probes"), dict) else {}
+        partial = any(state != "ok" for state in probes.values())
         if missing_essential:
             self.auth_summary.setText(
                 f"{missing_essential} integração essencial pendente · {ready}/{total} prontas"
@@ -674,12 +644,14 @@ class AiProxiesPage(BasePage):
             _set_state(self.auth_summary, "error")
         elif attention:
             self.auth_summary.setText(
-                f"{ready}/{total} prontas · {attention} pedem atenção · {accounts} contas catalogadas"
+                f"{ready}/{total} prontas · {attention} pedem atenção · {account_label}"
             )
             _set_state(self.auth_summary, "warning")
         else:
-            self.auth_summary.setText(f"{ready}/{total} prontas · {accounts} contas catalogadas")
-            _set_state(self.auth_summary, "success")
+            self.auth_summary.setText(f"{ready}/{total} prontas · {account_label}")
+            _set_state(self.auth_summary, "warning" if partial else "success")
+        if partial:
+            self.auth_summary.setText("Verificação parcial · " + self.auth_summary.text())
 
         groups = {
             "core": [entry for entry in entries if entry.get("id") in {"gateway:9router", "client:opencode", "client:claude", "client:bonsai"}],
@@ -691,13 +663,27 @@ class AiProxiesPage(BasePage):
             label = self._auth_group_labels.get(group_id)
             if label is None:
                 continue
+            group_probes = {
+                "core": ("router", "opencode", "claude"),
+                "providers": ("providers",),
+                "proxies": ("proxies",),
+                "workspaces": ("hermes", "odysseus"),
+            }[group_id]
+            if any(probes.get(name, "ok") != "ok" for name in group_probes):
+                label.setText("Status indisponível · tente atualizar")
+                continue
             group_ready = sum(1 for row in rows if row.get("ready") is True)
             pending = [str(row.get("label") or row.get("id")) for row in rows if row.get("ready") is not True]
-            suffix = ""
+            suffixes = []
             if pending:
                 visible = ", ".join(pending[:4])
                 remaining = len(pending) - 4
-                suffix = f" · revisar: {visible}" + (f" +{remaining}" if remaining > 0 else "")
+                suffixes.append(f"revisar: {visible}" + (f" +{remaining}" if remaining > 0 else ""))
+            blocked = [str(row.get("label") or row.get("id")) for row in rows
+                       if row.get("usageBlocked") is True]
+            if blocked:
+                suffixes.append("uso bloqueado: " + ", ".join(blocked[:4]))
+            suffix = " · " + " · ".join(suffixes) if suffixes else ""
             label.setText(f"{group_ready}/{len(rows)} prontas{suffix}")
 
     def _apply_gateway(self, state: GatewayState) -> None:
@@ -714,13 +700,29 @@ class AiProxiesPage(BasePage):
         if isinstance(detail, QLabel):
             detail.setText(state.detail or str(refs.get("description") or ""))
         if isinstance(use, QPushButton):
-            if not state.installed:
+            if state.id == "hermes":
+                use.setText("Uso bloqueado")
+            elif not state.installed:
                 use.setText(str(refs.get("install_label") or "Instalar"))
             elif not state.healthy:
                 use.setText(str(refs.get("repair_label") or "Reparar"))
             else:
                 use.setText(str(refs.get("open_label") or "Abrir"))
-            use.setEnabled(True)
+            dashboard_blocked = (
+                state.id == "hermes"
+                or state.id in {"9router", "odysseus"} and state.installed and state.healthy
+            )
+            use.setEnabled(not dashboard_blocked)
+            if dashboard_blocked:
+                use.setToolTip(
+                    "Bloqueado: Hermes não aplica grants por conexão a cada requisição."
+                    if state.id == "hermes" else
+                    "Bloqueado: o dashboard pode enviar inferência sem grant por requisição."
+                    if state.id == "9router" else
+                    "Bloqueado: o workspace encaminha inferência pela credencial 9Router sem grant por requisição."
+                )
+            else:
+                use.setToolTip("")
 
     def _apply_provenance(self, parsed: object) -> None:
         if not isinstance(parsed, dict):
@@ -787,28 +789,11 @@ class AiProxiesPage(BasePage):
                 extra = ""
                 if self._advanced_mode and state.auth_missing:
                     extra = f" Falta: {', '.join(state.auth_missing)}."
-                detail.setText(copy + extra)
+                detail.setText(copy + extra + " " + _CONSUMER_USAGE_BLOCKED)
             if isinstance(use, QPushButton):
-                if state.auth_status == "login-running":
-                    use.setText("Login aberto…")
-                    use.setEnabled(True)
-                    use.setToolTip("Se a janela sumiu, clique de novo para reabrir o login.")
-                elif state.auth_status == "missing-credentials":
-                    use.setText("Conectar conta")
-                    use.setEnabled(True)
-                elif not state.installed:
-                    use.setText("Usar")
-                    use.setEnabled(True)
-                elif state.running and state.auth_status in {"authenticated", "configured"}:
-                    use.setText("Abrir no OpenCode")
-                    use.setEnabled(True)
-                elif state.auth_status == "session-present":
-                    use.setText("Usar")
-                    use.setEnabled(True)
-                    use.setToolTip("Sessão salva, mas o chat ainda precisa de um login válido. Clique para abrir o navegador.")
-                else:
-                    use.setText("Usar")
-                    use.setEnabled(True)
+                use.setText("Uso bloqueado")
+                use.setEnabled(False)
+                use.setToolTip(_CONSUMER_USAGE_BLOCKED)
             if isinstance(stop, QPushButton):
                 stop.setEnabled(state.installed and state.running)
             if state.auth_status in {"authenticated", "configured"} and state.running:
@@ -822,27 +807,27 @@ class AiProxiesPage(BasePage):
         self.refresh_button.setEnabled(True)
         if missing and not ready:
             self.state_label.setText("● Precisa preparar")
-            self.state_detail.setText("Clique em Usar em um proxy — instalação, serviço e login andam juntos.")
+            self.state_detail.setText("Uso indisponível até vínculo de conta por consumidor.")
             _set_state(self.state_label, "warning")
         elif login:
             self.state_label.setText("● Falta login")
-            self.state_detail.setText("Conclua o login no navegador. O proxy inicia sozinho depois.")
+            self.state_detail.setText("Login não autoriza uso em IDEs; grant executável continua pendente.")
             _set_state(self.state_label, "warning")
         elif ready:
             self.state_label.setText("● Pronto")
-            self.state_detail.setText(f"{ready} proxies prontos para as IDEs")
+            self.state_detail.setText(f"{ready} conexões observadas; uso em IDEs bloqueado até grant por requisição.")
             _set_state(self.state_label, "success")
         else:
             self.state_label.setText("● Parado")
-            self.state_detail.setText("Proxies instalados. Clique em Usar para ligar.")
+            self.state_detail.setText("Serviços parados; ativação por consumidor segue bloqueada.")
             _set_state(self.state_label, "info")
 
     def _apply_ide(self, ide: IdeIntegrationState) -> None:
         wired = ide.opencode_providers + ide.continue_models + ide.zcode_providers
-        if wired:
-            self.ide_summary.setText("OpenCode, Continue e ZCode já veem os proxies locais.")
-        else:
-            self.ide_summary.setText("Ainda não conectado. Um clique injeta os proxies nas IDEs.")
+        self.ide_summary.setText(
+            f"{wired} configurações locais observadas. Isso não prova autorização; "
+            "uso por consumidor segue bloqueado até grant por requisição."
+        )
         default_hint = f" (padrão: {ide.default_proxy})" if ide.default_proxy else ""
         values = {
             "opencode": f"{ide.opencode_providers} providers",

@@ -86,6 +86,10 @@ write_stub curl <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
+write_stub xdg-open <<SH
+#!/usr/bin/env bash
+printf '%s\\n' called >> "$TMP_ROOT/odysseus-open-called"
+SH
 
 write_stub ss <<'SH'
 #!/usr/bin/env bash
@@ -184,12 +188,27 @@ test ! -e "$HOME/checksum-bypass-hermes"
 
 odysseus_status="$(PZ_ODYSSEUS_ROOT="$HOME/odysseus" bash "$ROOT/linux/ai/odysseus-manager.sh" status)"
 jq -e '.schemaVersion == 1 and .installed == false and .configured == false and .ready == false
+    and .usageBlocked == true and .blockedReason == "connection-grant-not-enforceable"
     and .provenance.releaseAudit.manifestValid == true
     and .provenance.releaseAudit.approvedForDeploy == false
     and .provenance.releaseAudit.baseImagesPinned == true
     and .provenance.releaseAudit.pythonDependenciesLocked == false
     and .secretsRedacted == true' \
     <<< "$odysseus_status" >/dev/null
+
+for action in install start restart update open; do
+    set +e
+    odysseus_action_output="$(PZ_ODYSSEUS_ROOT="$HOME/odysseus" \
+        bash "$ROOT/linux/ai/odysseus-manager.sh" "$action" 2>&1)"
+    odysseus_action_rc=$?
+    set -e
+    test "$odysseus_action_rc" -eq 69
+    jq -e '.status == "blocked" and .blockedReason == "connection-grant-not-enforceable"' \
+        <<< "$odysseus_action_output" >/dev/null
+done
+test ! -e "$TMP_ROOT/odysseus-open-called"
+grep -Fq 'Name=Odysseus (uso bloqueado)' "$ROOT/linux/ai/odysseus-manager.sh"
+grep -Fq 'Terminal=true' "$ROOT/linux/ai/odysseus-manager.sh"
 
 set +e
 PZ_ODYSSEUS_ROOT="$HOME/gated-odysseus" bash "$ROOT/linux/ai/odysseus-manager.sh" install >/dev/null 2>&1

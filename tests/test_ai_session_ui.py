@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton, QWidget
 
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.models import OperationResult
 from linux.ui_native.operation_ledger import OperationLedger
 from linux.ui_native.pages.ai_dev import AiDevPage
-from linux.ui_native.pages.ai_proxies import AiProxiesPage, MimoTokenDialog
+from linux.ui_native.pages.ai_proxies import AiProxiesPage
 from linux.ui_native.pages.ai_routing import AiRoutingPage
 from linux.ui_native.pages.results import ResultsPage
 from linux.ui_native.pages.registry import PageRegistry
@@ -73,13 +74,28 @@ def test_registry_uses_dedicated_ai_pages():
     assert PageRegistry._CATEGORY_PAGES["Roteamento IA"] is AiRoutingPage
 
 
-def test_main_window_skips_preview_for_ensure():
+def test_bonsai_run_waits_for_account_bound_grant(routing_page):
+    page, _actions = routing_page
+    button = next(
+        child for child in page.findChildren(QPushButton)
+        if child.text().startswith("Executar Claude via Bonsai")
+    )
+    assert not button.isEnabled()
+    assert "grant por conexão" in button.toolTip()
+    warning = next(
+        child for child in page.findChildren(QLabel)
+        if "consentimento de upload não autoriza inferência" in child.text()
+    )
+    assert "indisponível" in warning.text()
+
+
+def test_main_window_previews_every_mutable_action():
     src = (ROOT / "linux/ui_native/main_window.py").read_text(encoding="utf-8")
-    assert "ai.proxies-ensure" in src
-    assert "preview=action.mutable and not skip_preview" in src
+    assert "preview=action.mutable, values=values" in src
+    assert "skip_preview" not in src
 
 
-def test_ensure_actions_are_the_primary_proxy_flow(by_id):
+def test_proxy_usage_actions_remain_explicitly_blocked(by_id):
     for action_id, proxy in (
         ("ai.proxies-ensure-kimi", "kimiproxy"),
         ("ai.proxies-ensure-qwen", "qwenproxy"),
@@ -91,10 +107,13 @@ def test_ensure_actions_are_the_primary_proxy_flow(by_id):
         assert action.mutable
         assert action.args == ("ai", "proxies", "ensure", proxy)
         assert action.preview_args == ("ai", "proxies", "ensure", proxy, "--dry-run")
-        assert action.visibility != "advanced"
+        assert "grant" in action.description.lower()
+    assert by_id["ai.proxies-start-all"].mutable
+    assert "bloqueado" in by_id["ai.proxies-test"].title.lower()
     assert by_id["ai.proxies"].visibility == "advanced"
     assert by_id["ai.proxies-start-qwen"].visibility == "advanced"
     assert by_id["ai.proxies-login-qwen"].visibility == "advanced"
+    assert "não testa inferência nem inicia o serviço" in by_id["ai.proxies-login-qwen"].description
     assert by_id["ai.proxies-open-qwen"].args == ("ai", "proxies", "open", "qwenproxy")
     assert not by_id["ai.proxies-open-qwen"].mutable
     assert by_id["ai.proxies-credentials-mimo"].stdin_parameter == "credentials"
@@ -130,7 +149,7 @@ def test_proxies_page_covers_all_catalog_actions(proxies_page):
     assert {action.id for action in actions} <= page.represented_action_ids
 
 
-def test_proxies_page_usar_is_one_click_ensure(proxies_page):
+def test_proxies_page_disables_unbound_consumer_use(proxies_page):
     page, _actions = proxies_page
     labels = []
     hero = page.prepare_button.parentWidget()
@@ -138,15 +157,17 @@ def test_proxies_page_usar_is_one_click_ensure(proxies_page):
         widget = hero.layout().itemAt(index).widget()
         if isinstance(widget, QPushButton):
             labels.append(widget.text())
-    assert labels == ["Atualizar", "Preparar todos"]
+    assert labels == ["Atualizar", "Uso bloqueado"]
     qwen = page._cards["qwenproxy"]
     use = qwen["use"]
     assert isinstance(use, QPushButton)
-    assert use.text() == "Usar"
-    spy = []
-    page.action_requested.connect(lambda action: spy.append(action.id))
+    assert use.text() == "Uso bloqueado"
+    assert not use.isEnabled()
+    assert not page.prepare_button.isEnabled()
+    selected = []
+    page.action_selected.connect(lambda action: selected.append(action.id))
     use.click()
-    assert spy == ["ai.proxies-ensure-qwen"]
+    assert selected == []
 
 
 def test_proxies_page_hides_ports_in_simple_mode(proxies_page):
@@ -158,7 +179,7 @@ def test_proxies_page_hides_ports_in_simple_mode(proxies_page):
     assert not port.isHidden()
 
 
-def test_ready_qwen_button_opens_opencode(proxies_page):
+def test_unbound_proxy_consumer_use_and_ide_sync_are_blocked(proxies_page):
     page, _actions = proxies_page
     page._apply_proxies({
         "qwenproxy": ProxyState(
@@ -172,12 +193,25 @@ def test_ready_qwen_button_opens_opencode(proxies_page):
     })
     qwen_use = page._cards["qwenproxy"]["use"]
     mimo_use = page._cards["mimo-ai-proxy"]["use"]
-    assert qwen_use.text() == "Abrir no OpenCode"
-    assert mimo_use.text() == "Conectar conta"
-    spy = []
-    page.action_requested.connect(lambda action: spy.append(action.id))
-    qwen_use.click()
-    assert spy == ["ai.proxies-open-qwen"]
+    assert not qwen_use.isEnabled()
+    assert not mimo_use.isEnabled()
+    assert "grant por conexão" in qwen_use.toolTip()
+    with patch.object(page, "run_action") as run_action:
+        page._on_use_clicked("qwenproxy")
+        page._on_use_clicked("mimo-ai-proxy")
+        run_action.assert_not_called()
+    ide_setup = next(
+        button for button in page.findChildren(QPushButton)
+        if button.text() == "Uso por IDE bloqueado"
+    )
+    assert not ide_setup.isEnabled()
+    assert "grant por conexão" in ide_setup.toolTip()
+    for action_id in (
+        "ai.proxies-start-all", "ai.proxies-test", "ai.proxies-credentials-mimo",
+        "ai.proxies.restart-one", "ai.proxies.test-one",
+    ):
+        blocked = page._action_button(action_id, "Blocked action")
+        assert blocked is not None and not blocked.isEnabled()
 
 
 def test_proxies_page_translates_status_into_human_copy(proxies_page):
@@ -212,12 +246,19 @@ def test_proxies_page_integrates_hermes_and_safe_odysseus_plan(proxies_page):
     page._proxy_status_ready("ai.hermes-status", "", {
         "installed": True,
         "ready": False,
+        "configurationReady": True,
+        "usageBlocked": True,
+        "blockedReason": "connection-grant-not-enforceable",
         "version": "0.20.5",
         "auth": {"configured": False},
     })
     hermes = page._gateway_rows["hermes"]
-    assert hermes["use"].text() == "Diagnosticar"
-    assert hermes["detail"].text() == "Autenticação pendente"
+    assert hermes["use"].text() == "Uso bloqueado"
+    assert not hermes["use"].isEnabled()
+    assert "grant por conexão" in hermes["detail"].text()
+    with patch.object(page, "run_action") as run_action:
+        page._gateway_use("hermes")
+    run_action.assert_not_called()
     page._proxy_status_ready("ai.odysseus-status", "", {
         "installed": False, "ready": False, "podmanRootless": True,
     })
@@ -225,11 +266,42 @@ def test_proxies_page_integrates_hermes_and_safe_odysseus_plan(proxies_page):
     assert odysseus["use"].text() == "Ver plano"
 
 
+def test_proxies_page_blocks_9router_dashboard_when_healthy(proxies_page):
+    page, _actions = proxies_page
+    page._proxy_status_ready("ai.9router-status", "", {
+        "installed": True, "healthy": True, "service": "active",
+    })
+    router = page._gateway_rows["9router"]
+    assert router["use"].text() == "Bloqueado"
+    assert not router["use"].isEnabled()
+    assert "sem grant por requisição" in router["use"].toolTip()
+    with patch.object(page, "run_action") as run_action:
+        router["use"].click()
+        page._gateway_use("9router")
+    run_action.assert_not_called()
+    assert not any(button.text() == "Gerenciar providers" for button in page.findChildren(QPushButton))
+
+
+def test_proxies_page_blocks_odysseus_workspace_when_healthy(proxies_page):
+    page, _actions = proxies_page
+    page._proxy_status_ready("ai.odysseus-status", "", {
+        "installed": True, "configured": True, "healthy": True, "service": "active",
+    })
+    odysseus = page._gateway_rows["odysseus"]
+    assert odysseus["use"].text() == "Bloqueado"
+    assert not odysseus["use"].isEnabled()
+    assert "sem grant por requisição" in odysseus["use"].toolTip()
+    with patch.object(page, "run_action") as run_action:
+        odysseus["use"].click()
+        page._gateway_use("odysseus")
+    run_action.assert_not_called()
+
+
 def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_page):
     page, _actions = proxies_page
     page._proxy_status_ready("ai.auth-registry", "", {
         "summary": {
-            "total": 6, "ready": 3, "attention": 2,
+            "total": 7, "ready": 4, "attention": 2,
             "missingEssential": 0, "accounts": 12,
         },
         "entries": [
@@ -239,34 +311,32 @@ def test_proxies_page_catalogues_redacted_auth_without_account_identity(proxies_
             {"id": "provider:codex", "label": "CODEX", "ready": False},
             {"id": "proxy:mimo-ai-proxy", "label": "Mimo Proxy", "ready": False},
             {"id": "workspace:hermes", "label": "Hermes", "ready": False},
+            {"id": "workspace:odysseus", "label": "Odysseus", "ready": True,
+             "usageBlocked": True, "blockedReason": "connection-grant-not-enforceable"},
         ],
         "secretsRedacted": True,
     })
     assert "12 contas catalogadas" in page.auth_summary.text()
     assert "CODEX" in page._auth_group_labels["providers"].text()
     assert "Mimo Proxy" in page._auth_group_labels["proxies"].text()
+    assert "uso bloqueado: Odysseus" in page._auth_group_labels["workspaces"].text()
     rendered = " ".join(label.text() for label in page._auth_group_labels.values())
     assert "@" not in rendered and "token" not in rendered.casefold()
 
 
-def test_mimo_credentials_continue_to_opencode_automatically(
-    proxies_page, monkeypatch,
-):
+def test_auth_probe_failure_does_not_render_zero_accounts(proxies_page):
     page, _actions = proxies_page
-    monkeypatch.setattr(MimoTokenDialog, "exec", lambda _self: MimoTokenDialog.Accepted)
-    monkeypatch.setattr(MimoTokenDialog, "payload", lambda _self: {
-        "apiKey": "sk-secret-value", "baseUrl": "https://api.xiaomimimo.com/v1",
-        "model": "mimo-v2.5-pro",
+    page._proxy_status_ready("ai.auth-registry", "", {
+        "summary": {"total": 1, "ready": 0, "attention": 0,
+                    "missingEssential": 0, "accounts": None},
+        "entries": [{"id": "gateway:9router", "label": "9Router", "ready": None,
+                     "status": "unknown"}],
+        "probes": {"router": "timeout", "providers": "backend-unavailable"},
+        "secretsRedacted": True,
     })
-    monkeypatch.setattr(
-        "linux.ui_native.pages.ai_proxies.QDesktopServices.openUrl", lambda _url: True,
-    )
-    queued = []
-    page.actions_requested.connect(
-        lambda actions: queued.append([action.id for action in actions])
-    )
-    page._connect_mimo()
-    assert queued == [["ai.proxies-credentials-mimo", "ai.proxies-open-mimo"]]
+    assert "Verificação parcial" in page.auth_summary.text()
+    assert "contas não informadas" in page.auth_summary.text()
+    assert "Status indisponível" in page._auth_group_labels["providers"].text()
 
 
 def test_interrupted_operation_can_retry_only_through_confirmation_flow(
@@ -293,6 +363,26 @@ def test_interrupted_operation_can_retry_only_through_confirmation_flow(
 def test_ai_dev_page_covers_all_catalog_actions(ai_dev_page):
     page, actions = ai_dev_page
     assert page.represented_action_ids == {action.id for action in actions}
+
+
+def test_ai_dev_app_shortcut_opens_canonical_detail_instead_of_running_directly(ai_dev_page):
+    page, _actions = ai_dev_page
+    selected = []
+    requested = []
+    page.action_selected.connect(lambda action: selected.append(action.id))
+    page.action_requested.connect(lambda action: requested.append(action.id))
+
+    opencode_card = next(
+        card for card in page.findChildren(QWidget)
+        if card.property("cliKey") == "opencode"
+    )
+    configure = next(
+        button for button in opencode_card.findChildren(QPushButton)
+        if button.text() == "Verificar"
+    )
+    configure.click()
+    assert selected == ["ai.opencode-verify"]
+    assert requested == []
 
 
 def test_ai_dev_page_hero_uses_status_payload(ai_dev_page):
@@ -340,7 +430,7 @@ def test_routing_hides_technical_surfaces_in_simple_mode(routing_page):
     page, _actions = routing_page
     boxes = page.findChildren(QGroupBox)
     titles = {box.title() for box in boxes}
-    assert "Ordem avançada de fallbacks" in titles
+    assert "Cadeia sugerida (somente leitura)" in titles
     assert "Rollback transacional" in titles
     for widget in page._technical_widgets:
         assert widget.isHidden()
@@ -349,24 +439,24 @@ def test_routing_hides_technical_surfaces_in_simple_mode(routing_page):
         assert not widget.isHidden()
 
 
-def test_routing_preview_and_apply_keep_selected_policy(routing_page):
+def test_routing_preview_keeps_policy_and_apply_is_blocked(routing_page):
     page, _actions = routing_page
     policy = page._policy_combo
     policy.setCurrentIndex(policy.findData("privacy"))
     requested = []
     page.action_requested.connect(lambda action: requested.append(action))
     page._task_preview("code")
-    page._task_apply("code")
+    page._apply_all()
+    assert len(requested) == 1
     assert requested[0].args == (
         "ai", "routing", "apply", "--task", "code", "--policy", "privacy", "--dry-run",
     )
-    assert requested[1].args == (
-        "ai", "routing", "apply", "--task", "code", "--policy", "privacy", "--yes",
-    )
-    assert requested[1].preview_args[-1] == "--dry-run"
+    assert page._apply_all_button is not None and not page._apply_all_button.isEnabled()
+    assert not any(button.text() == "Aplicar ordem" for button in page.findChildren(QPushButton))
+    assert "conexão autorizada" in page._apply_gate_notice.text()
 
 
-def test_routing_dynamic_success_populates_fallback_and_enables_apply(routing_page):
+def test_routing_recommendations_populate_fallback_but_keep_apply_blocked(routing_page):
     page, _actions = routing_page
     recommendation = [
             {
@@ -385,10 +475,84 @@ def test_routing_dynamic_success_populates_fallback_and_enables_apply(routing_pa
             f"routing.dynamic.{task}.balanced", "", {"recommendation": recommendation},
         )
     card = page._task_cards["code"]
-    assert page._apply_all_button.isEnabled()
+    assert not page._apply_all_button.isEnabled()
     assert page._chain_editor.count() == 2
     assert page._chain_editor.item(0).text() == "provider/model-a"
     assert "cota: conhecida" in card["quota"].text()
+
+
+def test_routing_quota_ui_shows_provenance_without_presenting_estimate_as_fact(routing_page):
+    page, _actions = routing_page
+    page._routing_status_ready("ai.routing-inventory", "", {
+        "connections": [{
+            "provider": "glm", "quotaState": "unknown", "quota": {
+                "source": "9router_usage_api", "observedAt": "2026-09-24T12:00:00Z",
+                "buckets": [{"dimension": "session", "unit": "unknown",
+                             "remainingPercentage": None,
+                             "estimatedRemainingPercentage": 75,
+                             "resetAt": "2026-09-26T12:00:00Z"}],
+            },
+        }],
+    })
+    assert "fonte: 9Router Usage API" in page._quota_details.text()
+    assert "consultada em: 2026-09-24T12:00:00Z" in page._quota_details.text()
+    assert "unidade desconhecida" in page._quota_details.text()
+    assert "estimativa local 75%" in page._quota_details.text()
+    assert "reinicia em 2026-09-26T12:00:00Z" in page._quota_details.text()
+
+    recommendation = [{"model_id": "provider/model-a", "score": 0.9,
+                       "quota_state": "unknown", "quota": 0.5,
+                       "quota_confidence": 0.4}]
+    page._routing_status_ready("routing.dynamic.code.balanced", "", {"recommendation": recommendation})
+    assert "desconhecida" in page._task_cards["code"]["quota"].text()
+    assert "50%" not in page._task_cards["code"]["quota"].text()
+
+
+def test_routing_quota_ui_hides_invalid_numeric_metadata(routing_page):
+    page, _actions = routing_page
+    page._routing_status_ready("ai.routing-inventory", "", {
+        "connections": [{
+            "provider": "glm", "quotaState": "known", "quota": {
+                "source": "9router_usage_api", "observedAt": "yesterday",
+                "buckets": [{
+                    "dimension": "", "unit": 2, "remaining": float("nan"),
+                    "remainingPercentage": True,
+                    "estimatedRemainingPercentage": float("inf"),
+                    "resetAt": "tomorrow",
+                }],
+            },
+        }],
+    })
+    details = page._quota_details.text()
+    assert "percentual não informado" in details
+    assert "valor restante indisponível" in details
+    assert "dimensão desconhecida" in details
+    assert "unidade desconhecida" in details
+    assert "cota desconhecida" in details
+    assert "horário indisponível" in details
+    assert "tomorrow" not in details
+    assert "nan" not in details.lower()
+    assert "estimativa local inf%" not in details.lower()
+
+
+def test_routing_quota_poll_is_visible_read_only_and_never_calls_recommendation(routing_page, monkeypatch):
+    page, _actions = routing_page
+    calls = []
+    monkeypatch.setattr(page.status_loader, "fetch_action", lambda action: calls.append(action.id))
+    monkeypatch.setattr(page.status_loader, "running", lambda _action_id: False)
+    monkeypatch.setattr(page, "_fetch_recommendations", lambda: calls.append("recommendation"))
+
+    page.show()
+    page.reload()
+    assert page._quota_poll.isActive()
+    calls.clear()
+    page._poll_quota_inventory()
+    assert calls == ["ai.routing-inventory"]
+    action = page.by_id["ai.routing-inventory"]
+    assert "--refresh-quota" in action.args
+    assert "inference" not in " ".join(action.args).lower()
+    page.hide()
+    assert not page._quota_poll.isActive()
 
 
 def test_routing_dynamic_failure_never_stays_verifying(routing_page):

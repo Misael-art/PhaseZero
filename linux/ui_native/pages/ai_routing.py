@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QPushButton, QScrollArea, QStyle,
@@ -41,6 +43,11 @@ POLICY_REASONS = {
     "privacy": "Prefere rotas locais e reduz exposição a provedores externos.",
 }
 
+QUOTA_POLL_MS = 60_000
+_APPLY_GATE_MESSAGE = (
+    "Aplicação bloqueada: 9Router ainda não vincula cada requisição à conexão autorizada "
+    "e pode usar outra conta ou fallback pago. Prévia continua disponível; nenhum combo será alterado."
+)
 _CLEAR = "—"
 
 
@@ -51,6 +58,49 @@ def _first(parsed: object, *keys: str, default=None):
             return default
         node = node.get(key, {})
     return node if node is not None else default
+
+
+def _quota_display_number(value: object, *, percentage: bool = False) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        finite = math.isfinite(value)
+    except (OverflowError, TypeError):
+        return None
+    if not finite or value < 0 or (percentage and value > 100):
+        return None
+    return value
+
+
+def _quota_display_state(connection: dict) -> str:
+    state = connection.get("quotaState")
+    if state not in {"known", "unknown", "unavailable"}:
+        return "unknown"
+    if state != "known":
+        return state
+    quota = connection.get("quota")
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    if not isinstance(buckets, list):
+        return "unknown"
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        if (
+            _quota_display_number(bucket.get("remaining")) is not None
+            or _quota_display_number(bucket.get("remainingPercentage"), percentage=True) is not None
+        ):
+            return "known"
+    return "unknown"
+
+
+def _quota_display_timestamp(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if parsed.tzinfo is not None else None
 
 
 
@@ -67,8 +117,7 @@ def routing_status_text(parsed: dict) -> str:
     return f"Online, {ready} de {total} provedores disponíveis"
 
 class AiRoutingPage(BasePage):
-    """Dedicated per-task routing page: recommendations, policies, quota,
-    fallback chain editor, apply/rollback and an isolated Bonsai card."""
+    """Routing page with read-only recommendations until request grants bind."""
 
     def __init__(
         self, root: Path, runner: CommandRunner, actions: list[ActionSpec],
@@ -77,10 +126,15 @@ class AiRoutingPage(BasePage):
         super().__init__(root, runner, actions, by_id, parent)
         self._status_value: QLabel | None = None
         self._quota_label: QLabel | None = None
+        self._quota_details: QLabel | None = None
+        self._quota_poll = QTimer(self)
+        self._quota_poll.setInterval(QUOTA_POLL_MS)
+        self._quota_poll.timeout.connect(self._poll_quota_inventory)
         self._task_cards: dict[str, dict] = {}
         self._recommendations: dict[str, list[dict]] = {}
         self._policy_combo: QComboBox | None = None
         self._apply_all_button: QPushButton | None = None
+        self._apply_gate_notice: QLabel | None = None
         self._chain_editor: QListWidget | None = None
         self._chain_task = "code"
         self._technical_widgets: list[QWidget] = []
@@ -99,6 +153,10 @@ class AiRoutingPage(BasePage):
             action = self.by_id.get(aid) if self.by_id else None
             if action is not None:
                 self.mark_represented(action)
+        back = QPushButton("‹ Inteligência artificial")
+        back.setObjectName("backToAiHome")
+        back.clicked.connect(lambda: self.request_category("IA & Dev"))
+        self._layout.addWidget(back)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -108,7 +166,9 @@ class AiRoutingPage(BasePage):
         layout.setSpacing(14)
 
         layout.addWidget(SectionHeader(
-            "Roteamento IA", "Escolha a tarefa. O PhaseZero sugere o modelo e aplica a rota."))
+            "Roteamento IA",
+            "Consulte recomendações e prévias. Aplicar fica bloqueado enquanto a rota não fixa "
+            "cada requisição à conexão autorizada."))
 
         summary = QFrame()
         summary.setObjectName("moduleFacts")
@@ -133,6 +193,7 @@ class AiRoutingPage(BasePage):
         self._apply_all_button = QPushButton("Aplicar as 3 rotas")
         self._apply_all_button.setObjectName("primaryButton")
         self._apply_all_button.setEnabled(False)
+        self._apply_all_button.setToolTip(_APPLY_GATE_MESSAGE)
         self._apply_all_button.clicked.connect(self._apply_all)
         actions_row.addWidget(self._apply_all_button)
         preview_all = QPushButton("Prévia do plano")
@@ -148,6 +209,23 @@ class AiRoutingPage(BasePage):
         actions_row.addStretch()
         layout.addLayout(actions_row)
 
+        self._apply_gate_notice = QLabel(_APPLY_GATE_MESSAGE)
+        self._apply_gate_notice.setObjectName("routingGrantGateNotice")
+        self._apply_gate_notice.setWordWrap(True)
+        layout.addWidget(self._apply_gate_notice)
+
+        self._quota_details = QLabel("Atualize cotas para consultar fonte, horário e unidade.")
+        self._quota_details.setObjectName("cardDescription")
+        self._quota_details.setWordWrap(True)
+        layout.addWidget(self._quota_details)
+        polling_note = QLabel(
+            "Cotas atualizam a cada minuto enquanto esta página fica aberta. "
+            "Consulta endpoints GET do 9Router; nenhuma inferência é iniciada."
+        )
+        polling_note.setObjectName("cardDescription")
+        polling_note.setWordWrap(True)
+        layout.addWidget(polling_note)
+
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -157,7 +235,7 @@ class AiRoutingPage(BasePage):
             grid.addWidget(self._task_card(task, label), index // 2, index % 2)
         layout.addWidget(grid_host)
 
-        editor_box = QGroupBox("Ordem avançada de fallbacks")
+        editor_box = QGroupBox("Cadeia sugerida (somente leitura)")
         self._technical_widgets.append(editor_box)
         editor_layout = QVBoxLayout(editor_box)
         editor_row = QHBoxLayout()
@@ -173,18 +251,6 @@ class AiRoutingPage(BasePage):
         self._chain_editor = QListWidget()
         self._chain_editor.setMaximumHeight(160)
         list_row.addWidget(self._chain_editor, 1)
-        order_col = QVBoxLayout()
-        for label, slot in (
-            ("Subir", self._chain_up),
-            ("Descer", self._chain_down),
-            ("Aplicar ordem", self._chain_apply),
-        ):
-            button = QPushButton(label)
-            button.setObjectName("secondaryButton")
-            button.clicked.connect(slot)
-            order_col.addWidget(button)
-        order_col.addStretch()
-        list_row.addLayout(order_col)
         editor_layout.addLayout(list_row)
         layout.addWidget(editor_box)
 
@@ -193,8 +259,9 @@ class AiRoutingPage(BasePage):
         bonsai_layout = QVBoxLayout(bonsai_box)
         warn = QLabel(
             "Rota explícita e isolada do 9Router: sem token Bonsai no roteador, "
-            "sem fallback silencioso. Snapshot/upload exigem consentimento "
-            "interativo; use preflight antes de iniciar.")
+            "sem fallback silencioso. Preflight verifica workspace e rede; "
+            "consentimento de upload não autoriza inferência. Execução fica "
+            "indisponível até haver grant verificável por conexão.")
         warn.setWordWrap(True)
         warn.setObjectName("cardDescription")
         bonsai_layout.addWidget(warn)
@@ -203,6 +270,8 @@ class AiRoutingPage(BasePage):
         if bonsai_action is not None:
             button = QPushButton("Executar Claude via Bonsai (consentimento)")
             button.setObjectName("primaryButton")
+            button.setEnabled(False)
+            button.setToolTip("Aguardando enforcement de grant por conexão; login não autoriza execução.")
             button.clicked.connect(lambda: self.request_action(bonsai_action))
             bonsai_actions.addWidget(button)
         preflight = self.by_id.get("ai.claude-bonsai-preflight") if self.by_id else None
@@ -232,7 +301,6 @@ class AiRoutingPage(BasePage):
         layout.addStretch()
         scroll.setWidget(inner)
         self._layout.addWidget(scroll)
-        self.reload()
 
     def _fact(self, label: str, value: str, layout: QHBoxLayout) -> QLabel:
         box = QVBoxLayout()
@@ -283,11 +351,23 @@ class AiRoutingPage(BasePage):
     # ------------------------------------------------------------- fetching
     def reload(self) -> None:
         super().reload()
+        self._quota_poll.start()
         for aid in ("ai.routing-status", "ai.routing-inventory"):
             action = self.by_id.get(aid) if self.by_id else None
             if action and not self.status_loader.running(action.id):
                 self.status_loader.fetch_action(action)
         self._fetch_recommendations()
+
+    def _poll_quota_inventory(self) -> None:
+        if not self.isVisible() or not self.isEnabled():
+            return
+        action = self.by_id.get("ai.routing-inventory") if self.by_id else None
+        if action is not None and not self.status_loader.running(action.id):
+            self.status_loader.fetch_action(action)
+
+    def hideEvent(self, event) -> None:
+        self._quota_poll.stop()
+        super().hideEvent(event)
 
     def _fetch_recommendations(self) -> None:
         for task, _label, _aid in TASKS:
@@ -346,40 +426,6 @@ class AiRoutingPage(BasePage):
             text = POLICY_REASONS.get(str(policy), POLICY_REASONS["balanced"])
         card["reason"].setText(text)
 
-    def _chain_apply(self) -> None:
-        models = [self._chain_editor.item(i).text() for i in range(self._chain_editor.count())]
-        if not models:
-            self._status_value.setText("Sem modelos na cadeia — adicione ao menos um antes de aplicar")
-            return
-        action = ActionSpec(
-            id=f"routing.chain-apply.{self._chain_task}",
-            category="Roteamento IA",
-            title="Aplicar ordem de fallbacks",
-            description="",
-            args=("ai", "routing", "apply", "--task", self._chain_task,
-                  "--yes", "--chain", ",".join(models)),
-            icon="system-run",
-            mutable=True,
-        )
-        self.request_action(action)
-
-    def _chain_up(self) -> None:
-        self._move_chain(-1)
-
-    def _chain_down(self) -> None:
-        self._move_chain(1)
-
-    def _move_chain(self, delta: int) -> None:
-        if self._chain_editor is None:
-            return
-        row = self._chain_editor.currentRow()
-        target = row + delta
-        if row < 0 or target < 0 or target >= self._chain_editor.count():
-            return
-        item = self._chain_editor.takeItem(row)
-        self._chain_editor.insertItem(target, item)
-        self._chain_editor.setCurrentRow(target)
-
     def _task_preview(self, task: str) -> None:
         card = self._task_cards.get(task)
         if card is None:
@@ -396,28 +442,9 @@ class AiRoutingPage(BasePage):
         )
         self.request_action(dynamic)
 
-    def _task_apply(self, task: str) -> None:
-        card = self._task_cards.get(task)
-        if card is None:
-            return
-        policy = str(self._policy_combo.currentData()) if self._policy_combo is not None else "balanced"
-        action = ActionSpec(
-            id=f"routing.apply.{task}.{policy}",
-            category="Roteamento IA",
-            title=f"Aplicar rota {task}",
-            description="",
-            args=("ai", "routing", "apply", "--task", task,
-                  "--policy", policy, "--yes"),
-            preview_args=("ai", "routing", "apply", "--task", task,
-                          "--policy", policy, "--dry-run"),
-            icon="system-run",
-            mutable=True,
-        )
-        self.request_action(action)
-
     def _apply_all(self) -> None:
-        # Backend reconciles all three managed combos in one transaction.
-        self._task_apply("code")
+        if self._apply_gate_notice is not None:
+            self._apply_gate_notice.setText(_APPLY_GATE_MESSAGE)
 
     def _rollback_clicked(self) -> None:
         manifest = self._manifest_input.text().strip()
@@ -449,13 +476,60 @@ class AiRoutingPage(BasePage):
             if self._status_value:
                 self._status_value.setText(routing_status_text(parsed))
         elif action_id == "ai.routing-inventory":
+            details = []
             if self._quota_label:
                 states = {}
                 for conn in _first(parsed, "connections", default=[]) or []:
-                    qs = conn.get("quotaState", "?")
+                    qs = _quota_display_state(conn)
                     states[qs] = states.get(qs, 0) + 1
                 text = ", ".join(f"{k}: {v}" for k, v in sorted(states.items())) or _CLEAR
                 self._quota_label.setText(text)
+            for conn in _first(parsed, "connections", default=[]) or []:
+                quota = conn.get("quota") if isinstance(conn.get("quota"), dict) else {}
+                state = _quota_display_state(conn)
+                label = str(conn.get("provider") or "provedor")
+                source = "9Router Usage API" if quota.get("source") == "9router_usage_api" else "fonte desconhecida"
+                observed = _quota_display_timestamp(quota.get("observedAt")) or "horário indisponível"
+                buckets = quota.get("buckets") if isinstance(quota.get("buckets"), list) else []
+                bucket_parts = []
+                for bucket in buckets:
+                    if not isinstance(bucket, dict):
+                        continue
+                    dimension_value = bucket.get("dimension") or bucket.get("name")
+                    dimension = (
+                        dimension_value.strip()
+                        if isinstance(dimension_value, str) and dimension_value.strip()
+                        else "dimensão desconhecida"
+                    )
+                    pct = _quota_display_number(bucket.get("remainingPercentage"), percentage=True)
+                    unit_value = bucket.get("unit")
+                    unit = unit_value.strip() if isinstance(unit_value, str) and unit_value.strip() else "unknown"
+                    if unit == "unknown":
+                        unit = "unidade desconhecida"
+                    value = f"{pct}% restante" if isinstance(pct, (int, float)) else "percentual não informado"
+                    remaining = _quota_display_number(bucket.get("remaining"))
+                    if remaining is not None:
+                        value += f"; {remaining} {unit} restantes"
+                    elif bucket.get("remaining") is not None:
+                        value += f"; valor restante indisponível; {unit}"
+                    else:
+                        value += f"; unidade: {unit}"
+                    estimate = _quota_display_number(
+                        bucket.get("estimatedRemainingPercentage"), percentage=True,
+                    )
+                    if estimate is not None:
+                        value += f"; estimativa local {estimate}%"
+                    reset_at = _quota_display_timestamp(bucket.get("resetAt"))
+                    if reset_at is not None:
+                        value += f"; reinicia em {reset_at}"
+                    bucket_parts.append(f"{dimension}: {value}")
+                state_label = {"known": "informada", "unknown": "desconhecida", "unavailable": "indisponível"}.get(state, state)
+                bucket_text = " · " + "; ".join(bucket_parts) if bucket_parts else ""
+                if not bucket_parts:
+                    bucket_text = " · unidade: desconhecida"
+                details.append(f"{label}: cota {state_label}{bucket_text} · fonte: {source} · consultada em: {observed}")
+            if self._quota_details:
+                self._quota_details.setText("\n".join(details) or "Nenhuma conta retornada.")
             return
         for task, label, aid in TASKS:
             if action_id != aid and not action_id.startswith(f"routing.dynamic.{task}."):
@@ -482,12 +556,14 @@ class AiRoutingPage(BasePage):
             quota = top.get("quota_state", "?")
             pct = top.get("quota", 0)
             conf = top.get("quota_confidence", 0)
-            card["quota"].setText(
-                f"cota: {QUOTA_LABELS.get(str(quota), quota)} ({pct:.0%}) · confiança: {conf:.0%}")
+            quota_text = f"cota: {QUOTA_LABELS.get(str(quota), quota)}"
+            if quota == "known":
+                quota_text += f" ({pct:.0%})"
+            quota_text += f" · confiança: {conf:.0%}"
+            card["quota"].setText(quota_text)
             if self._apply_all_button is not None:
-                self._apply_all_button.setEnabled(
-                    all(task_id in self._recommendations for task_id, _label, _aid in TASKS)
-                )
+                self._apply_all_button.setEnabled(False)
+                self._apply_all_button.setToolTip(_APPLY_GATE_MESSAGE)
             if task == self._chain_task:
                 self._populate_chain_editor(task)
 

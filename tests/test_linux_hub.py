@@ -52,6 +52,14 @@ def facts() -> HostFacts:
     )
 
 
+class ProbeProvider:
+    def __init__(self, state):
+        self.state = state
+
+    def installed(self, source):
+        return self.state
+
+
 def payload() -> dict:
     return catalog_payload(facts=facts())
 
@@ -142,14 +150,41 @@ def test_catalog_without_status_reports_unknown_instead_of_off(overlay):
     assert all(item.installed is None for item in items)
 
 
+def test_catalog_probe_failure_remains_unknown(overlay):
+    data = payload()
+    data["hasStatus"] = True
+    data["capabilities"][0]["installed"] = None
+    items = build_capability_items(data, overlay)
+    assert items[0].installed is None
+
+
+def test_missing_or_malformed_status_marker_cannot_claim_absence(overlay):
+    data = {"capabilities": [{"id": "gaming.gamemode", "installed": False}]}
+    assert build_capability_items(data, overlay)[0].installed is None
+    data["hasStatus"] = "true"
+    assert build_capability_items(data, overlay)[0].installed is None
+
+
 def test_catalog_payload_marks_whether_it_probed_the_host(overlay):
     # `catalog` não sonda: o hub tem de mostrar "desconhecido". `status` sonda:
     # aí sim o switch pode afirmar ligado/desligado.
     assert catalog_payload(facts=facts())["hasStatus"] is False
-    probed = catalog_payload(facts=facts(), include_status=True)
+    probed = catalog_payload(
+        facts=facts(), include_status=True, provider=ProbeProvider(False),
+    )
     assert probed["hasStatus"] is True
     items = build_capability_items(probed, overlay)
     assert all(item.installed in (True, False) for item in items)
+
+
+def test_package_probe_error_remains_unknown_through_catalog_and_hub(overlay):
+    probed = catalog_payload(
+        facts=facts(), include_status=True, provider=ProbeProvider(None),
+    )
+    assert probed["capabilities"][0]["installationState"] == "unknown"
+    assert probed["capabilities"][0]["installed"] is None
+    items = build_capability_items(probed, overlay)
+    assert items[0].installed is None
 
 
 def test_items_are_ordered_by_overlay_sections(overlay, by_id):

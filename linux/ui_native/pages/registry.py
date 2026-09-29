@@ -19,6 +19,9 @@ from .steamdeck import SteamDeckPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
+from .product_registry import ProductRegistryPage
+from .development import DevelopmentPage
+from .accounts import AccountsPage
 from .windows_vm import WindowsVmPage
 from .service_control import ServerPage, WaydroidPage
 from .themes import ThemesPage
@@ -56,7 +59,9 @@ class PageRegistry:
         "IA & Dev": AiDevPage,
         "Proxies IA": AiProxiesPage,
         "Roteamento IA": AiRoutingPage,
-        "Aplicativos": CatalogWorkspacePage,
+        "Aplicativos": ProductRegistryPage,
+        "Desenvolvimento": DevelopmentPage,
+        "Contas e conexões": AccountsPage,
         "Ajustes": TuningPage,
         "Temas": ThemesPage,
         "Resultados": ResultsPage,

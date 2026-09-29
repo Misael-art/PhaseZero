@@ -22,14 +22,23 @@ CATEGORIES = (
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
+    ("Desenvolvimento", "applications-development", "Preparar ambientes de projeto"),
+    ("Contas e conexões", "avatar-default", "Contas, sessões e acesso por aplicativo"),
     ("IA & Dev", "applications-development", "OpenCode, Claude, MCPs e agentes"),
-    ("Proxies IA", "network-server", "Um clique instala, liga e autentica os proxies"),
+    ("Proxies IA", "network-server", "Status de proxies e sessões; uso aguarda grants por requisição"),
     ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
     ("Temas", "preferences-desktop-theme", "Tema, acessibilidade e conforto visual"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
 )
+
+# Technical AI surfaces keep their legacy page IDs but live under the AI home.
+NESTED_CATEGORY_PARENTS = {
+    "Proxies IA": "IA & Dev",
+    "Roteamento IA": "IA & Dev",
+}
+NESTED_CATEGORIES = tuple(NESTED_CATEGORY_PARENTS)
 
 # The dashboard "home" pseudo-category (Welcome back screen).
 DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
@@ -39,7 +48,9 @@ SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Linux", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
-    ("Desenvolvimento", ("IA & Dev", "Proxies IA", "Roteamento IA")),
+    ("Desenvolvimento", ("Desenvolvimento",)),
+    ("Inteligência artificial", ("IA & Dev",)),
+    ("Contas e conexões", ("Contas e conexões",)),
     ("Desktop", ("Aplicativos", "Temas")),
     ("Histórico", ("Resultados",)),
 )
@@ -229,7 +240,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
     profile_meta = {
         "safe-base": ("Base segura", "Essenciais para uso diário.", "Seguro"),
-        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Hermes é experimental e opcional (skip explicado quando bloqueado).", "Dev"),
+        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Uso Hermes aguarda grants aplicados por requisição.", "Dev"),
         "gaming": ("Gaming", "Steam, Heroic, Lutris e telemetria local.", "Jogos"),
         "steamdeck-linux": ("Steam Deck Linux", "UX SteamOS, hotkeys e Gamepad UI.", "Recomendado"),
         "windows-vm-linux": ("Windows VM", "QEMU/KVM, OVMF, TPM e compartilhamentos.", "VM"),
@@ -609,13 +620,15 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
         ("opencode-status", "OpenCode + 9Router", "Audita versões, configuração canônica, segredo por arquivo e listener loopback.", ("ai", "opencode", "status"), None),
         ("opencode-install", "Configurar OpenCode + 9Router", "Mescla configuração e aplica provider local com rollback.", ("ai", "opencode", "install", "--yes"), ("ai", "opencode", "install", "--dry-run")),
-        ("opencode-verify", "Verificar OpenCode + 9Router", "Valida isolamento de segredo e funcionamento da rota.", ("ai", "opencode", "verify"), None),
+        ("opencode-verify", "Verificar OpenCode + 9Router", "Confere configuração local; execução gerenciada aguarda vínculo de conta por requisição.", ("ai", "opencode", "verify"), None),
         ("opencode", "Alinhar versão OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "version-status")),
         ("opencode-free", "Modelo free OpenCode", "Corrige 'Interrompido' com modelo free (deepseek-flash).", ("ai", "opencode", "free-model"), ("ai", "opencode", "status")),
         ("omo", "Instalar OMO", "Plugin oh-my-openagent.", ("ai", "omo", "setup"), ("ai", "omo", "status")),
         ("memory", "Instalar ai-memory", "Memória persistente de agentes.", ("ai", "setup", "memory"), ("ai", "status")),
         ("ollama", "Instalar Ollama", "Runtime local de modelos.", ("ai", "setup", "ollama"), ("ai", "status")),
-        ("webui", "Instalar Open WebUI", "Interface local de modelos.", ("ai", "setup", "webui"), ("ai", "status")),
+        ("webui", "Uso bloqueado — Open WebUI", "Não instala nem inicia um cliente que pode usar credenciais sem grant por requisição.", ("ai", "setup", "webui"), ("ai", "webui", "status")),
+        ("webui-status", "Status Open WebUI", "Container e resposta HTTP local, sem alterar o serviço.", ("ai", "webui", "status"), None),
+        ("webui-open", "Uso bloqueado — Open WebUI", "Não abre interface que pode enviar inferência sem grant por requisição.", ("ai", "webui", "open"), None),
         ("usagebar", "Instalar UsageBar", "Uso de provedores no painel.", ("ai", "setup", "usagebar"), ("ai", "status")),
         ("codexbar-status", "Status CodexBar", "CLI, configuração, autenticação e widget opcional.", ("ai", "codexbar", "status"), None),
         ("codexbar-health", "Saúde CodexBar", "Valida integridade e uso dos providers sem alterar o KDE.", ("ai", "codexbar", "health"), None),
@@ -632,24 +645,24 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("9router-tui", "Abrir painel técnico do 9Router", "Abre a tela técnica avançada; para o dia a dia use os cards acima.", ("ai", "9router", "tui"), None),
         ("9router-repair", "Reparar 9Router", "Migra units para caminhos estáveis e valida serviço, bridge e watchdog.", ("ai", "9router", "repair"), ("ai", "9router", "status")),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
-        ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
-        ("9router-test", "Testar 9Router", "Valida saúde e endpoint /v1/models autenticado.", ("ai", "9router", "test"), None),
-        ("9router-secrets", "Sincronizar contas de IA", "Importa somente credenciais ativas e validadas; saída redigida.", ("ai", "9router", "provider", "sync-secrets"), ("ai", "9router", "provider", "status")),
-        ("9router-combos", "Criar rotas prontas", "Monta as rotas de modelo (free, smart, max) com reserva automática.", ("ai", "9router", "combo", "sync"), ("ai", "9router", "combo", "list")),
+        ("9router-dashboard", "Dashboard 9Router bloqueado", "Testes de provider podem enviar inferência fora do ledger de grants e consumir cota.", ("ai", "9router", "dashboard"), None),
+        ("9router-test", "Testar 9Router", "Valida saúde e /v1/models; chat de inferência bloqueado até grant por requisição.", ("ai", "9router", "test"), None),
+        ("9router-secrets", "Importação de credenciais bloqueada", "Não copia credenciais para o 9Router sem referência segura e grant por requisição.", ("ai", "9router", "provider", "sync-secrets"), ("ai", "9router", "provider", "status")),
+        ("9router-combos", "Combos com fallback bloqueados", "Não cria, sincroniza ou ativa combos sem grant por requisição e política de fallback comprovada.", ("ai", "9router", "combo", "sync"), ("ai", "9router", "combo", "list")),
         ("9router-usage", "Uso e resiliência", "Tokens, latência, custo e falhas coletados pelo 9Router.", ("ai", "9router", "usage"), None),
-        ("9router-client", "Integrar clientes 9Router", "Perfil redigido para Codex, Claude, OpenCode e clientes OpenAI-compatible.", ("ai", "9router", "client", "status"), None),
+        ("9router-client", "Uso de clientes 9Router bloqueado", "Status de configuração apenas; lançamento de clientes aguarda enforcement de grants por requisição.", ("ai", "9router", "client", "status"), None),
         ("9router-check", "Verificar update 9Router", "Compara versão e exige integrity publicada.", ("ai", "9router", "check-update"), None),
         ("9router-update", "Atualizar 9Router", "Valida integrity npm, troca atomicamente e reverte se a saúde falhar.", ("ai", "9router", "update"), ("ai", "9router", "check-update")),
         ("9router-doctor", "Doctor 9Router", "Audita bind, permissões, serviço e watchdog passivo.", ("ai", "9router", "doctor"), None),
         ("odysseus-status", "Status Odysseus", "Workspace IA agnóstico fixado em commit oficial.", ("ai", "odysseus", "status"), None),
-        ("odysseus-install", "Implantar Odysseus (protegido)", "Exige allowlist de commit e release gate; sem ambos, não altera o host.", ("ai", "odysseus", "install"), ("ai", "odysseus", "plan")),
-        ("odysseus-open", "Abrir Odysseus", "Abre workspace local autenticado.", ("ai", "odysseus", "open"), None),
+        ("odysseus-install", "Implantação Odysseus bloqueada", "Não implanta nem inicia workspace enquanto inferência não exigir grant por requisição.", ("ai", "odysseus", "install"), ("ai", "odysseus", "plan")),
+        ("odysseus-open", "Uso Odysseus bloqueado", "Workspace encaminha inferência à credencial compartilhada do 9Router sem grant por requisição.", ("ai", "odysseus", "open"), None),
         ("odysseus-check", "Verificar update Odysseus", "Compara commit fixado com branch oficial protegida.", ("ai", "odysseus", "check-update"), None),
-        ("odysseus-update", "Atualizar Odysseus", "Fixa novo commit oficial e restaura o anterior em falha.", ("ai", "odysseus", "update"), ("ai", "odysseus", "check-update")),
+        ("odysseus-update", "Update Odysseus bloqueado", "Não reinicia workspace enquanto inferência não exigir grant por requisição.", ("ai", "odysseus", "update"), ("ai", "odysseus", "check-update")),
         ("odysseus-backup", "Backup Odysseus", "Arquiva dados persistentes com SHA-256.", ("ai", "odysseus", "backup"), ("ai", "odysseus", "status")),
         ("odysseus-doctor", "Doctor Odysseus", "Audita containers, endpoint e credenciais sem alterar nada.", ("ai", "odysseus", "doctor"), None),
-        ("hermes-status", "Status Hermes", "Prontidão, autenticação, configuração e MCPs sem revelar segredos.", ("ai", "hermes", "status"), None),
-        ("hermes-doctor", "Doctor Hermes", "Audita integridade, política e acesso remoto sem alterar nada.", ("ai", "hermes", "doctor"), None),
+        ("hermes-status", "Status Hermes", "Configuração, saúde e bloqueio de uso sem revelar segredos.", ("ai", "hermes", "status"), None),
+        ("hermes-doctor", "Doctor Hermes", "Audita integridade, política, grants e acesso remoto sem alterar nada.", ("ai", "hermes", "doctor"), None),
         ("workspaces-doctor", "Diagnóstico Hermes + Odysseus", "Auditoria read-only e redigida da jornada completa.", ("ai", "workspaces", "doctor"), None),
         ("workspaces-plan", "Plano Hermes + Odysseus", "Mostra fases, bloqueios e próxima ação segura sem implantar workloads.", ("ai", "workspaces", "plan"), None),
         ("operations-status", "Operações persistentes", "Estado redigido de operações concluídas, falhas e interrupções recuperáveis.", ("ai", "operations", "status"), None),
@@ -681,7 +694,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             "ai.omniroute-status",
             "IA & Dev",
             "Status OmniRoute (experimental)",
-            "Router alternativo via CLI; o 9Router segue sendo o router público da Central.",
+            "Status somente leitura; uso bloqueado até grants por requisição. 9Router segue como router público da Central.",
             ("ai", "omniroute", "status"),
             "network-workgroup",
             badge="Experimental",
@@ -735,20 +748,20 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         )
     )
 
-    # Dedicated "Proxies IA" page: one-click ensure (install+start+login) is
-    # the primary CX. Lifecycle/OAuth leftovers stay advanced.
+    # Proxy health/auth can be inspected, but inference stays disabled until
+    # account grants are enforced by each request and fallback is rejected.
     proxy_rows = [
-        ("proxies-ensure-kimi", "Usar Kimi", "Instala, inicia e abre o login do Kimi se ainda faltar.", ("ai", "proxies", "ensure", "kimiproxy"), ("ai", "proxies", "ensure", "kimiproxy", "--dry-run"), ""),
-        ("proxies-ensure-qwen", "Usar Qwen", "Instala, inicia e abre o login do Qwen se ainda faltar.", ("ai", "proxies", "ensure", "qwenproxy"), ("ai", "proxies", "ensure", "qwenproxy", "--dry-run"), ""),
-        ("proxies-ensure-deeps", "Usar DeepSeek", "Instala, inicia e abre o login do DeepSeek se ainda faltar.", ("ai", "proxies", "ensure", "deepsproxy"), ("ai", "proxies", "ensure", "deepsproxy", "--dry-run"), ""),
-        ("proxies-ensure-mimo", "Usar Mimo", "Configura a API oficial Xiaomi; não extrai cookies nem tokens do navegador.", ("ai", "proxies", "ensure", "mimo-ai-proxy"), ("ai", "proxies", "ensure", "mimo-ai-proxy", "--dry-run"), ""),
-        ("proxies-ensure-all", "Preparar todos os proxies", "Instala, inicia e autentica Kimi, Qwen, DeepSeek e Mimo.", ("ai", "proxies", "ensure", "all"), ("ai", "proxies", "ensure", "all", "--dry-run"), ""),
-        ("proxies-open-kimi", "Abrir Kimi no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Kimi.", ("ai", "proxies", "open", "kimiproxy"), None, ""),
-        ("proxies-open-qwen", "Abrir Qwen no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Qwen.", ("ai", "proxies", "open", "qwenproxy"), None, ""),
-        ("proxies-open-deeps", "Abrir DeepSeek no OpenCode", "Abre o OpenCode CLI já no modelo do proxy DeepSeek.", ("ai", "proxies", "open", "deepsproxy"), None, ""),
-        ("proxies-open-mimo", "Abrir Mimo no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Mimo.", ("ai", "proxies", "open", "mimo-ai-proxy"), None, ""),
+        ("proxies-ensure-kimi", "Uso bloqueado — Kimi", "Bloqueado até grant por conexão aplicado em cada requisição; não instala, inicia nem configura consumidores.", ("ai", "proxies", "ensure", "kimiproxy"), ("ai", "proxies", "ensure", "kimiproxy", "--dry-run"), ""),
+        ("proxies-ensure-qwen", "Uso bloqueado — Qwen", "Bloqueado até grant por conexão aplicado em cada requisição; não instala, inicia nem configura consumidores.", ("ai", "proxies", "ensure", "qwenproxy"), ("ai", "proxies", "ensure", "qwenproxy", "--dry-run"), ""),
+        ("proxies-ensure-deeps", "Uso bloqueado — DeepSeek", "Bloqueado até grant por conexão aplicado em cada requisição; não instala, inicia nem configura consumidores.", ("ai", "proxies", "ensure", "deepsproxy"), ("ai", "proxies", "ensure", "deepsproxy", "--dry-run"), ""),
+        ("proxies-ensure-mimo", "Uso bloqueado — MiMo", "Bloqueado até grant por conexão aplicado em cada requisição; não grava chave na rota legada nem configura consumidores.", ("ai", "proxies", "ensure", "mimo-ai-proxy"), ("ai", "proxies", "ensure", "mimo-ai-proxy", "--dry-run"), ""),
+        ("proxies-ensure-all", "Uso bloqueado — todos os proxies", "Bloqueado até grant por conexão aplicado em cada requisição; nenhuma IDE é habilitada.", ("ai", "proxies", "ensure", "all"), ("ai", "proxies", "ensure", "all", "--dry-run"), ""),
+        ("proxies-open-kimi", "Uso no OpenCode bloqueado — Kimi", "Não abre o OpenCode nem envia inferência sem grant por conexão aplicado por requisição.", ("ai", "proxies", "open", "kimiproxy"), None, ""),
+        ("proxies-open-qwen", "Uso no OpenCode bloqueado — Qwen", "Não abre o OpenCode nem envia inferência sem grant por conexão aplicado por requisição.", ("ai", "proxies", "open", "qwenproxy"), None, ""),
+        ("proxies-open-deeps", "Uso no OpenCode bloqueado — DeepSeek", "Não abre o OpenCode nem envia inferência sem grant por conexão aplicado por requisição.", ("ai", "proxies", "open", "deepsproxy"), None, ""),
+        ("proxies-open-mimo", "Uso no OpenCode bloqueado — MiMo", "Não abre o OpenCode nem envia inferência sem grant por conexão aplicado por requisição.", ("ai", "proxies", "open", "mimo-ai-proxy"), None, ""),
         ("proxies-open-studio-mimo", "Abrir API Service Xiaomi", "Abre o portal oficial para criar uma chave da API MiMo.", ("ai", "proxies", "open-studio"), None, ""),
-        ("proxies-ides", "Configurar IDEs (proxies)", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status"), ""),
+        ("proxies-ides", "Uso por IDE bloqueado", "Não configura OpenCode, Continue ou ZCode sem grant por conexão aplicado a cada requisição.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status"), ""),
         ("proxies-stop-kimi", "Parar Kimi", "Para phasezero-kimiproxy.", ("ai", "proxies", "stop", "kimiproxy"), ("ai", "proxies", "status"), ""),
         ("proxies-stop-qwen", "Parar Qwen", "Para phasezero-qwenproxy.", ("ai", "proxies", "stop", "qwenproxy"), ("ai", "proxies", "status"), ""),
         ("proxies-stop-deeps", "Parar DeepSeek", "Para phasezero-deepsproxy.", ("ai", "proxies", "stop", "deepsproxy"), ("ai", "proxies", "status"), ""),
@@ -759,16 +772,16 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("proxies-provenance", "Procedência dos proxies", "Verifica repositório, commit, árvore, licença, lockfiles e alterações locais; não substitui auditoria semântica.", ("ai", "proxies", "provenance", "all"), None, ""),
         ("auth-registry", "Autenticação central", "Contas, sessões, providers e workspaces sem nomes, e-mails ou segredos.", ("ai", "auth", "status"), None, ""),
         ("auth-doctor", "Diagnosticar autenticação", "Prioriza integrações essenciais e próximas ações sem revelar credenciais.", ("ai", "auth", "doctor"), None, "advanced"),
-        ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy"), "advanced"),
-        ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy"), "advanced"),
-        ("proxies-login-deeps", "Login DeepSeek", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "deepsproxy"), ("ai", "proxies", "auth", "deepsproxy"), "advanced"),
-        ("proxies-login-all", "Login em todos", "Abre login de navegador para Kimi, Qwen e DeepSeek pendentes.", ("ai", "proxies", "login", "all"), ("ai", "proxies", "auth", "all"), "advanced"),
-        ("proxies-test", "Testar proxies IA", "Probe honesto /v1/models + chat.", ("ai", "proxies", "test"), None, "advanced"),
-        ("proxies-start-all", "Iniciar todos os proxies", "Habilita e inicia os serviços de usuário.", ("ai", "proxies", "start", "all"), ("ai", "proxies", "status"), "advanced"),
-        ("proxies-start-kimi", "Iniciar Kimi", "Inicia phasezero-kimiproxy (porta 3010).", ("ai", "proxies", "start", "kimiproxy"), ("ai", "proxies", "status"), "advanced"),
-        ("proxies-start-qwen", "Iniciar Qwen", "Inicia phasezero-qwenproxy (porta 3011).", ("ai", "proxies", "start", "qwenproxy"), ("ai", "proxies", "status"), "advanced"),
-        ("proxies-start-deeps", "Iniciar DeepSeek", "Inicia phasezero-deepsproxy (porta 3012).", ("ai", "proxies", "start", "deepsproxy"), ("ai", "proxies", "status"), "advanced"),
-        ("proxies-start-mimo", "Iniciar Mimo", "Inicia phasezero-mimo-ai-proxy (porta 3013).", ("ai", "proxies", "start", "mimo-ai-proxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível e salva sessão local; não testa inferência nem inicia o serviço.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy"), "advanced"),
+        ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser e salva sessão local; não testa inferência nem inicia o serviço.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy"), "advanced"),
+        ("proxies-login-deeps", "Login DeepSeek", "Abre Chromium visível e salva sessão local; não testa inferência nem inicia o serviço.", ("ai", "proxies", "login", "deepsproxy"), ("ai", "proxies", "auth", "deepsproxy"), "advanced"),
+        ("proxies-login-all", "Login em todos", "Abre browser para Kimi, Qwen e DeepSeek; login não inicia serviços nem autoriza IDEs.", ("ai", "proxies", "login", "all"), ("ai", "proxies", "auth", "all"), "advanced"),
+        ("proxies-test", "Teste de inferência bloqueado", "Probe de modelos/chat bloqueado até grant por conexão aplicado a cada requisição.", ("ai", "proxies", "test"), None, "advanced"),
+        ("proxies-start-all", "Inicialização bloqueada", "Serviços de inferência não iniciam antes do enforcement de grants por requisição.", ("ai", "proxies", "start", "all"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-kimi", "Inicialização bloqueada — Kimi", "O serviço Kimi não inicia antes do enforcement de grants por requisição.", ("ai", "proxies", "start", "kimiproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-qwen", "Inicialização bloqueada — Qwen", "O serviço Qwen não inicia antes do enforcement de grants por requisição.", ("ai", "proxies", "start", "qwenproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-deeps", "Inicialização bloqueada — DeepSeek", "O serviço DeepSeek não inicia antes do enforcement de grants por requisição.", ("ai", "proxies", "start", "deepsproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-mimo", "Inicialização bloqueada — MiMo", "O serviço MiMo não inicia antes do enforcement de grants por requisição.", ("ai", "proxies", "start", "mimo-ai-proxy"), ("ai", "proxies", "status"), "advanced"),
     ]
     for key, title, description, args, preview, visibility in proxy_rows:
         actions.append(
@@ -785,17 +798,52 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 visibility=visibility,
             )
         )
+
+    # Product detail gets a scoped probe normalized by the suite for one exact
+    # proxy; unapproved or modified checkouts never claim PhaseZero ownership.
+    for token, proxy_id, title in (
+        ("kimi", "kimiproxy", "Status Kimi"),
+        ("qwen", "qwenproxy", "Status Qwen"),
+        ("deeps", "deepsproxy", "Status DeepSeek"),
+        ("mimo", "mimo-ai-proxy", "Status MiMo"),
+    ):
+        args = ("ai", "proxies", "product-status", proxy_id)
+        actions.append(_a(
+            f"ai.proxies-{token}-status", "Proxies IA", title,
+            "Consulta instalação, origem aprovada, sessão e serviço deste proxy.",
+            args, "system-search", badge="JSON", visibility="advanced",
+            status_args=args,
+        ))
+
+    # These tools lack a capability-backed probe. Keep detail status scoped to
+    # one product and normalize manager evidence without claiming ownership
+    # when the source cannot prove it.
+    for action_id, app_id, title in (
+        ("ai.memory-status", "ai-memory", "Status ai-memory"),
+        ("ai.usagebar-status", "usagebar", "Status UsageBar"),
+        ("ai.desktop.claude.status", "claude-desktop", "Status Claude Desktop"),
+        ("ai.desktop.codex.status", "codex-desktop", "Status Codex Desktop"),
+        ("ai.desktop.qwen.status", "qwen-code-desktop", "Status Qwen Code Desktop"),
+    ):
+        args = ("ai", "product-status", app_id)
+        actions.append(_a(
+            action_id, "IA & Dev", title,
+            "Consulta estado read-only deste app e preserva origem desconhecida.",
+            args, "system-search", badge="JSON", visibility="advanced",
+            status_args=args,
+        ))
     actions.append(
         _a(
             "ai.proxies-credentials-mimo",
             "Proxies IA",
-            "Salvar chave oficial MiMo",
-            "Valida e salva a chave da API oficial em arquivo protegido; configura OpenCode e registra ZCode sem incorporar o segredo.",
+            "Salvar chave MiMo bloqueado",
+            "Rota legada bloqueada: não valida, salva ou liga a chave a consumidores antes do grant por requisição.",
             ("ai", "proxies", "set-credentials", "mimo-ai-proxy"),
             "dialog-password",
             mutable=True,
             preview=("ai", "proxies", "auth", "mimo-ai-proxy"),
             stdin_parameter="credentials",
+            parameters=(_p("credentials", "Chave oficial MiMo", "secret"),),
         )
     )
 
@@ -912,7 +960,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("server.llm.expose", "Servidor", "Expor LLM na LAN", "Habilita acesso LAN ao LLM local.", ("server", "llm", "expose-lan"), "network-wired", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
             _a("server.llm.restore", "Servidor", "Restaurar LLM local", "Remove exposição e restaura defaults.", ("server", "llm", "restore"), "edit-undo", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
             _a("server.hermes.status", "Servidor", "Status Hermes", "Estado da atuação remota.", ("server", "hermes", "status"), "network-transmit-receive", visibility="advanced"),
-            _a("server.hermes.start", "Servidor", "Iniciar Hermes", "Inicia atuação remota configurada.", ("server", "hermes", "start"), "media-playback-start", mutable=True, preview=("server", "hermes", "status"), visibility="advanced"),
+            _a("server.hermes.start", "Servidor", "Uso Hermes remoto bloqueado", "Não inicia agente remoto sem grant PhaseZero vinculado a cada requisição.", ("server", "hermes", "start"), "media-playback-start", mutable=True, preview=("server", "hermes", "status"), visibility="advanced"),
             _a("server.slim.status", "Servidor", "Status modo enxuto", "Serviços afetados pelo slimming.", ("server", "slim", "status"), "preferences-system-performance", visibility="advanced"),
             _a("server.boot.status", "Servidor", "Status boot servidor", "Audita entrada headless.", ("server", "boot", "status"), "system-reboot", visibility="advanced"),
             _a("server.boot.remove", "Servidor", "Remover boot servidor", "Remove entrada GRUB headless.", ("server", "boot", "remove"), "edit-delete", mutable=True, preview=("server", "boot", "status"), elevated=True, visibility="advanced"),
@@ -1012,15 +1060,15 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("ai.mcp.repair", "IA & Dev", "Reparar MCPs", "Remove quebrados e reinstala defaults seguros.", ("ai", "mcp", "repair", "all"), "tools-check-spelling", mutable=True, preview=("ai", "mcp", "status"), visibility="advanced"),
             _a("ai.proxies.status", "Proxies IA", "Status proxies IA", "Audita suite OpenAI-compatible.", ("ai", "proxies", "status"), "network-server", visibility="advanced"),
             _a("ai.proxies.detailed-status", "Proxies IA", "Status consolidado", "Instalação, serviços, autenticação e IDEs em um JSON.", ("ai", "proxies", "detailed-status"), "system-search", badge="JSON", visibility="advanced"),
-            _a("ai.proxies.restart-one", "Proxies IA", "Reiniciar proxy", "Reinicia o serviço de usuário de um proxy.", ("ai", "proxies", "restart", "{proxy}"), "view-refresh", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy")),), visibility="advanced"),
-            _a("ai.proxies.test-one", "Proxies IA", "Testar proxy específico", "Probe /v1/models + chat de um proxy.", ("ai", "proxies", "test", "{proxy}"), "network-server", parameters=(_p("proxy", "Proxy", "choice", choices=("kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy", "9router")),), visibility="advanced"),
+            _a("ai.proxies.restart-one", "Proxies IA", "Reinício bloqueado", "Não reinicia proxy consumidor até grant aplicado por requisição.", ("ai", "proxies", "restart", "{proxy}"), "view-refresh", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy")),), visibility="advanced"),
+            _a("ai.proxies.test-one", "Proxies IA", "Probe bloqueado", "Não envia inferência de probe até grant aplicado por requisição.", ("ai", "proxies", "test", "{proxy}"), "network-server", parameters=(_p("proxy", "Proxy", "choice", choices=("kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy", "9router")),), visibility="advanced"),
             _a("ai.9router.provider-status", "IA & Dev", "Providers 9Router", "Lista conexões sem revelar chaves.", ("ai", "9router", "provider", "status"), "network-server", visibility="advanced"),
             _a("ai.9router.combo-list", "IA & Dev", "Combos 9Router", "Lista cadeias de fallback ativas.", ("ai", "9router", "combo", "list"), "view-list-details", visibility="advanced"),
             _a("ai.9router.watchdog-install", "IA & Dev", "Ativar watchdog 9Router", "Coleta saúde passiva e telemetria resumida a cada dez minutos.", ("ai", "9router", "watchdog", "install"), "appointment-new", mutable=True, preview=("ai", "9router", "status"), visibility="advanced"),
             _a("ai.codexbar.watchdog-install", "IA & Dev", "Ativar watchdog CodexBar", "Ativa verificação horária sem tocar no Plasma.", ("ai", "codexbar", "watchdog", "install"), "appointment-new", mutable=True, preview=("ai", "codexbar", "watchdog", "status"), visibility="advanced"),
             _a("ai.codexbar.watchdog-remove", "IA & Dev", "Desativar watchdog CodexBar", "Remove timer de saúde CodexBar.", ("ai", "codexbar", "watchdog", "remove"), "appointment-missed", mutable=True, preview=("ai", "codexbar", "watchdog", "status"), visibility="advanced"),
             _a("ai.codexbar.plasmoid-remove", "IA & Dev", "Remover KodexBar do Plasma", "Faz backup do layout, remove instâncias via DBus e desinstala pacote QML.", ("ai", "codexbar", "plasmoid-remove"), "edit-delete", mutable=True, preview=("ai", "codexbar", "status"), risk="high", visibility="advanced"),
-            _a("ai.setup.tool", "IA & Dev", "Instalar ferramenta IA", "Executa setup seguro para uma ferramenta pública.", ("ai", "setup", "{tool}"), "system-software-install", mutable=True, preview=("ai", "status"), parameters=(_p("tool", "Ferramenta", "choice", choices=("codex", "ollama", "webui", "claude", "desktop", "opencode", "omo", "hermes", "openclaw", "memory", "admin", "rtk", "caveman", "headroom", "compat", "ides", "ide-apps", "usagebar", "codexbar", "all")),), visibility="advanced"),
+            _a("ai.setup.tool", "IA & Dev", "Instalar ferramenta IA", "Executa setup disponível; consumidores sem grant por requisição ficam fora da seleção.", ("ai", "setup", "{tool}"), "system-software-install", mutable=True, preview=("ai", "status"), parameters=(_p("tool", "Ferramenta", "choice", choices=("codex", "ollama", "claude", "desktop", "opencode", "omo", "memory", "admin", "rtk", "caveman", "headroom", "compat", "ides", "ide-apps", "usagebar", "codexbar", "all")),), visibility="advanced"),
             _a("ai.mcp.sync-target", "IA & Dev", "Sincronizar MCP por cliente", "Sincroniza servidores seguros no cliente escolhido.", ("ai", "mcp", "sync", "{target}"), "folder-sync", mutable=True, preview=("ai", "mcp", "status"), parameters=(_p("target", "Cliente", "choice", choices=("all", "codex", "claude", "opencode", "vscode")),), visibility="advanced"),
             _a("ai.proxies.install-one", "Proxies IA", "Instalar proxy específico", "Instala ou atualiza um proxy da suite.", ("ai", "proxies", "install", "{proxy}"), "network-server", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy", "9router")),), visibility="advanced"),
 

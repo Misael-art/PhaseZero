@@ -121,6 +121,9 @@ class ResultsPage(BasePage):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # Keep Tab traversal moving out of the table to the result detail pane;
+        # arrow keys remain available for row navigation.
+        self.table.setTabKeyNavigation(False)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -237,7 +240,9 @@ class ResultsPage(BasePage):
         action = self.by_id.get(self._retry_action_id)
         if action is None:
             return
-        self.request_action(action)
+        # Explicit retry resumes the previously selected operation through
+        # its confirmation flow; it is not a shortcut into app navigation.
+        self.action_requested.emit(action)
 
     def _open_folder(self) -> None:
         folder = state_dir().parent

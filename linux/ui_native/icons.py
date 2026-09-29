@@ -109,7 +109,7 @@ def _read_icon_key(path: Path) -> str:
 def _candidate_basenames(source_kind: str, source_name: str) -> tuple[str, ...]:
     if not source_name:
         return ()
-    if source_kind == "flatpak":
+    if source_kind in {"flatpak", "desktop-entry"}:
         # App id é o nome do arquivo exportado, sem exceção.
         return (source_name,)
     # Pacotes: o `.desktop` costuma repetir o nome do binário; variações com
@@ -133,6 +133,25 @@ def find_desktop_icon(
             if icon:
                 return icon, entry
     return "", None
+
+
+def find_desktop_entry(
+    source_kind: str,
+    source_name: str,
+    roots: Iterable[Path],
+) -> Path | None:
+    """Return a desktop entry constrained to the supplied XDG application roots."""
+    for basename in _candidate_basenames(source_kind, source_name):
+        for root in roots:
+            entry = root / f"{basename}.desktop"
+            try:
+                resolved = entry.resolve(strict=True)
+                resolved.relative_to(root.resolve(strict=True))
+            except (OSError, ValueError):
+                continue
+            if resolved.is_file():
+                return resolved
+    return None
 
 
 def _is_allowed_icon_path(path: Path, roots: Iterable[Path]) -> bool:
