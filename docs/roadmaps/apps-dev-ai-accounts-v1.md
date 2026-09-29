@@ -2354,3 +2354,24 @@ de 4 GiB nem outra VM local durante esses trabalhos. Nenhuma VM foi iniciada;
 ISO `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
 continua sem leitura, hash, montagem ou boot. Windows G2 permanece não
 realizado; seguir com ciclos herméticos remotos e etapas independentes.
+
+Reavaliação Windows G2 — 2026-09-29 11:44 -03:00: etapa **não realizada**.
+`free -h`: 14 GiB RAM total, 4,9 GiB disponíveis, 6,6 GiB swap em uso;
+`uptime`: load average 9,65/6,82/6,27. Amostra de processos mostrou tarefas
+concorrentes com CPU acima de 100%, além de editores e navegador ativos. A
+margem atual não sustenta VM sem risco para os trabalhos do host; a execução
+também veda usar VM no host de desenvolvimento. A ISO indicada segue sem leitura,
+hash, montagem ou boot; nenhuma VM foi iniciada nem processo interrompido.
+Windows G2 continua pendente. Avançar com CI remoto e critérios independentes.
+
+CI do SHA `0444f1ddb226c670bbc7a7d1f4df5ff23660c9ee` concluiu em
+2026-09-29: PR run `36583319947` e push run `36583328981`, ambos 15/15 jobs
+verdes. Python: 1335 passaram, 3 ignorados e 15 subtests; hit-test Xvfb 2/2
+em 100%, 150% e 200%; Pester: 801 passaram, 0 falhas e 2 ignorados; Windows
+credential-store fixtures: 9 passaram. Job Arch continua containerizado e
+`windows-vm-shell-test` continua hermético; nenhum fecha VM G2. Em seguida,
+`a16d0a3` adiciona probe opcional do QEMU/KVM em runner Ubuntu hospedado para
+decidir viabilidade de VM G2 sem carga local. Probe vazio apenas consulta QMP e
+`query-kvm`; mesmo verde não equivale a guest Arch/Windows, ciclo do produto ou
+snapshot G2. Validação estática local: ShellCheck e `bash -n` do probe, parse do
+YAML e `git diff --check` passaram; execução remota aguarda push do commit.

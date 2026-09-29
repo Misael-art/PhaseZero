@@ -396,6 +396,25 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests/test_development_journey_arch_container.py -q -s
 
+  hosted-qemu-kvm-probe:
+    # Check whether an isolated hosted Linux runner can support future real-VM
+    # G2 work. This empty guest probe is not itself G2 evidence.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install QEMU
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86
+
+      - name: Probe hosted QEMU/KVM with an empty disposable guest
+        run: bash tests/probe_hosted_qemu_kvm.sh
+
   package-smoke:
     runs-on: ubuntu-latest
     needs: shell-lint
