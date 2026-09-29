@@ -589,3 +589,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pytest
           python -m pytest tests/test_windows_credential_store.py tests/test_credential_vault.py -k windows -q
+
+      - name: Verify native Windows Credential Manager and DPAPI on the disposable runner
+        shell: powershell
+        run: python -m pytest tests/test_windows_native_store_smoke.py -q
