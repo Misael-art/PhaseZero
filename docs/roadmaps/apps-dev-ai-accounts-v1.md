@@ -419,11 +419,11 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditorias documentais v6.1.0 e v6.1.1 em 2026-09-27 não removeram os gates: limite same-user e gateway `exec` continuam; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado: amostra 2026-09-27 tem 6,7 GiB disponíveis, porém imagem fica em Btrfs com diagnóstico aberto e guest deixaria 2,7 GiB para host (registro abaixo). Nenhuma integração, pacote ou rota ativados. |
+| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditorias documentais v6.1.0 e v6.1.1 em 2026-09-27 não removeram os gates: limite same-user e gateway `exec` continuam; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado; reavaliação de 2026-09-29 e ISO intocada estão registradas ao fim do diário. Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. G2 Arch/Windows integral, reader real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate agora percorre Tab real e setas em grupos exclusivos; correção no Results evita que QTableWidget retenha Tab antes do disclosure técnico. Regressão local: 111 testes passaram em três módulos; CI desse SHA ainda não executado. G2 Arch/Windows integral, leitor de tela real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -2047,3 +2047,29 @@ guardas GitHub Actions/job/root/Arch. Parse AST e `git diff --check` locais pass
 nenhuma transação foi executada no host. Esta prova usa container Arch descartável;
 não fecha Windows G2, ciclo completo em host limpo, cancelamento iniciado pela UI
 com gestor real ou G4. PXA-004/005 permanecem `in_progress`.
+
+Windows G2 reavaliado — 2026-09-29 00:19 -03:00: etapa **não realizada** para
+preservar capacidade do host. Consulta read-only: RAM 14 GiB, disponível 6,2 GiB;
+swap 22 GiB, 4,1 GiB usada; load 3,04/3,98/4,59. Qoder, Electron, Plasma e
+processos Python ativos; Qoder chegou a 51,3% CPU na amostra. Guest Windows exige
+4 GiB, deixando cerca de 2,2 GiB disponíveis ao host nesse snapshot, sem margem
+segura para carga concorrente. `/mnt/sdcard` tinha 236 GiB livres, mas o gate
+histórico de integridade/semântica do armazenamento QCOW2 segue aberto; espaço
+livre não o resolve. ISO fornecida permaneceu intocada: sem `stat`, leitura,
+hash, montagem ou boot. Nenhum processo foi interrompido e nenhuma VM iniciada.
+G2 Windows continua pendente; seguir com aceites herméticos independentes.
+
+PXA-014 foco real por teclado — 2026-09-29 00:43 -03:00, commit `22101c4`:
+gate anterior conferia `focusPolicy`, mas não percorria a sequência real de Tab.
+Teste novo percorre controles habilitados em 22 categorias e valida setas em
+grupos exclusivos: os filtros Linux compartilham um único ponto Tab e usam
+setas para trocar seleção. A execução real revelou `QTableWidget` da página
+Resultados consumindo Tab e prendendo foco antes de “Ver detalhes técnicos”.
+`ResultsPage` agora desativa navegação por Tab entre células; setas continuam
+disponíveis para navegar linhas. Regressão hermética local, `QT_QPA_PLATFORM=offscreen`,
+HOME/XDG temporários configurados variável a variável: foco novo 22/22; suíte
+`tests/test_accessibility_gate.py tests/test_linux_hub_ui.py
+tests/test_native_navigation.py` — 111 passaram em 61,50 s. `py_compile` e
+`git diff --check` passaram. CI push/PR verde conhecido é HEAD anterior
+`5de52a2`; CI do `22101c4` pendente. Isto prova sequência/foco Qt, não leitor de
+tela audível nem G4. Arch/Windows G2 e validação física seguem pendentes.
