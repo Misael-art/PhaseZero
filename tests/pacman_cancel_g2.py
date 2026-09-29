@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from linux.capabilities import state as capability_state
 from linux.capabilities.engine import apply_plan, create_plan, rollback_operation
 from linux.capabilities.platform import detect
 from linux.capabilities.providers import Provider
@@ -136,6 +137,41 @@ def _wait_for_install_exit(pid: int, target: str, timeout: int = 900) -> None:
     raise RuntimeError(f"orphaned pacman install timed out: {target}")
 
 
+def _wait_for_post_commit_worker(
+    process: subprocess.Popen[str], marker: Path, target: str,
+) -> None:
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        if marker.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    f"worker exited after real package commit: "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+            if not _is_installed(target) or _running_install(target) is not None:
+                raise RuntimeError(
+                    "post-commit barrier did not observe a finished pacman install"
+                )
+            os.kill(process.pid, signal.SIGSTOP)
+            stop_deadline = time.monotonic() + 10
+            while time.monotonic() < stop_deadline:
+                if _proc_state(process.pid) in {"T", "t"}:
+                    return
+                if process.poll() is not None:
+                    break
+                time.sleep(0.01)
+            raise RuntimeError("could not stop worker after real package commit")
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"worker exited before post-commit barrier: "
+                f"stdout={stdout!r} stderr={stderr!r}"
+            )
+        time.sleep(0.02)
+    raise RuntimeError("worker did not reach post-commit barrier")
+
+
 def _clear_stale_pacman_lock() -> None:
     live_pacman: list[int] = []
     for entry in Path("/proc").iterdir():
@@ -149,7 +185,7 @@ def _clear_stale_pacman_lock() -> None:
         if (
             argv
             and Path(argv[0]).name == "pacman"
-            and _proc_state(int(entry.name)) not in {None, "Z", "X"}
+            and _proc_state(int(entry.name)) not in {"Z", "X"}
         ):
             live_pacman.append(int(entry.name))
     if live_pacman:
@@ -228,13 +264,41 @@ def _set_sandbox_paths(root: Path) -> None:
     )
 
 
-def _apply_child(plan_id: str, confirmation: str, cancel_path: Path) -> int:
+def _apply_child(
+    plan_id: str,
+    confirmation: str,
+    cancel_path: Path | None,
+    *,
+    package_commit_marker: Path | None = None,
+) -> int:
     facts = _facts()
+    provider = Provider(facts)
+    if package_commit_marker is not None:
+        execute = provider.execute
+        release_marker = package_commit_marker.with_name(
+            package_commit_marker.name + ".release"
+        )
+
+        def execute_then_pause(plan):
+            result = execute(plan)
+            command = plan.command()
+            if (
+                result[0] == 0
+                and Path(shutil.which(command[0]) or command[0]).resolve()
+                == Path("/usr/bin/pacman")
+                and command[1:] == ["-S", "--needed", "--noconfirm", "nodejs"]
+            ):
+                package_commit_marker.touch(mode=0o600, exist_ok=False)
+                while not release_marker.exists():
+                    time.sleep(0.02)
+            return result
+
+        provider.execute = execute_then_pause
     record = apply_plan(
         plan_id,
         confirmation=confirmation,
         facts=facts,
-        provider=Provider(facts),
+        provider=provider,
         cancel_file=cancel_path,
     )
     print(json.dumps(record, separators=(",", ":")))
@@ -450,11 +514,98 @@ def _run() -> None:
         if _is_installed("nodejs") or _is_installed("pnpm"):
             raise RuntimeError("crash-recovery cleanup left test packages installed")
 
+        commit_plan = create_plan(
+            profile_ids=["development-web-js"], facts=facts, provider=provider,
+        )
+        if not commit_plan.get("ok") or commit_plan.get("status") != "ready":
+            raise RuntimeError(f"Arch post-commit profile did not plan: {commit_plan!r}")
+        commit_marker = temp_root / "nodejs-package-committed"
+        commit_worker = subprocess.Popen(
+            [
+                sys.executable, str(Path(__file__).resolve()), "_apply_after_commit",
+                str(commit_plan["id"]), str(commit_plan["confirmToken"]),
+                str(commit_marker),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            _wait_for_post_commit_worker(commit_worker, commit_marker, "nodejs")
+            if _is_installed("pnpm"):
+                raise RuntimeError("post-commit barrier reached after unexpected pnpm install")
+            if any(
+                item.get("planId") == commit_plan["id"]
+                for item in capability_state.list_records("operations")
+            ):
+                raise RuntimeError("operation was recorded before the crash injection point")
+            os.kill(commit_worker.pid, signal.SIGKILL)
+            commit_stdout, commit_stderr = commit_worker.communicate(timeout=10)
+            if commit_worker.returncode != -signal.SIGKILL:
+                raise RuntimeError(
+                    f"post-commit worker was not killed: "
+                    f"returncode={commit_worker.returncode}"
+                )
+            print(
+                "killed apply worker after real pacman committed nodejs and before "
+                "operation record was saved",
+                flush=True,
+            )
+            if commit_stdout or commit_stderr:
+                print(
+                    "Post-commit worker output captured before crash: "
+                    f"stdout={commit_stdout!r} stderr={commit_stderr!r}",
+                    flush=True,
+                )
+        except BaseException:
+            _stop_process_group(commit_worker)
+            raise
+
+        if not _is_installed("nodejs") or _is_installed("pnpm"):
+            raise RuntimeError("real package commit was not preserved across worker crash")
+        committed_resumed = apply_plan(
+            commit_plan["id"], confirmation=commit_plan["confirmToken"],
+            facts=facts, provider=provider,
+        )
+        if (
+            committed_resumed.get("status") != "complete"
+            or [item["capabilityId"] for item in committed_resumed["installedByOperation"]]
+            != ["development.pnpm"]
+            or not _is_installed("nodejs")
+            or not _is_installed("pnpm")
+        ):
+            raise RuntimeError(
+                f"post-commit resume claimed package without operation record: "
+                f"{committed_resumed!r}"
+            )
+        committed_rollback = rollback_operation(
+            committed_resumed["id"],
+            confirmation=committed_resumed["rollbackToken"],
+            facts=facts,
+            provider=provider,
+        )
+        if (
+            committed_rollback.get("status") != "complete"
+            or not _is_installed("nodejs")
+            or _is_installed("pnpm")
+        ):
+            raise RuntimeError(
+                f"post-commit rollback removed unowned Node.js: {committed_rollback!r}"
+            )
+        print(
+            "post-commit recovery recorded only pnpm; rollback removed pnpm and "
+            "preserved unowned Node.js",
+            flush=True,
+        )
+        subprocess.run(["pacman", "-Rns", "--noconfirm", "nodejs"], check=True)
+
         print(
             "PASS: real pacman completed active Node.js transaction, honored cancel "
             "at the safe boundary, resumed pnpm, repeated idempotently, and rolled back; "
-            "a killed apply worker recovered the interrupted transaction without "
-            "claiming preexisting Node.js."
+            "a killed worker recovered mid-transaction; a second worker killed after "
+            "real Node.js commit resumed without claiming the unrecorded package, "
+            "and rollback preserved it."
         )
     finally:
         shutil.rmtree(temp_root)
@@ -466,6 +617,11 @@ def main() -> int:
     os.environ["LC_ALL"] = "C"
     if len(sys.argv) == 5 and sys.argv[1] == "_apply":
         return _apply_child(sys.argv[2], sys.argv[3], Path(sys.argv[4]))
+    if len(sys.argv) == 5 and sys.argv[1] == "_apply_after_commit":
+        return _apply_child(
+            sys.argv[2], sys.argv[3], None,
+            package_commit_marker=Path(sys.argv[4]),
+        )
     if len(sys.argv) != 1:
         raise SystemExit("usage: pacman_cancel_g2.py")
     _run()
