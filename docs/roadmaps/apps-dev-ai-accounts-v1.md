@@ -2073,3 +2073,19 @@ tests/test_native_navigation.py` — 111 passaram em 61,50 s. `py_compile` e
 `git diff --check` passaram. CI push/PR verde conhecido é HEAD anterior
 `5de52a2`; CI do `22101c4` pendente. Isto prova sequência/foco Qt, não leitor de
 tela audível nem G4. Arch/Windows G2 e validação física seguem pendentes.
+
+PXA-014 reflow com temas — 2026-09-29 01:01 -03:00, commit `249acfc`:
+teste Xvfb de controles no detalhe Aplicativos agora usa tema real claro/escuro
+e redimensiona 800×600 → 1280×800 → 800×600, validando retângulo dentro do
+viewport em cada transição. Teste focado offscreen: 2 passaram em 6,96 s;
+prova local cobre geometria, não hit-test. Xvfb não está instalado no host;
+hit-test real permanece no job CI XCB estrito, que confere QScreen/DPR e
+`widgetAt` nas três escalas. Offscreen Qt com QSS retornou QWidget ancestral
+em `widgetAt`; esse backend não vale como hit-test físico.
+
+Regressão conjunta de quatro módulos foi interrompida pelo próprio executor
+após a amostra mostrar pytest em ~5,8 GiB RAM e 99% CPU, para preservar o host.
+`ps -C pytest` confirmou processo encerrado; memória disponível voltou a 7,7 GiB;
+somente HOME temporário `/tmp/pz-pxa014-final.pmv55O` foi removido. Essa tentativa
+não tem resultado de teste. Permanecem válidos o ciclo menor anterior (111
+passaram em três módulos) e os dois testes focados acima. CI do `249acfc` pendente.
