@@ -2089,3 +2089,13 @@ após a amostra mostrar pytest em ~5,8 GiB RAM e 99% CPU, para preservar o host.
 somente HOME temporário `/tmp/pz-pxa014-final.pmv55O` foi removido. Essa tentativa
 não tem resultado de teste. Permanecem válidos o ciclo menor anterior (111
 passaram em três módulos) e os dois testes focados acima. CI do `249acfc` pendente.
+
+Correção do timeout de tema — 2026-09-29 01:15 -03:00: o `python-test` do PR CI
+`36519907036` expirou ao restaurar o estilo global em
+`test_product_host_controls_fit_and_receive_pointer_at_supported_widths`.
+`apply_theme()` seleciona Fusion; `qapp.setStyle(original_style)` reconstruía
+todos os widgets durante o cleanup offscreen. O teste agora preserva Fusion
+(estilo usado pelo app) e restaura stylesheet/paleta sem recriar o estilo global.
+Teste focado local: 2 passaram em 5,50 s; `py_compile` e `git diff --check`
+passaram. Esse CI continua registrado como falha; a correção precisa de novo
+HEAD verde antes de declarar o gate validado.

@@ -846,7 +846,6 @@ def test_remote_product_status_requires_registered_host_and_keeps_actions_blocke
 def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp, theme):
     from linux.ui_native.app import apply_theme
 
-    original_style = qapp.style().objectName()
     original_stylesheet = qapp.styleSheet()
     original_palette = qapp.palette()
     window = host_patcher = status_patcher = None
@@ -916,7 +915,9 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
             host_patcher.stop()
         if status_patcher is not None:
             status_patcher.stop()
-        qapp.setStyle(original_style)
+        # apply_theme selects Fusion, the same style used by the application.
+        # Restoring QApplication's prior style rebuilds every Qt widget and
+        # can hang this offscreen suite during teardown.
         qapp.setStyleSheet(original_stylesheet)
         qapp.setPalette(original_palette)
 
