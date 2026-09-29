@@ -911,11 +911,24 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
                     # The offscreen QPA may return an ancestor for widgetAt;
                     # strict pointer targeting belongs to the XCB/Xvfb CI job.
                     hit = qapp.widgetAt(widget.mapToGlobal(widget.rect().center()))
-                    assert hit is widget or (hit is not None and widget.isAncestorOf(hit)), (
-                        f"{theme} {width}x{height}: {widget.objectName()} recebeu hit "
-                        f"em {type(hit).__name__ if hit is not None else None}/"
-                        f"{hit.objectName() if hit is not None else ''}"
-                    )
+                    if hit is not widget and (hit is None or not widget.isAncestorOf(hit)):
+                        def path(candidate):
+                            rows = []
+                            while candidate is not None:
+                                rect = candidate.rect()
+                                rows.append(
+                                    f"{type(candidate).__name__}#{candidate.objectName()}"
+                                    f"[{rect.x()},{rect.y()},{rect.width()},{rect.height()}]"
+                                    f" transparent={candidate.testAttribute(Qt.WA_TransparentForMouseEvents)}"
+                                )
+                                candidate = candidate.parentWidget()
+                            return " <- ".join(rows)
+
+                        raise AssertionError(
+                            f"{theme} {width}x{height}: {widget.objectName()} recebeu hit "
+                            f"em {path(hit) if hit is not None else None}; "
+                            f"alvo={path(widget)}"
+                        )
 
         with patch.object(page.status_loader, "fetch") as fetch:
             QTest.mouseClick(refresh, Qt.LeftButton)

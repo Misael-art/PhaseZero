@@ -2125,3 +2125,21 @@ Modo real agora envolve `apply_plan` com `HostFacts` do Arch e `Provider` real,
 no padrão do harness G2 existente. A falha de observação inclui stdout/stderr e
 payload da operação para diagnóstico se repetir. Fixture local segue 1 passada;
 nova evidência Arch ainda pendente.
+
+PXA-005 / PXA-014 reteste CI `36523435297`, HEAD `0bbc64d` — 2026-09-29:
+o Arch disposable observou `pacman -S nodejs` real, cancelamento pela UI,
+resultado `cancelled`, Node.js instalado, pnpm ausente, ledger retomável e arquivo
+de cancelamento removido. Job falhou somente na limpeza: o teste buscava `id` e
+`rollbackToken` no registro do `OperationLedger`, que expõe `operationId` e não
+inclui token do motor. Teste agora usa o resultado JSON público do motor e cobre
+rollback também via provider fixture. Fixture local: 1 passou em 3,14 s;
+`py_compile` e `git diff --check` passaram. Nenhum pacote do CI tocou host local.
+
+No mesmo run, suíte pytest integral passou; etapa separada de Xvfb falhou em
+ambos os temas a 800×600: centro de `productHostSelector` retornou QWidget sem
+nome em `QApplication.widgetAt`, fora da cadeia esperada. Teste ganhou
+diagnóstico de pais, retângulos e transparência para distinguir overlay de erro
+de hit-test na próxima execução. Teste focado local offscreen: 3 passaram em
+5,26 s; `py_compile` e `git diff --check` passaram. Offscreen não reproduz XCB;
+causa do hit-test permanece aberta. PXA-005 e PXA-014 seguem `in_progress` até
+CI nova provar respectivamente rollback real e hit-test XCB nas escalas exigidas.

@@ -331,13 +331,29 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         assert record["nextAction"] == completed[0].action_id
         assert len(cancel_file_paths) == 1
         assert not cancel_file_paths[0].exists()
+        operation = completed[0].parsed
+        assert operation["id"]
+        assert operation["rollbackToken"]
+        rollback_provider = Provider(facts)
+        if not real_pacman_ui:
+            class FixtureRollbackProvider(PlanningProvider):
+                def execute(self, command):
+                    assert command.args == ("-Rs", "--noconfirm", "nodejs")
+                    packages = set(json.loads(package_state.read_text(encoding="utf-8")))
+                    packages.remove("nodejs")
+                    package_state.write_text(json.dumps(sorted(packages)), encoding="utf-8")
+                    return 0, "fixture package removed", ""
+
+            rollback_provider = FixtureRollbackProvider(facts)
+        rollback = engine.rollback_operation(
+            operation["id"], confirmation=operation["rollbackToken"],
+            facts=facts, provider=rollback_provider,
+        )
+        assert rollback["status"] == "complete"
         if real_pacman_ui:
-            rollback = engine.rollback_operation(
-                record["id"], confirmation=record["rollbackToken"],
-                facts=facts, provider=Provider(facts),
-            )
-            assert rollback["status"] == "complete"
             assert not _pacman_package_installed("nodejs")
+        else:
+            assert json.loads(package_state.read_text(encoding="utf-8")) == []
     finally:
         cancel_timer.stop()
         window.close()
