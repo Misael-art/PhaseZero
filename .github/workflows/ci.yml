@@ -393,7 +393,7 @@ jobs:
         env:
           PZ_ENABLE_ARCH_PUBLIC_JOURNEY_G2: "1"
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests/test_development_journey_g2.py -q
+        run: python -m pytest tests/test_development_journey_g2.py -q -s
 
   package-smoke:
     runs-on: ubuntu-latest

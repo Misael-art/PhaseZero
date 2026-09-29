@@ -207,6 +207,23 @@ raise SystemExit(cli.main(arguments))
         } == {"development.nodejs", "development.pnpm"}
         assert _pacman_package_installed("nodejs")
         assert _pacman_package_installed("pnpm")
+        package_versions = subprocess.run(
+            ["/usr/bin/pacman", "-Q", "nodejs", "pnpm"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert package_versions.returncode == 0, (
+            package_versions.stdout, package_versions.stderr,
+        )
+        print(
+            "Public prepareDevelopment confirmed PreviewDialog; engine status=complete; "
+            "owned=development.nodejs,development.pnpm",
+            flush=True,
+        )
+        print(
+            "Installed package versions via pacman -Q nodejs pnpm:\n"
+            f"{package_versions.stdout.strip()}",
+            flush=True,
+        )
 
         node = subprocess.run(
             ["/usr/bin/node", "--version"], capture_output=True, text=True,
@@ -235,10 +252,15 @@ raise SystemExit(cli.main(arguments))
         assert status_by_id["development.nodejs"] is True
         assert status_by_id["development.pnpm"] is True
         assert "Validação consultada" in page.status.text()
+        print(
+            "Public validateDevelopment confirms nodejs=true and pnpm=true",
+            flush=True,
+        )
 
         page.findChild(QPushButton, "openDevelopmentTool").click()
         assert window.stack.currentWidget() is window.registry.page_for("Aplicativos")
         assert window.registry.page_for("Aplicativos").selected_app_id == "app.nodejs"
+        print("Public openDevelopmentTool selected canonical app.nodejs", flush=True)
         assert dialogs_seen.count("preview") == 1
         assert dialogs_seen.count("result") == 2
         assert not dialog_errors, dialog_errors

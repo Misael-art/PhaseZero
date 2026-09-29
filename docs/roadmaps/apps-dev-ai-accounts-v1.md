@@ -2247,6 +2247,14 @@ CI da revisão documental v6.1.3/PXA-008 — 2026-09-29, HEAD `858a797`: push
 9/9. São execuções do mesmo código com mudança só documental; não provam conta,
 quota, túnel, broker, Windows G2, leitor de tela ou G4.
 
+PXA-010 gate de descoberta — reteste 2026-09-29 05:32 -03:00:
+`tests/test_product_inventory.py -k
+chatgpt_codex_bridge_stays_unlisted_until_browser_only_gate_passes` passou
+(1 teste, 23 deselected, 0,12 s). Browser-only segue fora do catálogo até seu
+gate; Full segue independente e fechado. Nenhum launcher, pacote, sessão,
+cookie, conta, túnel, broker ou rota foi iniciado ou alterado. Isto confirma
+descoberta fail-closed, não prova isolamento runtime nem elegibilidade.
+
 PXA-005 jornada pública G2 Arch adicionada — 2026-09-29 05:23 -03:00: o teste
 `tests/test_development_journey_g2.py` e o passo `arch-clean-host` em CI cobrem
 prévia e confirmação públicas, instalação real via `pacman`, validação de
@@ -2256,11 +2264,19 @@ root, `/etc/arch-release` e `/usr/bin/pacman`. O teste registra raiz de pacote,
 banco/cache/log do pacman e caminhos HOME/XDG/PZ; verifica ausência inicial dos
 pacotes e registra versões usadas. No host, `py_compile`, YAML e `git diff
 --check` passaram; regressão Development passou 13, com 1 skip da etapa G2 pela
-guarda. CI real ainda pendente; PXA-005 continua `in_progress`.
+guarda. CI PR `36542599094`, HEAD `24808f2`, concluiu 15/15 jobs; o passo
+Arch passou em 5,94 s. Porém `pytest -q` capturou a saída do teste, então os
+valores de versão e caminhos não ficaram nos logs consultáveis. A execução foi
+ampliada com `pacman -Q nodejs pnpm` e `pytest -s` para expor prova exata;
+nova CI está pendente. Não contar versão publicada pelo teste sem saída visível.
+PXA-005 continua `in_progress`.
 
 PXA-004/005/014 Windows G2 — **não realizada em 2026-09-29**. Operador forneceu
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` e pediu
 avaliação por risco de concorrência no host. Para preservar os processos e
-trabalhos existentes, não inspecionei, montei, inicializei nem executei a ISO;
-nenhuma VM, boot ou pacote foi acionado no host. Etapa registrada como não
-realizada; seguir com provas descartáveis CI e demais tarefas independentes.
+trabalhos existentes, fiz apenas leitura do host às 05:25 -03:00: 14 GiB RAM,
+6,1 GiB disponíveis, 3 GiB swap em uso, load average 2,66/2,37/1,67; Java usava
+108% CPU e Electron 24,7%; nenhum processo `qemu-system-x86_64`. Não inspecionei,
+montei, inicializei nem executei a ISO; nenhuma VM, boot ou pacote foi acionado
+no host. Etapa registrada como não realizada; seguir com provas descartáveis CI
+e demais tarefas independentes.
