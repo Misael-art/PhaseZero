@@ -2292,7 +2292,7 @@ montei, inicializei nem executei a ISO; nenhuma VM, boot ou pacote foi acionado
 no host. Etapa registrada como não realizada; seguir com provas descartáveis CI
 e demais tarefas independentes.
 
-PXA-005 G2 Arch — reforço de preservação e reativação, 2026-09-29 07:45 -03:00:
+PXA-005 G2 Arch — reforço de preservação e reativação, 2026-09-29 07:57 -03:00:
 `tests/test_development_journey_g2.py` agora fixa antes/depois a versão do
 pacote `python` e `/usr/bin/python --version`, depois da instalação, primeiro
 rollback, reativação por novo clique público em `prepareDevelopment` e remoção
@@ -2300,6 +2300,22 @@ final. Isso aumenta a prova real de preservação do runtime do SO e cobre
 install→use→rollback→reactivate→remove no Arch descartável. Regressão local
 `tests/test_development_journey_g2.py tests/test_development_journey_e2e.py
 tests/test_development_page.py`: 13 passaram, 1 skip pela guarda G2;
-`py_compile`, YAML e `git diff --check` passaram. Execução real e logs de
-versão aguardam CI; não contar este reforço antes do job Arch terminar verde.
-PXA-005 permanece `in_progress`; Windows G2 não foi executado.
+`py_compile`, YAML e `git diff --check` passaram. CI PR `36557759355`, job
+`arch-clean-host` `109370934482`, passou; o teste da jornada passou em 9,87 s.
+No container descartável Arch do Ubuntu 24.04, `/usr/bin/python` e pacote
+`python` ficaram em `3.14.7` / `3.14.7-1` antes e depois de instalar, usar,
+reverter, reativar pela UI e remover Node.js/pnpm. Versões reais: `nodejs
+26.10.0-1`, `pnpm 11.26.0-1`, `node v26.10.0`, `pnpm 11.26.0`. A UI pública
+confirmou PreviewDialog, validação de ambos os runtimes e detalhe canônico
+`app.nodejs`; rollback usou o recibo real do engine. Após primeiro rollback,
+ambos ausentes; reativação por `prepareDevelopment` concluiu; rollback final
+removeu ambos e Python permaneceu igual. CI completo no HEAD continua em
+execução no registro feito às 07:57 -03:00. PXA-005 permanece `in_progress`;
+Windows G2 não foi executado.
+
+CI PR `36557759355` no SHA `985dbfd2cbe233632ba0a631382cdbdd4446198b` concluiu
+15/15 jobs verdes. `python-test`: 1335 passaram, 3 ignorados e 15 subtests
+passaram; hit-test Xvfb passou 2/2 nas escalas 100%, 150% e 200%; Pester:
+801 passaram, 0 falhas, 2 ignorados. Push run `36557752209` também concluiu
+15/15. Isso valida o HEAD, mas não fecha Windows G2, G4, offline G2, nem
+PXA-005 como um todo.
