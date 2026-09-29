@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 
-def _assert_guarded_arch_ci() -> None:
+def _assert_guarded_arch_container_ci() -> None:
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
         or os.environ.get("GITHUB_JOB") != "arch-clean-host"
@@ -29,7 +29,7 @@ def _assert_guarded_arch_ci() -> None:
         or Path(shutil.which("pacman") or "/missing").resolve()
         != Path("/usr/bin/pacman").resolve()
     ):
-        raise AssertionError("real pacman UI test requires guarded disposable Arch CI")
+        raise AssertionError("real pacman UI test requires guarded disposable Arch container CI")
 
 
 def _pacman_install_pid(target: str) -> int | None:
@@ -72,9 +72,9 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
 ):
     from linux.ui_native.main_window import MainWindow
 
-    real_pacman_ui = os.environ.get("PZ_ENABLE_ARCH_PACMAN_UI_G2") == "1"
+    real_pacman_ui = os.environ.get("PZ_ENABLE_ARCH_PACMAN_UI_CONTAINER") == "1"
     if real_pacman_ui:
-        _assert_guarded_arch_ci()
+        _assert_guarded_arch_container_ci()
 
     home = tmp_path / "home"
     config = home / ".config"
@@ -103,6 +103,8 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
     from linux.capabilities.providers import Provider
 
     if real_pacman_ui:
+        # CI uses an Arch container, not a clean-host G2 snapshot. Override
+        # detection only to exercise the public UI/provider transaction path.
         facts = replace(detect(), container=False)
         if (
             facts.package_family != "arch"

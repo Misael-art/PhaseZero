@@ -28,16 +28,18 @@ from linux.capabilities.providers import Provider
 
 def _assert_disposable_arch_ci() -> None:
     if (
-        os.environ.get("PZ_ENABLE_ARCH_PACMAN_G2") != "1"
+        os.environ.get("PZ_ENABLE_ARCH_PACMAN_CONTAINER") != "1"
         or os.environ.get("GITHUB_ACTIONS") != "true"
         or os.environ.get("GITHUB_JOB") != "arch-clean-host"
         or os.geteuid() != 0
         or not Path("/etc/arch-release").is_file()
     ):
-        raise SystemExit("requires the guarded arch-clean-host CI container")
+        raise SystemExit("requires the guarded disposable Arch CI container")
 
 
 def _facts():
+    # The CI container is not a clean-host G2 snapshot; this override exists
+    # only for real pacman transaction/cancellation regression coverage.
     facts = replace(detect(), container=False)
     real_pacman = Path("/usr/bin/pacman").resolve()
     resolved_pacman = Path(shutil.which(facts.package_manager) or "/missing").resolve()
@@ -623,7 +625,7 @@ def main() -> int:
             package_commit_marker=Path(sys.argv[4]),
         )
     if len(sys.argv) != 1:
-        raise SystemExit("usage: pacman_cancel_g2.py")
+        raise SystemExit("usage: pacman_cancel_disposable_arch.py")
     _run()
     return 0
 

@@ -2292,16 +2292,21 @@ montei, inicializei nem executei a ISO; nenhuma VM, boot ou pacote foi acionado
 no host. Etapa registrada como não realizada; seguir com provas descartáveis CI
 e demais tarefas independentes.
 
-PXA-005 G2 Arch — reforço de preservação e reativação, 2026-09-29 07:57 -03:00:
-`tests/test_development_journey_g2.py` agora fixa antes/depois a versão do
+PXA-005 Arch container CI — jornada pública suplementar, 2026-09-29 07:57 -03:00:
+`tests/test_development_journey_arch_container.py` fixa antes/depois a versão do
 pacote `python` e `/usr/bin/python --version`, depois da instalação, primeiro
 rollback, reativação por novo clique público em `prepareDevelopment` e remoção
 final. Isso aumenta a prova real de preservação do runtime do SO e cobre
-install→use→rollback→reactivate→remove no Arch descartável. Regressão local
-`tests/test_development_journey_g2.py tests/test_development_journey_e2e.py
-tests/test_development_page.py`: 13 passaram, 1 skip pela guarda G2;
+install→use→rollback→reactivate→remove com pacman real no container Arch.
+O runner é Ubuntu 24.04 + `archlinux:latest`; o teste força `container=False`
+somente no harness para alcançar a UI/provider. Isso é prova suplementar de
+regressão; não é snapshot/host G2 e não demonstra o modo suportado fora de
+container. Regressão local `tests/test_development_journey_arch_container.py
+tests/test_development_journey_e2e.py
+tests/test_development_page.py`: 14 passaram, 1 skip pela guarda de container;
 `py_compile`, YAML e `git diff --check` passaram. CI PR `36557759355`, job
-`arch-clean-host` `109370934482`, passou; o teste da jornada passou em 9,87 s.
+`arch-clean-host` (ID legado) `109370934482`, passou; o teste da jornada
+containerizada passou em 9,87 s.
 No container descartável Arch do Ubuntu 24.04, `/usr/bin/python` e pacote
 `python` ficaram em `3.14.7` / `3.14.7-1` antes e depois de instalar, usar,
 reverter, reativar pela UI e remover Node.js/pnpm. Versões reais: `nodejs
@@ -2309,13 +2314,27 @@ reverter, reativar pela UI e remover Node.js/pnpm. Versões reais: `nodejs
 confirmou PreviewDialog, validação de ambos os runtimes e detalhe canônico
 `app.nodejs`; rollback usou o recibo real do engine. Após primeiro rollback,
 ambos ausentes; reativação por `prepareDevelopment` concluiu; rollback final
-removeu ambos e Python permaneceu igual. CI completo no HEAD continua em
-execução no registro feito às 07:57 -03:00. PXA-005 permanece `in_progress`;
-Windows G2 não foi executado.
+removeu ambos e Python permaneceu igual. CI completo no HEAD continuava em
+execução às 07:57 -03:00; resultado final aparece abaixo. PXA-005 permanece
+`in_progress`; Arch VM G2 e Windows G2 não foram executados.
 
 CI PR `36557759355` no SHA `985dbfd2cbe233632ba0a631382cdbdd4446198b` concluiu
 15/15 jobs verdes. `python-test`: 1335 passaram, 3 ignorados e 15 subtests
 passaram; hit-test Xvfb passou 2/2 nas escalas 100%, 150% e 200%; Pester:
 801 passaram, 0 falhas, 2 ignorados. Push run `36557752209` também concluiu
-15/15. Isso valida o HEAD, mas não fecha Windows G2, G4, offline G2, nem
-PXA-005 como um todo.
+15/15. Isso valida o HEAD, mas não fecha Windows G2, G4, offline público no
+PXA-005, nem o item como um todo.
+
+Correção de classificação da prova Arch — 2026-09-29 09:20 -03:00: o job
+compartilhado `arch-clean-host` executa Ubuntu 24.04 com container
+`archlinux:latest`; seu ID é legado. Os testes substituem `container=False`
+somente para exercitar o provider/UI com pacman real dentro desse container.
+Isto não é host limpo nem snapshot VM e não conta como PXA-005 G2. Renomeados
+o teste público para `tests/test_development_journey_arch_container.py`, o
+helper `tests/pacman_cancel_disposable_arch.py` e os opt-ins CI para
+`*_CONTAINER`; comentários do workflow e testes declaram o limite, preservando
+o job ID compartilhado. Validação local sob `QT_QPA_PLATFORM=offscreen`:
+14 passaram, 1 skip pela guarda; py_compile, YAML e diff-check passaram. PR CI
+`36562358552` (15/15) validou commit documental anterior à renomeação; CI do
+novo código permanece pendente. Arch VM G2 público, Windows G2 e G4 continuam
+abertos.

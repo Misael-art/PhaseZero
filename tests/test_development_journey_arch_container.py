@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 
-def _assert_guarded_arch_ci() -> None:
+def _assert_guarded_arch_container_ci() -> None:
     if (
-        os.environ.get("PZ_ENABLE_ARCH_PUBLIC_JOURNEY_G2") != "1"
+        os.environ.get("PZ_ENABLE_ARCH_PUBLIC_JOURNEY_CONTAINER") != "1"
         or os.environ.get("GITHUB_ACTIONS") != "true"
         or os.environ.get("GITHUB_JOB") != "arch-clean-host"
         or os.environ.get("GITHUB_REPOSITORY") != "Misael-art/PhaseZero"
@@ -28,7 +28,7 @@ def _assert_guarded_arch_ci() -> None:
         or Path(shutil.which("pacman") or "/missing").resolve()
         != Path("/usr/bin/pacman").resolve()
     ):
-        raise AssertionError("real Development journey requires guarded disposable Arch CI")
+        raise AssertionError("real Development journey requires guarded Arch container CI")
 
 
 def _pacman_package_installed(name: str) -> bool:
@@ -68,12 +68,12 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_development_public_journey_uses_real_pacman_on_clean_arch_g2(
+def test_development_public_journey_uses_real_pacman_in_disposable_arch_container(
     qapp, tmp_path, monkeypatch,
 ):
-    if os.environ.get("PZ_ENABLE_ARCH_PUBLIC_JOURNEY_G2") != "1":
-        pytest.skip("real package journey runs only in guarded disposable Arch CI")
-    _assert_guarded_arch_ci()
+    if os.environ.get("PZ_ENABLE_ARCH_PUBLIC_JOURNEY_CONTAINER") != "1":
+        pytest.skip("real package journey runs only in guarded Arch container CI")
+    _assert_guarded_arch_container_ci()
 
     from linux.capabilities.engine import rollback_operation
     from linux.capabilities.platform import detect
@@ -81,9 +81,11 @@ def test_development_public_journey_uses_real_pacman_on_clean_arch_g2(
     from linux.ui_native.main_window import MainWindow
     from linux.ui_native.widgets import PreviewDialog, ResultDialog
 
+    # This isolated container test overrides host detection only to exercise
+    # the public real-pacman UI path. It cannot count as clean-host G2 evidence.
     facts = replace(detect(), container=False)
     if facts.package_family != "arch":
-        raise AssertionError("guarded G2 runner did not detect Arch package family")
+        raise AssertionError("guarded Arch container did not detect Arch package family")
     if _pacman_package_installed("nodejs") or _pacman_package_installed("pnpm"):
         raise AssertionError("real public journey requires clean Arch without Node.js or pnpm")
     system_python_package = _pacman_package_version("python")

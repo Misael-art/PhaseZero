@@ -327,8 +327,9 @@ jobs:
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           /tmp/gitleaks detect --source . --no-banner -v
 
-  # PZ-AUD-027/001: official Arch repos + release asset install on a clean
-  # host. Ubuntu runners cannot prove Arch; this container can.
+  # Shared legacy job id retained for existing acceptance references. Runner
+  # uses an Arch container: proves Arch repo/package behavior, not clean-host
+  # or VM-snapshot G2 evidence.
   arch-clean-host:
     runs-on: ubuntu-latest
     container: archlinux:latest
@@ -380,20 +381,20 @@ jobs:
 
       - name: Cancel real pacman from the public Development UI in disposable Arch
         env:
-          PZ_ENABLE_ARCH_PACMAN_UI_G2: "1"
+          PZ_ENABLE_ARCH_PACMAN_UI_CONTAINER: "1"
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests/test_development_cancel.py -q
 
       - name: Verify real pacman cancellation and worker-crash recovery in disposable Arch
         env:
-          PZ_ENABLE_ARCH_PACMAN_G2: "1"
-        run: python "$GITHUB_WORKSPACE/tests/pacman_cancel_g2.py"
+          PZ_ENABLE_ARCH_PACMAN_CONTAINER: "1"
+        run: python "$GITHUB_WORKSPACE/tests/pacman_cancel_disposable_arch.py"
 
       - name: Run public Development install-use-rollback journey in disposable Arch
         env:
-          PZ_ENABLE_ARCH_PUBLIC_JOURNEY_G2: "1"
+          PZ_ENABLE_ARCH_PUBLIC_JOURNEY_CONTAINER: "1"
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests/test_development_journey_g2.py -q -s
+        run: python -m pytest tests/test_development_journey_arch_container.py -q -s
 
   package-smoke:
     runs-on: ubuntu-latest
