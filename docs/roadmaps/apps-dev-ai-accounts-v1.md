@@ -2115,3 +2115,13 @@ G2 existente. Ramo fixture local: 1 passou em 2,88 s; `py_compile` e
 `git diff --check` passaram. Nenhum pacote/pacman real foi executado no host.
 Prova de modo real ainda depende da nova execução CI; PXA-005 continua
 `in_progress`.
+
+Primeira CI do cancelamento UI real — 2026-09-29 01:49 -03:00: Arch push run
+`36522909580`, job `109259563729`, falhou após 1,95 s: UI completou sem o teste
+observar PID `pacman -S nodejs`; nenhum pacote real foi confirmado nesse cenário.
+Inspeção do wrapper mostrou que substituir `cli.detect` não altera a detecção
+interna usada pelo `engine.apply_plan`, chamado por `cli.main` sem facts/provider.
+Modo real agora envolve `apply_plan` com `HostFacts` do Arch e `Provider` real,
+no padrão do harness G2 existente. A falha de observação inclui stdout/stderr e
+payload da operação para diagnóstico se repetir. Fixture local segue 1 passada;
+nova evidência Arch ainda pendente.

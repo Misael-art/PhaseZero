@@ -212,9 +212,15 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
             f"import sys\nsys.path.insert(0, {str(ROOT)!r})\n"
             "from dataclasses import replace\n"
             "from linux.capabilities import __main__ as cli\n"
+            "from linux.capabilities.engine import apply_plan as real_apply_plan\n"
             "from linux.capabilities.platform import detect\n"
+            "from linux.capabilities.providers import Provider\n"
             "facts = replace(detect(), container=False)\n"
+            "provider = Provider(facts)\n"
             "cli.detect = lambda: facts\n"
+            "cli.apply_plan = lambda plan_id, **kwargs: real_apply_plan(\n"
+            " plan_id, facts=facts, provider=provider, **kwargs,\n"
+            ")\n"
             "arguments = sys.argv[1:]\n"
             "if arguments and arguments[0] == 'capabilities':\n"
             " arguments = arguments[1:]\n"
@@ -287,7 +293,10 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         loop.exec()
         cancel_timer.stop()
         assert completed
-        assert cancelled
+        assert cancelled, (
+            "UI operation completed before pacman cancellation was observed",
+            completed[0].stdout, completed[0].stderr, completed[0].parsed,
+        )
         if real_pacman_ui:
             assert cancelled_pacman_pids and cancelled_pacman_pids[0] > 0
         else:
