@@ -2335,6 +2335,11 @@ helper `tests/pacman_cancel_disposable_arch.py` e os opt-ins CI para
 `*_CONTAINER`; comentários do workflow e testes declaram o limite, preservando
 o job ID compartilhado. Validação local sob `QT_QPA_PLATFORM=offscreen`:
 14 passaram, 1 skip pela guarda; py_compile, YAML e diff-check passaram. PR CI
-`36562358552` (15/15) validou commit documental anterior à renomeação; CI do
-novo código permanece pendente. Arch VM G2 público, Windows G2 e G4 continuam
-abertos.
+`36562358552` (15/15) validou commit documental anterior à renomeação.
+
+CI após renomeação: PR run `36568810638` e push run `36568804870`, SHA
+`39c966ad93a9291e696af8b813f211600dbd4a91`, ambos 15/15 verdes. Job Arch
+container `109407327713`: cancelamento UI 1/1, helper de crash/cancelamento
+passou e jornada pública renomeada 1/1 em 9,97 s; opt-ins `*_CONTAINER`
+acionaram os testes corretos. Isto valida a classificação e os novos caminhos,
+sem contar como G2 host. Arch VM G2 público, Windows G2 e G4 continuam abertos.
