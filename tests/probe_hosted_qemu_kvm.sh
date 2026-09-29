@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ ! -c /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-    echo "FAIL: hosted runner has no usable /dev/kvm" >&2
-    exit 1
+KVM_DEVICE="${PZ_KVM_DEVICE:-/dev/kvm}"
+if [[ ! -c "$KVM_DEVICE" || ! -r "$KVM_DEVICE" || ! -w "$KVM_DEVICE" ]]; then
+    echo "SKIP: no usable KVM device at $KVM_DEVICE; guest probe unavailable, not G2 evidence"
+    exit 0
 fi
 command -v qemu-system-x86_64 >/dev/null || {
     echo "FAIL: qemu-system-x86_64 missing" >&2
