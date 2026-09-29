@@ -2461,3 +2461,38 @@ Retestes focais G1 PXA-006/009/014 — 2026-09-29, HEAD `31fc169`:
 - `rtk proxy env PYTHONPATH=. QT_QPA_PLATFORM=offscreen pytest -q tests/test_routing_manager.py -k quota` — 7 passaram, 39 deselected, em 2,90 s. Usa router fake local; não prova semântica ou unidade da Usage API real.
 - `rtk proxy env PYTHONPATH=. QT_QPA_PLATFORM=offscreen pytest -q tests/test_accessibility_gate.py` — 85 passaram em 51,26 s; processo encerrou com exit 0 após cerca de 34 s adicionais de teardown. `ps` não encontrou `linux/pz` nem pytest remanescente. A fixture isola HOME/XDG e suprime probes Homelab; prova contraste, nomes acessíveis e teclado, não leitor de tela audível, display físico ou G4.
 Sem mudança de código nesta rodada. PXA-006/G3 e PXA-009 seguem pendentes por observação real; PXA-014 segue pendente por G2, leitor de tela físico e G4.
+
+## Decisão de entrega beta com gates externos abertos — 2026-09-29
+
+O operador pediu uma versão instalável para testar as superfícies concluídas sem
+instalar uma VM Windows no host ocupado. Separar entrega de conclusão dos gates:
+uma release `beta` pode validar navegação, catálogo, jornadas Linux e controles
+visuais; não fecha nem reclassifica qualquer aceite G2/G3/G4 ou PXA.
+
+| Área | Pode entrar na beta | Continua bloqueado ou sem certificação |
+|---|---|---|
+| PXA-001–003 | Inventário, instâncias, navegação, busca, detalhes e status conservador | Aceite técnico desses itens não implica certificação de cada ação remota |
+| PXA-004/005 | Jornadas de desenvolvimento Linux, em modo preview e com revisão/cancelamento | Ciclo Windows G2, host limpo completo e G4 |
+| PXA-006/007/009 | Contas, canais, observações e quota com origem/frescor; `unknown` permanece explícito | Sessão/quota real G3 e semântica não verificada da API de quota |
+| PXA-008 | Mensagens, diagnóstico e controles de grants | Qualquer inferência gerenciada permanece fail-closed; sem vínculo por requisição, prova sem fallback pago ou validação Windows real |
+| PXA-010 | Nenhuma entrada no catálogo | Bridge Web continua experimental, sem pacote, login, túnel, broker ou rota ativados |
+| PXA-011–013 | Nenhuma funcionalidade anunciada como pronta | Permanecem `planned`, dependentes de gates seguros de PXA-008/010 |
+| PXA-014 | Navegação, responsividade e testes automatizados atuais | Leitor de tela/display físico e cinco participantes G4 |
+
+Condições da publicação beta: tag derivada de `main`; CI e gitleaks verdes no
+SHA exato; GitHub Release marcada `prerelease`, `make_latest=false`, com os
+gates acima nas notas; pacote verificado por `SHA256SUMS`; instalar apenas o
+pacote PhaseZero no host autorizado. Não iniciar VM, serviço, workload ou
+inferência durante a instalação. A beta não substitui os gates, não muda o
+estado `in_progress` dos itens e não permite divulgar o portfólio como completo.
+
+O probe opcional QEMU/KVM agora classifica ausência de dispositivo como `SKIP`
+com exit 0; isso evita check vermelho por capacidade indisponível, sem alegar
+que probe passou ou que G2 foi provado. Runner Windows hospedado é caminho
+descartável para ampliar os testes reais de Windows; os testes atuais de shell,
+Pester e cofre não executam ainda o ciclo PXA completo e não fecham Windows G2.
+
+No host atual, `pacman -Q` leu `phasezero-control-center 1.21.1-1`. `/dev/kvm`
+existe, mas não foi aberto nem usado; nenhuma VM foi iniciada. Memória, filesystem
+e carga foram apenas consultados. O arquivo untracked `hashlib` no worktree foi
+preservado.
