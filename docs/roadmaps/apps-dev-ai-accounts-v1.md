@@ -2394,3 +2394,17 @@ preservou a suíte normal. Isto descarta esse runner como caminho KVM de G2;
 TCG e outros runners não foram avaliados. Windows G2 segue não realizado e a
 ISO segue intocada. O resultado não substitui guest Arch/Windows nem evidência
 de ciclo/snapshot.
+
+PXA-008 WinCred/DPAPI nativos em CI Windows — 2026-09-29 14:42 -03:00,
+commit `d8e7335f19714937999768f38811bc1338333d1f`: `tests/test_windows_native_store_smoke.py`
+grava, lê e remove credencial sintética aleatória via Windows Credential
+Manager e protege/restaura metadados sintéticos via DPAPI. PR run
+`36594494098`, job Windows `109496664554`: 2 testes nativos passaram; 9
+fixtures herméticas passaram; Pester 801 passaram, 0 falharam, 2 ignorados.
+Push run `36594487719`, job `109496786060`, repetiu os mesmos resultados.
+Execução ocorreu em runner Windows descartável; nenhum segredo, conta ou store
+do host foi usado. Evidência valida essas duas APIs no runner, não sessão de
+serviço interativa, fluxo completo do cofre, conta real/quota, nem Windows G2.
+PR CI fechou com 15 jobs verdes e probe KVM falho porém tolerado; push CI
+fechou verde com probe KVM ignorado. PXA-008 continua `in_progress`; PXA-006/G3
+e Windows G2 continuam gates externos.
