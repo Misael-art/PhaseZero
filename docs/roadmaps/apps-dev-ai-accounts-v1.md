@@ -423,7 +423,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate agora percorre Tab real e setas em grupos exclusivos; correção no Results evita que QTableWidget retenha Tab antes do disclosure técnico. Regressão local: 111 testes passaram em três módulos; CI desse SHA ainda não executado. G2 Arch/Windows integral, leitor de tela real, escalas/temas em display compatível e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate percorre Tab real e setas em grupos exclusivos; correção no Results evita QTableWidget reter Tab antes do disclosure técnico. `249acfc` adiciona reflow claro/escuro 800×600→1280×800→800×600. CI `36523435297` revelou hit-test XCB: `productHostSelector` tinha 52 px, mas página pai apenas 25 px. `5fbe281` corrige a causa com `QScrollArea`, restaura scroll ao topo ao trocar produto e verifica hit-test no widget realmente atingido. Testes locais isolados: página 38; acessibilidade/navegação 97; CI XCB desse commit ainda pendente. G2 Arch/Windows integral, leitor de tela real, display físico e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -2153,3 +2153,17 @@ retomável e não inicia pnpm; `engine.rollback_operation` remove Node.js e `pac
 idempotência e crash, preservando pacote sem ownership. Host de desenvolvimento não
 executou pacman. PXA-005 segue `in_progress` pelas etapas Windows G2, ciclo total em
 host descartável e G4.
+
+PXA-014 causa e correção do hit-test — 2026-09-29 02:57 -03:00, commit
+`5fbe281`: diagnóstico XCB do CI `36525301630`, HEAD `2cbc7b9`, mostrou
+`QComboBox#productHostSelector` com retângulo 540×52 dentro de
+`QWidget#productHostContext` de 748×25; clipping fazia `QApplication.widgetAt`
+retornar o contêiner genérico em claro e escuro a 800×600. Página de detalhe agora
+usa `QScrollArea` redimensionável; troca de app volta ao topo. O gate confere
+visibilidade e limites na janela e no viewport, chama `ensureWidgetVisible` e clica
+no controle devolvido por `widgetAt` para seletor, check e refresh. Teste também
+confirma reinício do scroll ao abrir outro produto. Testes locais com HOME/XDG
+temporários: `tests/test_product_registry_ui.py` 38 passaram; acessibilidade e
+navegação, 97 passaram; `py_compile` e `git diff --check` passaram. CI anterior
+falhou antes da correção; XCB nas três escalas/temas aguarda nova execução. Não
+contar evidência offscreen como hit-test XCB. PXA-014 continua `in_progress`.
