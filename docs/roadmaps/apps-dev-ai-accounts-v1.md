@@ -423,7 +423,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate percorre Tab real e setas em grupos exclusivos; correção no Results evita QTableWidget reter Tab antes do disclosure técnico. `249acfc` adiciona reflow claro/escuro 800×600→1280×800→800×600. CI `36523435297` revelou hit-test XCB: `productHostSelector` tinha 52 px, mas página pai apenas 25 px. `5fbe281` corrige a causa com `QScrollArea`, restaura scroll ao topo ao trocar produto e verifica hit-test no widget realmente atingido. Testes locais isolados: página 38; acessibilidade/navegação 97; CI XCB desse commit ainda pendente. G2 Arch/Windows integral, leitor de tela real, display físico e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate percorre Tab real e setas em grupos exclusivos; correção no Results evita QTableWidget reter Tab antes do disclosure técnico. `249acfc` adiciona reflow claro/escuro 800×600→1280×800→800×600. CI `36523435297` revelou hit-test XCB: `productHostSelector` tinha 52 px, mas página pai apenas 25 px. `5fbe281` corrige a causa com `QScrollArea`, restaura scroll ao topo ao trocar produto e verifica hit-test no widget realmente atingido. CI PR `36528790234` executou 1334 testes Python, 2 skipped e 15 subtests; só o teste novo de reset falhou porque não preparava faixa rolável; etapa Xvfb não executou. Teste agora força conteúdo 80 px maior que viewport antes de validar reset; módulo local: 38 passaram. Nova CI necessária. G2 Arch/Windows integral, leitor de tela real, display físico e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -2167,3 +2167,14 @@ temporários: `tests/test_product_registry_ui.py` 38 passaram; acessibilidade e
 navegação, 97 passaram; `py_compile` e `git diff --check` passaram. CI anterior
 falhou antes da correção; XCB nas três escalas/temas aguarda nova execução. Não
 contar evidência offscreen como hit-test XCB. PXA-014 continua `in_progress`.
+
+PXA-014 reset de scroll em suíte completa — 2026-09-29 03:23 -03:00:
+CI PR `36528790234`, merge `13137b6`, rodou 1334 testes Python, 2 skipped e
+15 subtests; único erro foi `test_opening_product_resets_detail_scroll_to_top`,
+que assumia uma faixa natural positiva sem garantir overflow após outros testes
+alterarem métricas globais de UI. Produção não falhou; teste não isolava o estado
+que pretendia validar. Agora força o conteúdo a `viewport.height()+80`, percorre
+até o fim, abre outro produto e exige retorno a zero; geometria natural segue
+coberta pelo gate de reflow/hit-test. Regressão focada local `tests/test_product_registry_ui.py`:
+38 passaram; `py_compile` e `git diff --check` passaram. Job Xvfb não executou
+porque o pytest falhou antes; novo CI é necessário.

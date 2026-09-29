@@ -113,6 +113,13 @@ def test_opening_product_resets_detail_scroll_to_top(qapp):
         with patch.object(page.status_loader, "fetch_product_status"):
             page.open_product("app.ollama")
             qapp.processEvents()
+            content = scroll.widget()
+            assert content is not None
+            # Keep this state test independent of font/theme metrics that can
+            # make the current product fit the viewport in a larger full-suite
+            # window. Hit-test/reflow tests cover natural content geometry.
+            content.setMinimumHeight(scroll.viewport().height() + 80)
+            qapp.processEvents()
             assert scroll.verticalScrollBar().maximum() > 0
             scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
             assert scroll.verticalScrollBar().value() > 0
