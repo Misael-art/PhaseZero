@@ -2420,3 +2420,9 @@ seguro, saída 130/status `cancelled`, Node.js registrado como instalado, pnpm
 não iniciado, ledger retomável e rollback removendo Node.js. Isto fecha a prova
 UI→QProcess→engine→pacman para este cenário no container; não é snapshot nem
 host Arch limpo e não fecha o ciclo Windows G2 ou G4.
+
+Retestes focais G1 PXA-006/009/014 — 2026-09-29, HEAD `31fc169`:
+- `rtk proxy env PYTHONPATH=. QT_QPA_PLATFORM=offscreen pytest -q tests/test_account_contract.py tests/test_auth_registry.py` — 16 passaram em 0,48 s. Cobrem adaptação de estados, 401/expiração, timeout/backend ausente, deadline global e exportação redigida; fixtures/wrappers, sem credencial, login ou probe de conta real.
+- `rtk proxy env PYTHONPATH=. QT_QPA_PLATFORM=offscreen pytest -q tests/test_routing_manager.py -k quota` — 7 passaram, 39 deselected, em 2,90 s. Usa router fake local; não prova semântica ou unidade da Usage API real.
+- `rtk proxy env PYTHONPATH=. QT_QPA_PLATFORM=offscreen pytest -q tests/test_accessibility_gate.py` — 85 passaram em 51,26 s; processo encerrou com exit 0 após cerca de 34 s adicionais de teardown. `ps` não encontrou `linux/pz` nem pytest remanescente. A fixture isola HOME/XDG e suprime probes Homelab; prova contraste, nomes acessíveis e teclado, não leitor de tela audível, display físico ou G4.
+Sem mudança de código nesta rodada. PXA-006/G3 e PXA-009 seguem pendentes por observação real; PXA-014 segue pendente por G2, leitor de tela físico e G4.
