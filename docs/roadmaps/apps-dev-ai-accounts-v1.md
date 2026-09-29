@@ -2291,3 +2291,15 @@ trabalhos existentes, fiz apenas leitura do host às 05:25 -03:00: 14 GiB RAM,
 montei, inicializei nem executei a ISO; nenhuma VM, boot ou pacote foi acionado
 no host. Etapa registrada como não realizada; seguir com provas descartáveis CI
 e demais tarefas independentes.
+
+PXA-005 G2 Arch — reforço de preservação e reativação, 2026-09-29 07:45 -03:00:
+`tests/test_development_journey_g2.py` agora fixa antes/depois a versão do
+pacote `python` e `/usr/bin/python --version`, depois da instalação, primeiro
+rollback, reativação por novo clique público em `prepareDevelopment` e remoção
+final. Isso aumenta a prova real de preservação do runtime do SO e cobre
+install→use→rollback→reactivate→remove no Arch descartável. Regressão local
+`tests/test_development_journey_g2.py tests/test_development_journey_e2e.py
+tests/test_development_page.py`: 13 passaram, 1 skip pela guarda G2;
+`py_compile`, YAML e `git diff --check` passaram. Execução real e logs de
+versão aguardam CI; não contar este reforço antes do job Arch terminar verde.
+PXA-005 permanece `in_progress`; Windows G2 não foi executado.

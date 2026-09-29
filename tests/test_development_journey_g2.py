@@ -43,6 +43,26 @@ def _pacman_package_installed(name: str) -> bool:
     raise AssertionError(f"pacman -Q {name} inconclusive: {result.stderr.strip()}")
 
 
+def _pacman_package_version(name: str) -> str:
+    result = subprocess.run(
+        ["/usr/bin/pacman", "-Q", name], capture_output=True, text=True,
+        timeout=20, check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"pacman -Q {name} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _system_python_version() -> str:
+    result = subprocess.run(
+        ["/usr/bin/python", "--version"], capture_output=True, text=True,
+        timeout=20, check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"/usr/bin/python --version failed: {result.stderr.strip()}")
+    return (result.stdout + result.stderr).strip()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -66,6 +86,13 @@ def test_development_public_journey_uses_real_pacman_on_clean_arch_g2(
         raise AssertionError("guarded G2 runner did not detect Arch package family")
     if _pacman_package_installed("nodejs") or _pacman_package_installed("pnpm"):
         raise AssertionError("real public journey requires clean Arch without Node.js or pnpm")
+    system_python_package = _pacman_package_version("python")
+    system_python_runtime = _system_python_version()
+    print(
+        f"OS Python baseline: pacman -Q python => {system_python_package}; "
+        f"/usr/bin/python --version => {system_python_runtime}",
+        flush=True,
+    )
 
     home = tmp_path / "home"
     config = home / ".config"
@@ -236,6 +263,8 @@ raise SystemExit(cli.main(arguments))
         assert node.returncode == 0, (node.stdout, node.stderr)
         assert pnpm.returncode == 0, (pnpm.stdout, pnpm.stderr)
         assert node.stdout.strip().startswith("v") and pnpm.stdout.strip()
+        assert _pacman_package_version("python") == system_python_package
+        assert _system_python_version() == system_python_runtime
         print(
             f"Installed and used nodejs={node.stdout.strip()} via "
             f"/usr/bin/node --version; pnpm={pnpm.stdout.strip()} via "
@@ -272,11 +301,54 @@ raise SystemExit(cli.main(arguments))
         assert rollback["status"] == "complete", rollback
         assert not _pacman_package_installed("nodejs")
         assert not _pacman_package_installed("pnpm")
+        assert _pacman_package_version("python") == system_python_package
+        assert _system_python_version() == system_python_runtime
         print(
-            "Rollback complete; pacman -Q nodejs and pacman -Q pnpm confirm "
-            "both packages absent",
+            "First rollback complete; nodejs/pnpm absent; system Python package "
+            "and runtime unchanged",
             flush=True,
         )
+
+        window.show_category("Desenvolvimento")
+        page = window.registry.page_for("Desenvolvimento")
+        page.findChild(QPushButton, "prepareDevelopment").click()
+        wait_for_results(5)
+        assert results[3].preview is True and results[4].preview is False
+        reapplied = results[4]
+        assert reapplied.ok, (
+            reapplied.exit_code, reapplied.stdout, reapplied.stderr, reapplied.parsed,
+        )
+        reactivated = reapplied.parsed
+        assert reactivated["status"] == "complete"
+        assert {
+            item["capabilityId"] for item in reactivated["installedByOperation"]
+        } == {"development.nodejs", "development.pnpm"}
+        assert _pacman_package_installed("nodejs")
+        assert _pacman_package_installed("pnpm")
+        assert _pacman_package_version("python") == system_python_package
+        assert _system_python_version() == system_python_runtime
+        print(
+            "Public reactivation completed through prepareDevelopment; both "
+            "packages reinstalled; system Python unchanged",
+            flush=True,
+        )
+
+        rollback = rollback_operation(
+            reactivated["id"], confirmation=reactivated["rollbackToken"],
+            facts=facts, provider=Provider(facts),
+        )
+        assert rollback["status"] == "complete", rollback
+        assert not _pacman_package_installed("nodejs")
+        assert not _pacman_package_installed("pnpm")
+        assert _pacman_package_version("python") == system_python_package
+        assert _system_python_version() == system_python_runtime
+        print(
+            "Final removal rollback complete; nodejs/pnpm absent; system Python "
+            "package and runtime unchanged",
+            flush=True,
+        )
+        assert dialogs_seen.count("preview") == 2
+        assert dialogs_seen.count("result") == 3
     finally:
         modal_driver.stop()
         window.close()
