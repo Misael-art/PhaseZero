@@ -17,8 +17,10 @@ from unittest.mock import patch
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QComboBox, QLineEdit, QPlainTextEdit,
+    QAbstractButton, QApplication, QButtonGroup, QComboBox, QLineEdit,
+    QPlainTextEdit, QWidget,
 )
+from PySide6.QtTest import QTest
 
 from linux.ui_native.a11y import (
     AA_LARGE, AA_TEXT, accessible_label, contrast_failures, contrast_ratio,
@@ -145,6 +147,106 @@ def test_controls_are_reachable_by_keyboard(window, qapp, category):
         if widget.isEnabled() and widget.focusPolicy() == Qt.NoFocus
     ]
     assert not unreachable, f"{category}: fora do alcance do teclado: {unreachable}"
+
+
+@pytest.mark.parametrize("category", CATEGORY_IDS)
+def test_enabled_controls_are_reached_by_actual_tab_navigation(window, qapp, category):
+    """Exercise Qt's real Tab chain; focus policy alone can hide a broken chain."""
+    window.resize(1280, 800)
+    window.show()
+    window.show_category(category)
+    qapp.processEvents()
+    page = window.registry.page_for(window.current_category)
+    if page is None:
+        pytest.skip(f"categoria sem página construída: {category}")
+
+    expected = [
+        widget for widget in _interactive(page)
+        if widget.isEnabled() and widget.focusPolicy() & Qt.TabFocus
+    ]
+    if not expected:
+        return
+
+    exclusive_groups = []
+    grouped_controls = set()
+    representatives = set()
+    for group in page.findChildren(QButtonGroup):
+        if not group.exclusive():
+            continue
+        members = [button for button in group.buttons() if button in expected]
+        if not members:
+            continue
+        representative = group.checkedButton()
+        if representative not in members:
+            representative = members[0]
+        exclusive_groups.append((members, representative))
+        grouped_controls.update(members)
+        representatives.add(representative)
+
+    tab_stops = [widget for widget in expected if widget not in grouped_controls]
+    tab_stops.extend(representatives)
+
+    first = tab_stops[0]
+    first.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    assert window.focusWidget() is first, (
+        f"{category}: primeiro controle não aceita foco por teclado: "
+        f"{first.objectName() or accessible_label(first)}"
+    )
+
+    visited = set()
+    current = first
+    # Bound traversal by the real window focus chain, including controls outside
+    # this page such as search and sidebar navigation.
+    limit = max(16, len(window.findChildren(QWidget)) + 2)
+    for _ in range(limit):
+        if current is first and visited:
+            break
+        visited.add(current)
+        QTest.keyClick(current, Qt.Key_Tab)
+        qapp.processEvents()
+        current = window.focusWidget()
+        if current is None:
+            break
+
+    missing = [
+        widget.objectName() or accessible_label(widget)
+        for widget in tab_stops if widget not in visited
+    ]
+    visited_names = [widget.objectName() or accessible_label(widget) for widget in visited]
+    assert not missing, (
+        f"{category}: Tab pula controles habilitados: {missing}; "
+        f"controles percorridos: {visited_names}"
+    )
+
+    for members, representative in exclusive_groups:
+        if len(members) < 2:
+            continue
+        reached = set()
+        for key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+            representative.setFocus(Qt.TabFocusReason)
+            qapp.processEvents()
+            current = window.focusWidget()
+            if current is representative:
+                reached = {representative}
+            for _ in range(len(members) + 1):
+                if current is None:
+                    break
+                QTest.keyClick(current, key)
+                qapp.processEvents()
+                current = window.focusWidget()
+                if current in members:
+                    reached.add(current)
+            if len(reached) == len(members):
+                break
+        missing_group_members = [
+            button.objectName() or accessible_label(button)
+            for button in members if button not in reached
+        ]
+        assert not missing_group_members, (
+            f"{category}: opções do grupo exclusivo inacessíveis por setas: "
+            f"{missing_group_members}"
+        )
 
 
 def test_the_sidebar_is_operable_without_a_mouse(window, qapp):

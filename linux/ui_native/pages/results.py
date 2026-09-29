@@ -121,6 +121,9 @@ class ResultsPage(BasePage):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # Keep Tab traversal moving out of the table to the result detail pane;
+        # arrow keys remain available for row navigation.
+        self.table.setTabKeyNavigation(False)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
