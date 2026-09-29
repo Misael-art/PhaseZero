@@ -2345,3 +2345,12 @@ container `109407327713`: cancelamento UI 1/1, helper de crash/cancelamento
 passou e jornada pública renomeada 1/1 em 9,97 s; opt-ins `*_CONTAINER`
 acionaram os testes corretos. Isto valida a classificação e os novos caminhos,
 sem contar como G2 host. Arch VM G2 público, Windows G2 e G4 continuam abertos.
+
+Reavaliação local de G2 — 2026-09-29 11:22 -03:00: `free -h` mostrou 14 GiB
+RAM total, 4,6 GiB disponíveis e 4,9 GiB de swap em uso; `uptime` mostrou
+load average 5,64/5,70/5,00. Qoder, Electron e compositor estavam ativos e
+consumindo CPU. Margem não dá segurança para iniciar VM Windows com requisito
+de 4 GiB nem outra VM local durante esses trabalhos. Nenhuma VM foi iniciada;
+ISO `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso`
+continua sem leitura, hash, montagem ou boot. Windows G2 permanece não
+realizado; seguir com ciclos herméticos remotos e etapas independentes.
