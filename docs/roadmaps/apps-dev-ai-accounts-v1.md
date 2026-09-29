@@ -423,7 +423,7 @@ melhora feedback e não fecha execução remota nem PXA-003.
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
-| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate percorre Tab real e setas em grupos exclusivos; correção no Results evita QTableWidget reter Tab antes do disclosure técnico. `249acfc` adiciona reflow claro/escuro 800×600→1280×800→800×600. CI `36523435297` revelou hit-test XCB: `productHostSelector` tinha 52 px, mas página pai apenas 25 px. `5fbe281` corrige a causa com `QScrollArea`, restaura scroll ao topo ao trocar produto e verifica hit-test no widget realmente atingido. CI PR `36528790234` executou 1334 testes Python, 2 skipped e 15 subtests; só o teste novo de reset falhou porque não preparava faixa rolável; etapa Xvfb não executou. Teste agora força conteúdo 80 px maior que viewport antes de validar reset; módulo local: 38 passaram. Nova CI necessária. G2 Arch/Windows integral, leitor de tela real, display físico e G4 participantes seguem pendentes. |
+| PXA-014 | `in_progress` | `c7cdcf4` bloqueia subprocessos em gate de acessibilidade; `f4dafee` corrige `HomelabPage.build()` agendando `refresh_hosts` via QProcess. `36366981830` confirmou teardown sem aviso. CI limpo `36369508016` isolou falha `linux-audit-doctor` (caso Waydroid sem saída/resumo). Cherry-picks `ce667c3`/`8e64755` corrigem harness, propagam timeout/incompletude e isolam XDG em scratch único. CI push `36398640216` e PR `36398646298`, HEAD `7e16ec7`, verdes; Python 1312/2/15, Xvfb 2/2 em 100/150/200%, `shell-test` 9/9, Pester e demais 14 jobs passaram; log Python sem aviso QProcess nem trace temporário. Em `22101c4`, gate percorre Tab real e setas em grupos exclusivos; correção no Results evita QTableWidget reter Tab antes do disclosure técnico. `249acfc` adiciona reflow claro/escuro 800×600→1280×800→800×600. CI `36523435297` revelou hit-test XCB: `productHostSelector` tinha 52 px, mas página pai apenas 25 px. `5fbe281` corrige a causa com `QScrollArea`, restaura scroll ao topo ao trocar produto e verifica hit-test no widget realmente atingido. CI PR `36528790234` executou 1334 testes Python, 2 skipped e 15 subtests; só o teste novo de reset falhou porque não preparava faixa rolável; etapa Xvfb não executou. Teste agora força conteúdo 80 px maior que viewport antes de validar reset; módulo local: 38 passaram. CI PR `36530940616` no HEAD `2d9b6c7`: Python 1335/2/15 passou; Xvfb 2/2 em 100/150/200%. CI PR `36530940616` fechou com 15/15 jobs verdes; Pester 801/0/2. G2 Arch/Windows integral, leitor de tela real, display físico e G4 participantes seguem pendentes. |
 
 Provas: 49 testes focados passaram na base inicial `d9f144f`; depois 151 testes
 direcionados e 9 subtestes (`test_capabilities.py`, inventário/status de produto,
@@ -2178,3 +2178,18 @@ até o fim, abre outro produto e exige retorno a zero; geometria natural segue
 coberta pelo gate de reflow/hit-test. Regressão focada local `tests/test_product_registry_ui.py`:
 38 passaram; `py_compile` e `git diff --check` passaram. Job Xvfb não executou
 porque o pytest falhou antes; novo CI é necessário.
+
+PXA-014 CI Python/Xvfb — 2026-09-29 03:56 -03:00, code HEAD `2d9b6c7`, PR run
+`36530940616`: full pytest concluiu 1335 passed, 2 skipped, 15 subtests em
+312,22 s. Hit-test XCB passou 2/2 nas escalas 100% (1280×800), 150%
+(1920×1200) e 200% (2560×1600), ambos os temas. Arch descartável, Windows
+shell hermético, lint, smoke e suites Homelab passaram; Pester ainda estava
+em execução no último snapshot. Isto valida Xvfb, não display físico, leitor
+de tela audível, Windows G2 ou G4; PXA-014 permanece `in_progress`.
+
+CI PR final PXA-004/005/014 — 2026-09-29 04:07 -03:00, code HEAD `2d9b6c7`, run
+`36530940616`: todos os 15 jobs passaram. Pester 801 passed, 0 failed,
+2 skipped; fixtures Windows de Credential Manager também passaram. Python
+1335/2/15 e Xvfb 2/2 por escala já registrados acima. CI cobre Arch descartável
+e Windows shell hermético, mas não boot da VM Windows no host nem display físico;
+PXA-004/005/014 continuam `in_progress` até os gates externos/documentados.
