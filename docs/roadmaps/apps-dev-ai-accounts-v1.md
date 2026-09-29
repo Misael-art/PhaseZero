@@ -419,7 +419,7 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: pin histórico de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`. Revisões documentais v6.1.0/v6.1.1 (2026-09-27) e v6.1.3 (2026-09-29) mantêm os gates: mesmo usuário alcança loopback e Full conserva gateway raw `exec`; README v6.1.3 ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. `v6.1.3` auditada: tag commit `fa2d2c6c24926078b46eedb2186f69f2e8d548d7`; manifesto e digests GitHub coincidem em 19/19 assets (nota abaixo), mas payloads binários não foram comparados localmente. Login continua em perfil próprio; nenhum cookie é importado. Identidade MCP padrão é configurável e distinta de `tunnel_id`/nome visível do túnel. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado; reavaliação e ISO intocada estão registradas ao fim do diário. Nenhuma integração, pacote ou rota ativados. |
+| PXA-010 | `in_progress` | `608b28e`: pin histórico de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`. Revisões documentais v6.1.0/v6.1.1 (2026-09-27) e v6.1.3 (2026-09-29) mantêm os gates: mesmo usuário alcança loopback e Full conserva gateway raw `exec`; README v6.1.3 ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. `v6.1.3` auditada: tag commit `fa2d2c6c24926078b46eedb2186f69f2e8d548d7`; manifesto e digests GitHub coincidem em 19/19 assets; scripts de instalação auditados como texto e 3/3 hashes conferem com o manifesto (notas abaixo); payloads binários de runtime não foram comparados localmente. Login continua em perfil próprio; nenhum cookie é importado. Identidade MCP padrão é configurável e distinta de `tunnel_id`/nome visível do túnel. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado; reavaliação e ISO intocada estão registradas ao fim do diário. Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
@@ -1952,6 +1952,24 @@ digest do asset na API GitHub; as 19 entradas também coincidem com os digests S
 publicados para os 19 assets correspondentes. Isso confirma consistência entre dois
 registros de release no GitHub, não o conteúdo local dos pacotes nem a identidade do
 publicador. Integridade local dos binários segue não verificada; PXA-010 não avança.
+
+PXA-010 auditoria estática dos scripts de release v6.1.3 — 2026-09-29: obtidos somente
+os três scripts publicados como texto; nenhum foi executado. SHA-256 dos bytes obtidos
+confere com as respectivas linhas de `checksums.txt`: `install-launcher.sh`
+`7a92e1aec6365315e6d0d7aaebc22a4c41426bed865bf918acc7089665fd0abb`, `install.sh`
+`b58e6aa168e80166d6506fe38ae29c925157caaf7db69d4337828324096a1ef4` e
+`install-launcher.ps1`
+`f319b61fdaffc6a937a06e1fc894790716918a7fcaead9a3009ed50fa9a0ac8b`. Os dois scripts
+de launcher resolvem `latest` quando `CODEX_WEB_GPT_VERSION` não é informado. No Linux,
+o script executa o AppImage com `--appimage-extract`, grava runtime/atalhos por usuário
+e inicia o wrapper. No Windows, o PowerShell valida SHA-256, executa o instalador com
+`/S /currentuser` e abre o launcher. `install.sh` é macOS-only, fixa 6.1.3 por padrão,
+valida runtime e documentos e pode chamar `setup` quando recebe argumentos. A release
+não publica asset dedicado de uninstall; README manda remover a integração em Settings
+antes de desinstalar o launcher. Qualquer mudança de rota deve ser restaurada e comparada
+com backup antes de remover o launcher. Este comportamento impede adoção direta dos
+scripts no fluxo automático PhaseZero. Os hashes comprovam correspondência ao manifesto,
+não identidade do publicador nem segurança do binário. Fontes: [install-launcher.sh](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install-launcher.sh), [install-launcher.ps1](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install-launcher.ps1), [install.sh](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/install.sh), [checksums.txt](https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.3/checksums.txt) e [README](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/README.md). Nenhum pacote, login, túnel, broker, rota, VM ou ISO foi usado/alterado.
 
 PXA-004/005 cancelamento com pacote real — 2026-09-27: adicionado
 `tests/pacman_cancel_g2.py`, executado somente pelo job `arch-clean-host` em
