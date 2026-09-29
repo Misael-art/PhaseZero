@@ -39,8 +39,19 @@ def qapp():
 
 
 @pytest.fixture
-def window(qapp):
+def window(qapp, tmp_path, monkeypatch):
     from linux.ui_native.main_window import MainWindow
+
+    home = tmp_path / "home"
+    config = home / ".config"
+    data = home / ".local" / "share"
+    state = home / ".local" / "state"
+    for path in (home, config, data, state):
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
 
     with patch.object(MainWindow, "_host_summary"), patch(
         "linux.ui_native.status_loader.StatusLoader.fetch"

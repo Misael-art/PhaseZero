@@ -9,7 +9,9 @@ import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QStyleFactory
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QLabel, QPushButton, QScrollArea, QStyleFactory,
+)
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import target_for
 
@@ -92,6 +94,31 @@ def test_product_detail_discards_context_action_for_another_app(qapp):
         assert page.selected_app_id == "app.ollama"
         assert page.context_action_id == ""
         assert page._context_label.text() == "Catálogo de aplicativos"
+    finally:
+        window.close()
+        host_patcher.stop()
+        status_patcher.stop()
+
+
+def test_opening_product_resets_detail_scroll_to_top(qapp):
+    window, host_patcher, status_patcher = _window(qapp)
+    try:
+        window.resize(800, 600)
+        window.show_category("Aplicativos")
+        window.show()
+        qapp.processEvents()
+        page = window.registry.page_for("Aplicativos")
+        scroll = page.findChild(QScrollArea, "productDetailScroll")
+        assert scroll is not None
+        with patch.object(page.status_loader, "fetch_product_status"):
+            page.open_product("app.ollama")
+            qapp.processEvents()
+            assert scroll.verticalScrollBar().maximum() > 0
+            scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+            assert scroll.verticalScrollBar().value() > 0
+            page.open_product("app.usagebar")
+            qapp.processEvents()
+        assert scroll.verticalScrollBar().value() == 0
     finally:
         window.close()
         host_patcher.stop()
@@ -882,7 +909,11 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
         selector = page.findChild(QComboBox, "productHostSelector")
         refresh = page.findChild(QPushButton, "productHostRefresh")
         primary = page.findChild(QPushButton, "productPrimaryAction")
-        assert selector is not None and refresh is not None and primary is not None
+        detail_scroll = page.findChild(QScrollArea, "productDetailScroll")
+        assert (
+            selector is not None and refresh is not None and primary is not None
+            and detail_scroll is not None
+        )
         screen = qapp.primaryScreen().availableGeometry()
         screen_width = screen.width()
         require_hit_test = os.environ.get("PZ_REQUIRE_UI_HIT_TEST") == "1"
@@ -901,9 +932,19 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
             if require_hit_test:
                 assert window.size().width() == width and window.size().height() == height
             for widget in (selector, refresh, primary):
+                detail_scroll.ensureWidgetVisible(widget, 8, 8)
+                qapp.processEvents()
                 rect = QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
+                scroll_viewport = QRect(
+                    detail_scroll.viewport().mapToGlobal(QPoint(0, 0)),
+                    detail_scroll.viewport().size(),
+                )
                 assert widget.isVisible() and not widget.visibleRegion().isEmpty()
+                assert widget.isEnabled()
                 assert viewport.contains(rect), f"{theme} {width}x{height}: {widget.objectName()} fora do viewport"
+                assert scroll_viewport.contains(rect), (
+                    f"{theme} {width}x{height}: {widget.objectName()} fora da área rolável"
+                )
                 if require_hit_test:
                     assert width <= screen_width, (
                         f"screen width {screen_width} cannot hit-test {width}px viewport"
@@ -930,8 +971,33 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
                             f"alvo={path(widget)}"
                         )
 
+        if require_hit_test:
+            detail_scroll.ensureWidgetVisible(selector, 8, 8)
+            qapp.processEvents()
+            hit = qapp.widgetAt(selector.mapToGlobal(selector.rect().center()))
+            assert hit is selector or (hit is not None and selector.isAncestorOf(hit))
+            QTest.mouseClick(hit, Qt.LeftButton, pos=hit.rect().center())
+            qapp.processEvents()
+            assert selector.view().isVisible()
+            selector.hidePopup()
+
+            detail_scroll.ensureWidgetVisible(primary, 8, 8)
+            qapp.processEvents()
+            hit = qapp.widgetAt(primary.mapToGlobal(primary.rect().center()))
+            assert hit is primary or (hit is not None and primary.isAncestorOf(hit))
+            with patch.object(page.status_loader, "fetch_product_status") as fetch_status:
+                QTest.mouseClick(hit, Qt.LeftButton, pos=hit.rect().center())
+            fetch_status.assert_called_once()
+
+        detail_scroll.ensureWidgetVisible(refresh, 8, 8)
+        qapp.processEvents()
         with patch.object(page.status_loader, "fetch") as fetch:
-            QTest.mouseClick(refresh, Qt.LeftButton)
+            if require_hit_test:
+                hit = qapp.widgetAt(refresh.mapToGlobal(refresh.rect().center()))
+                assert hit is refresh or (hit is not None and refresh.isAncestorOf(hit))
+                QTest.mouseClick(hit, Qt.LeftButton, pos=hit.rect().center())
+            else:
+                QTest.mouseClick(refresh, Qt.LeftButton)
         fetch.assert_called_once_with(
             "product.homelab-hosts", ["server", "homelab", "hosts", "list", "--json"],
         )

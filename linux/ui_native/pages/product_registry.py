@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -142,6 +143,7 @@ class ProductRegistryPage(BasePage):
         self._stack: QStackedWidget | None = None
         self._search: QLineEdit | None = None
         self._detail_layout: QVBoxLayout | None = None
+        self._detail_scroll: QScrollArea | None = None
         self._detail_actions_start = 0
         self._status_label: QLabel | None = None
         self._instance_selector: QComboBox | None = None
@@ -393,9 +395,21 @@ class ProductRegistryPage(BasePage):
 
     def _build_detail(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setObjectName("productDetailScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        content = QWidget()
+        self._detail_scroll = scroll
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
         back = QPushButton("‹  Todos os aplicativos")
         back.setObjectName("productDetailBack")
         back.clicked.connect(self.close_detail)
@@ -674,6 +688,8 @@ class ProductRegistryPage(BasePage):
         self._render_detail_actions()
         self._detail_layout.addStretch()
         self._render_primary_action()
+        if self._detail_scroll is not None:
+            self._detail_scroll.verticalScrollBar().setValue(0)
         if status_action is not None and host_id == "local":
             self.status_loader.fetch_product_status(
                 status_action, app_id=app_id, host_id="local", scope=self._status_scope,
