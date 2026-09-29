@@ -842,12 +842,19 @@ def test_remote_product_status_requires_registered_host_and_keeps_actions_blocke
         status_patcher.stop()
 
 
-@pytest.mark.parametrize("width,height", [(800, 600), (1280, 800)])
-def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp, width, height):
-    window, host_patcher, status_patcher = _window(qapp)
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp, theme):
+    from linux.ui_native.app import apply_theme
+
+    original_style = qapp.style().objectName()
+    original_stylesheet = qapp.styleSheet()
+    original_palette = qapp.palette()
+    window = host_patcher = status_patcher = None
     try:
+        apply_theme(qapp, theme)
+        window, host_patcher, status_patcher = _window(qapp)
         window.show()
-        window.resize(width, height)
+        window.resize(800, 600)
         window.show_category("Aplicativos")
         qapp.processEvents()
         page = window.registry.page_for("Aplicativos")
@@ -863,7 +870,6 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
         refresh = page.findChild(QPushButton, "productHostRefresh")
         primary = page.findChild(QPushButton, "productPrimaryAction")
         assert selector is not None and refresh is not None and primary is not None
-        viewport = QRect(window.mapToGlobal(QPoint(0, 0)), window.size())
         screen = qapp.primaryScreen().availableGeometry()
         screen_width = screen.width()
         require_hit_test = os.environ.get("PZ_REQUIRE_UI_HIT_TEST") == "1"
@@ -873,17 +879,30 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
             assert window.devicePixelRatioF() == pytest.approx(
                 float(os.environ["PZ_EXPECT_DEVICE_SCALE"]), abs=0.01,
             )
-        for widget in (selector, refresh, primary):
-            rect = QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
-            assert widget.isVisible() and not widget.visibleRegion().isEmpty()
-            assert viewport.contains(rect)
+        # Reflow narrow -> wide -> narrow; independent window instances can hide
+        # stale geometry left behind when the user resizes back.
+        for width, height in ((800, 600), (1280, 800), (800, 600)):
+            window.resize(width, height)
+            qapp.processEvents()
+            viewport = QRect(window.mapToGlobal(QPoint(0, 0)), window.size())
             if require_hit_test:
-                assert width <= screen_width, (
-                    f"screen width {screen_width} cannot hit-test {width}px viewport"
-                )
-            if width <= screen_width:
-                hit = qapp.widgetAt(widget.mapToGlobal(widget.rect().center()))
-                assert hit is widget or (hit is not None and widget.isAncestorOf(hit))
+                assert window.size().width() == width and window.size().height() == height
+            for widget in (selector, refresh, primary):
+                rect = QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
+                assert widget.isVisible() and not widget.visibleRegion().isEmpty()
+                assert viewport.contains(rect), f"{theme} {width}x{height}: {widget.objectName()} fora do viewport"
+                if require_hit_test:
+                    assert width <= screen_width, (
+                        f"screen width {screen_width} cannot hit-test {width}px viewport"
+                    )
+                    # The offscreen QPA may return an ancestor for widgetAt;
+                    # strict pointer targeting belongs to the XCB/Xvfb CI job.
+                    hit = qapp.widgetAt(widget.mapToGlobal(widget.rect().center()))
+                    assert hit is widget or (hit is not None and widget.isAncestorOf(hit)), (
+                        f"{theme} {width}x{height}: {widget.objectName()} recebeu hit "
+                        f"em {type(hit).__name__ if hit is not None else None}/"
+                        f"{hit.objectName() if hit is not None else ''}"
+                    )
 
         with patch.object(page.status_loader, "fetch") as fetch:
             QTest.mouseClick(refresh, Qt.LeftButton)
@@ -891,9 +910,15 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
             "product.homelab-hosts", ["server", "homelab", "hosts", "list", "--json"],
         )
     finally:
-        window.close()
-        host_patcher.stop()
-        status_patcher.stop()
+        if window is not None:
+            window.close()
+        if host_patcher is not None:
+            host_patcher.stop()
+        if status_patcher is not None:
+            status_patcher.stop()
+        qapp.setStyle(original_style)
+        qapp.setStyleSheet(original_stylesheet)
+        qapp.setPalette(original_palette)
 
 
 def test_recovery_state_does_not_auto_select_restore(qapp):
