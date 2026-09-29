@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QStyleFactory
 from linux.ui_native.models import ProductInstance
 from linux.ui_native.product_inventory import target_for
 
@@ -844,14 +845,27 @@ def test_remote_product_status_requires_registered_host_and_keeps_actions_blocke
 
 @pytest.mark.parametrize("theme", ["dark", "light"])
 def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp, theme):
-    from linux.ui_native.app import apply_theme
+    from linux.ui_native.tokens import DARK, LIGHT, font_scale, render_qss
 
-    original_stylesheet = qapp.styleSheet()
-    original_palette = qapp.palette()
     window = host_patcher = status_patcher = None
     try:
-        apply_theme(qapp, theme)
         window, host_patcher, status_patcher = _window(qapp)
+        tokens = LIGHT if theme == "light" else DARK
+        fusion_style = QStyleFactory.create("Fusion")
+        assert fusion_style is not None
+        fusion_style.setParent(window)
+        window.setStyle(fusion_style)
+        window.setStyleSheet(render_qss(tokens, font_scale(qapp.font().pointSizeF())))
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(tokens.bg))
+        palette.setColor(QPalette.WindowText, QColor(tokens.text))
+        palette.setColor(QPalette.Base, QColor(tokens.surface_inset))
+        palette.setColor(QPalette.Text, QColor(tokens.text))
+        palette.setColor(QPalette.Button, QColor(tokens.surface))
+        palette.setColor(QPalette.ButtonText, QColor(tokens.text))
+        palette.setColor(QPalette.Highlight, QColor(tokens.accent))
+        palette.setColor(QPalette.HighlightedText, QColor(tokens.on_accent))
+        window.setPalette(palette)
         window.show()
         window.resize(800, 600)
         window.show_category("Aplicativos")
@@ -915,11 +929,6 @@ def test_product_host_controls_fit_and_receive_pointer_at_supported_widths(qapp,
             host_patcher.stop()
         if status_patcher is not None:
             status_patcher.stop()
-        # apply_theme selects Fusion, the same style used by the application.
-        # Restoring QApplication's prior style rebuilds every Qt widget and
-        # can hang this offscreen suite during teardown.
-        qapp.setStyleSheet(original_stylesheet)
-        qapp.setPalette(original_palette)
 
 
 def test_recovery_state_does_not_auto_select_restore(qapp):

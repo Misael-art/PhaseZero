@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +19,49 @@ ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.usefixtures("no_homelab_startup_probe")
 
 
+def _assert_guarded_arch_ci() -> None:
+    if (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or os.environ.get("GITHUB_JOB") != "arch-clean-host"
+        or os.environ.get("GITHUB_REPOSITORY") != "Misael-art/PhaseZero"
+        or os.geteuid() != 0
+        or not Path("/etc/arch-release").is_file()
+        or Path(shutil.which("pacman") or "/missing").resolve()
+        != Path("/usr/bin/pacman").resolve()
+    ):
+        raise AssertionError("real pacman UI test requires guarded disposable Arch CI")
+
+
+def _pacman_install_pid(target: str) -> int | None:
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        argv = [os.fsdecode(value) for value in raw if value]
+        if (
+            argv
+            and Path(argv[0]).name == "pacman"
+            and argv[1:] == ["-S", "--needed", "--noconfirm", target]
+        ):
+            return int(entry.name)
+    return None
+
+
+def _pacman_package_installed(name: str) -> bool:
+    result = subprocess.run(
+        ["pacman", "-Q", name], capture_output=True, text=True, timeout=20,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1 and "was not found" in result.stderr.casefold():
+        return False
+    raise AssertionError(f"pacman -Q {name} inconclusive: {result.stderr.strip()}")
+
+
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -24,6 +71,10 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
     qapp, tmp_path, monkeypatch,
 ):
     from linux.ui_native.main_window import MainWindow
+
+    real_pacman_ui = os.environ.get("PZ_ENABLE_ARCH_PACMAN_UI_G2") == "1"
+    if real_pacman_ui:
+        _assert_guarded_arch_ci()
 
     home = tmp_path / "home"
     config = home / ".config"
@@ -48,15 +99,24 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
     monkeypatch.setenv("PZ_TEST_CHILD_MARKER", str(marker))
 
     from linux.capabilities import engine
-    from linux.capabilities.platform import HostFacts
+    from linux.capabilities.platform import HostFacts, detect
     from linux.capabilities.providers import Provider
 
-    facts = HostFacts(
-        platform="linux", architecture="x86_64", distro="arch", distro_like=(),
-        package_family="arch", immutable=False, immutable_kind="", container=False,
-        init="systemd", desktop="kde", session="wayland", gpus=("amd",),
-        package_manager="pacman", flatpak=True, flathub=True,
-    )
+    if real_pacman_ui:
+        facts = replace(detect(), container=False)
+        if (
+            facts.package_family != "arch"
+            or _pacman_package_installed("nodejs")
+            or _pacman_package_installed("pnpm")
+        ):
+            raise AssertionError("real pacman UI test requires clean Arch without Node.js or pnpm")
+    else:
+        facts = HostFacts(
+            platform="linux", architecture="x86_64", distro="arch", distro_like=(),
+            package_family="arch", immutable=False, immutable_kind="", container=False,
+            init="systemd", desktop="kde", session="wayland", gpus=("amd",),
+            package_manager="pacman", flatpak=True, flathub=True,
+        )
 
     class PlanningProvider(Provider):
         def installed(self, _source):
@@ -75,9 +135,9 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         engine.shutil, "disk_usage",
         lambda _path: SimpleNamespace(free=10**12, total=10**12, used=0),
     )
+    plan_provider = Provider(facts) if real_pacman_ui else PlanningProvider(facts)
     plan = engine.create_plan(
-        profile_ids=["development-web-js"], facts=facts,
-        provider=PlanningProvider(facts),
+        profile_ids=["development-web-js"], facts=facts, provider=plan_provider,
     )
     assert not plan["blockers"]
     assert [item["capabilityId"] for item in plan["actions"]] == [
@@ -146,6 +206,21 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         "raise SystemExit(cli.main(arguments))\n".replace("__ROOT__", str(ROOT)),
         encoding="utf-8",
     )
+    real_cli = tmp_path / "real_cli.py"
+    if real_pacman_ui:
+        real_cli.write_text(
+            f"import sys\nsys.path.insert(0, {str(ROOT)!r})\n"
+            "from dataclasses import replace\n"
+            "from linux.capabilities import __main__ as cli\n"
+            "from linux.capabilities.platform import detect\n"
+            "facts = replace(detect(), container=False)\n"
+            "cli.detect = lambda: facts\n"
+            "arguments = sys.argv[1:]\n"
+            "if arguments and arguments[0] == 'capabilities':\n"
+            " arguments = arguments[1:]\n"
+            "raise SystemExit(cli.main(arguments))\n",
+            encoding="utf-8",
+        )
 
     def fake_request_action(window, action):
         # Cancellation under test; preview confirmation is covered by the
@@ -155,13 +230,15 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
 
     def fake_build_program(_root, _action, *, preview, value="", values=None):
         assert not preview
+        cli_path = real_cli if real_pacman_ui else fake
         return sys.executable, [
-            str(fake), "capabilities", "apply", "--plan-id", plan["id"],
+            str(cli_path), "capabilities", "apply", "--plan-id", plan["id"],
             "--confirm", plan["confirmToken"],
         ]
 
     completed = []
     loop = QEventLoop()
+    cancelled_pacman_pids = []
 
     def quiet_operation_completed(window, result):
         completed.append(result)
@@ -183,8 +260,14 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
     cancel_timer = QTimer(window)
 
     def cancel_when_package_running() -> None:
-        if pid_file.is_file() and not cancelled:
+        child_pid = None
+        if real_pacman_ui:
+            child_pid = _pacman_install_pid("nodejs")
+        elif pid_file.is_file():
+            child_pid = int(pid_file.read_text(encoding="utf-8"))
+        if child_pid is not None and not cancelled:
             cancelled.append(True)
+            cancelled_pacman_pids.append(child_pid)
             assert window.cancel_button.isEnabled()
             window.cancel_button.click()
             assert window.runner.safe_cancel_pending
@@ -199,30 +282,38 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         prepare = window.findChild(QPushButton, "prepareDevelopment")
         assert prepare is not None
         prepare.click()
-        cancel_timer.start(20)
-        QTimer.singleShot(6000, loop.quit)
+        cancel_timer.start(10 if real_pacman_ui else 20)
+        QTimer.singleShot(900_000 if real_pacman_ui else 6000, loop.quit)
         loop.exec()
         cancel_timer.stop()
         assert completed
         assert cancelled
-        assert int(pid_file.read_text(encoding="utf-8")) > 0
+        if real_pacman_ui:
+            assert cancelled_pacman_pids and cancelled_pacman_pids[0] > 0
+        else:
+            assert int(pid_file.read_text(encoding="utf-8")) > 0
 
         # The in-flight package step finishes; cancellation prevents later steps.
-        assert marker.read_bytes() == b"step-finished"
+        if not real_pacman_ui:
+            assert marker.read_bytes() == b"step-finished"
         assert completed[0].exit_code == 130, (
             completed[0].stdout, completed[0].stderr, completed[0].parsed,
         )
         assert completed[0].parsed["status"] == "cancelled"
-        assert completed[0].parsed["results"] == [{
-            "capabilityId": "development.nodejs", "status": "installed",
-            "exitCode": 0, "stdout": "fixture package installed", "stderr": "",
-        }]
-        assert json.loads(package_state.read_text(encoding="utf-8")) == ["nodejs"]
-        package_attempts = [
-            json.loads(line)["package"]
-            for line in package_events.read_text(encoding="utf-8").splitlines()
-        ]
-        assert package_attempts == ["nodejs"]
+        assert len(completed[0].parsed["results"]) == 1
+        assert completed[0].parsed["results"][0]["capabilityId"] == "development.nodejs"
+        assert completed[0].parsed["results"][0]["status"] == "installed"
+        assert completed[0].parsed["results"][0]["exitCode"] == 0
+        if real_pacman_ui:
+            assert _pacman_package_installed("nodejs")
+            assert not _pacman_package_installed("pnpm")
+        else:
+            assert json.loads(package_state.read_text(encoding="utf-8")) == ["nodejs"]
+            package_attempts = [
+                json.loads(line)["package"]
+                for line in package_events.read_text(encoding="utf-8").splitlines()
+            ]
+            assert package_attempts == ["nodejs"]
 
         record = window.runner.ledger.records(limit=1)[0]
         assert record["status"] == "cancelled"
@@ -231,6 +322,13 @@ def test_development_cancel_runs_engine_to_safe_boundary_and_keeps_resume_record
         assert record["nextAction"] == completed[0].action_id
         assert len(cancel_file_paths) == 1
         assert not cancel_file_paths[0].exists()
+        if real_pacman_ui:
+            rollback = engine.rollback_operation(
+                record["id"], confirmation=record["rollbackToken"],
+                facts=facts, provider=Provider(facts),
+            )
+            assert rollback["status"] == "complete"
+            assert not _pacman_package_installed("nodejs")
     finally:
         cancel_timer.stop()
         window.close()
