@@ -419,7 +419,7 @@ com Qt offscreen. Status remoto continua rejeitado sem executor host-bound; esta
 melhora feedback e não fecha execução remota nem PXA-003.
 
 | PXA-009 | `in_progress` | `routing_manager.parse_quota` marca a origem como API de usage do 9Router e a hora local da consulta; dimensão e unidade aparecem na página de Roteamento IA, com unidade desconhecida explícita quando a resposta não a informa. Percentuais derivados de `used/total` ficam em campo separado de estimativa local, não viram cota observada nem entram no filtro de cota restante; recomendações não mostram o score neutro de 50% como medição quando estado é unknown/unavailable. Falha parcial de quota mantém conexão/conta na lista, marcando apenas cota indisponível. Página Roteamento IA consulta inventário a cada 60 s enquanto visível; timer para ao ocultar página, e tick chama somente `ai.routing-inventory` (GETs e gravação do cache local), sem recomendação/inferência. `test_routing_manager.py` + `test_ai_session_ui.py`: 78 passaram em 26,95 s (reteste 2026-09-26). Limites: sem prova de semântica/unidade na API real, sessão/quota de conta real ou operador. Enforcement por consumidor segue bloqueado em PXA-008; nenhuma rota de inferência habilitada por esta mudança. |
-| PXA-010 | `in_progress` | `608b28e`: pin de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados Linux/Windows sem verificação por download. Revisão 2026-09-26 separa canal de inferência Web e canal MCP, define liberação gradual por modo, elegibilidade, chave mínima, IDs, limites de autenticação/aprovação, fronteira local, rota e reversão. Auditorias documentais v6.1.0 e v6.1.1 em 2026-09-27 não removeram os gates: limite same-user e gateway `exec` continuam; README ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado; reavaliação de 2026-09-29 e ISO intocada estão registradas ao fim do diário. Nenhuma integração, pacote ou rota ativados. |
+| PXA-010 | `in_progress` | `608b28e`: pin histórico de auditoria `v6.0.0`/commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`; hashes publicados sem verificação por download. Revisões documentais v6.1.0/v6.1.1 (2026-09-27) e v6.1.3 (2026-09-29) mantêm os gates: mesmo usuário alcança loopback e Full conserva gateway raw `exec`; README v6.1.3 ainda instrui `Allow all actions`, rejeitado pelo contrato PhaseZero. `v6.1.3` auditada sem download: tag commit `fa2d2c6c24926078b46eedb2186f69f2e8d548d7`; release publica hashes SHA-256 Linux x64/Windows x64, ainda não comparados com artefatos. Login continua em perfil próprio; nenhum cookie é importado. Identidade MCP padrão é configurável e distinta de `tunnel_id`/nome visível do túnel. Descoberta pública segue fechada por teste. Browser-only ainda requer sessão/conta real, G2 Arch/Windows e prova de instalação/reversão. Full acrescenta plano/workspace/permissões reais, broker, fronteira de mesmo usuário e falhas/rollback. Windows G2 segue não realizado; reavaliação e ISO intocada estão registradas ao fim do diário. Nenhuma integração, pacote ou rota ativados. |
 | PXA-011 | `planned` | Aguardando PXA-008 e gate seguro PXA-010. |
 | PXA-012 | `planned` | Aguardando PXA-007/009/011; nenhuma rota ou wizard de integração disponível. |
 | PXA-013 | `planned` | Aguardando PXA-011/012; rejeição de replay/conta/escopo e rollback não provados. |
@@ -1895,6 +1895,51 @@ mínima no cofre; elegibilidade do workspace e aprovações por tarefa antes de 
 PXA-010 permanece `in_progress`, experimental e fora do catálogo; nenhum pacote
 upstream, sessão, conta, túnel, broker, rota ou processo foi usado. v6.1.1 não foi
 validada; v6.0.0 segue referência documental.
+
+PXA-010 auditoria documental upstream v6.1.3 — 2026-09-29: somente README, arquitetura,
+modelo de segurança, validação de release, release e documentação OpenAI foram
+consultados; nada foi baixado ou executado. Release publicada em 2026-09-28;
+tag anotada aponta para commit `fa2d2c6c24926078b46eedb2186f69f2e8d548d7`.
+Metadados do GitHub publicam SHA-256 `e505e3f6ecb3311d4c51500f8dfdd1dcbda9c2ab41d031d69c0bd0076b199cab`
+para `codex-web-gpt-6.1.3-linux-x64.AppImage` e
+`1b819794c22bba8db3cbf71abb77cff2a218387f68bfb2128dd8d2bd43dbbee1` para
+`codex-web-gpt-6.1.3-win-x64.exe`; como os arquivos não foram obtidos, esses hashes
+seguem apenas publicados, não verificados por comparação local. README declara que
+os pacotes não têm assinatura de plataforma; hash publicado detecta divergência,
+mas não autentica publicador. Nunca ignorar SmartScreen/Gatekeeper.
+
+v6.1.3 mantém Browser-only sem broker, túnel ou MCP. Full encaminha chamadas de
+ferramentas pelo tunnel-client de saída ao broker e às ferramentas do turno Codex;
+inferência continua na sessão Web separada. Modelo de segurança mantém processo
+same-user dentro da fronteira confiável e gateway raw `exec` disponível em Full;
+Codex segue dono de sandbox, aprovações, UI e resultados. A aprovação automática
+fica desligada por padrão, mas isso não reduz o alcance same-user nem substitui grant
+e escopo do PhaseZero. Perfil Electron privado mantém login local e não importa
+cookies/perfil externo. Chave runtime mínima requer Tunnels Read + Use, armazenamento
+user-only e rotação após suspeita de exposição. Default de identidade é
+`Codex Native2`, editável no launcher; connector resolve a identidade configurada,
+enquanto a associação do túnel usa `tunnel_id`, sem exigir igualdade com nome visível.
+
+README v6.1.3 ainda recomenda connector com `Authentication: None` e `Allow all
+actions`. A primeira opção só cabe no desenho tunnel + broker com chave runtime;
+a segunda continua proibida no PhaseZero. Não automatizar essas instruções. A
+documentação OpenAI confirma sem porta/regra de entrada, túnel por HTTPS de saída,
+Read + Manage para criar/editar e Read + Use para executar/selecionar; Developer Mode
+é permissão separada do workspace. MCP completo com escrita segue beta para Business,
+Enterprise/Edu; Pro tem read/fetch. Isso exige checagem explícita de plano, workspace,
+permissões e ações disponíveis; login não prova elegibilidade. O medidor Pro upstream
+é estimativa local e não conta mensagens fora do launcher, portanto não prova quota
+oficial nem economia “2%”. Fontes: [release v6.1.3](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.3),
+[README v6.1.3](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/README.md),
+[arquitetura v6.1.3](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/docs/architecture.md),
+[modelo de segurança v6.1.3](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/docs/security-model.md),
+[validação de release v6.1.3](https://github.com/miuuyy/codex-chatgpt-web/blob/v6.1.3/docs/release-validation.md),
+[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) e
+[Developer Mode/MCP](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+PXA-010 segue `in_progress`, experimental e fora do catálogo; Browser-only depende
+dos gates próprios de conta/sessão, host limpo e reversão; Full depende também de
+elegibilidade real, broker, permissões e prova da fronteira de processo. Nenhum pacote,
+sessão, conta, túnel, broker ou rota foi usado.
 
 PXA-004/005 cancelamento com pacote real — 2026-09-27: adicionado
 `tests/pacman_cancel_g2.py`, executado somente pelo job `arch-clean-host` em
