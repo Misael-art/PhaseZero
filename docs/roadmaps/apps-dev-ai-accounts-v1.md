@@ -2264,12 +2264,23 @@ root, `/etc/arch-release` e `/usr/bin/pacman`. O teste registra raiz de pacote,
 banco/cache/log do pacman e caminhos HOME/XDG/PZ; verifica ausência inicial dos
 pacotes e registra versões usadas. No host, `py_compile`, YAML e `git diff
 --check` passaram; regressão Development passou 13, com 1 skip da etapa G2 pela
-guarda. CI PR `36542599094`, HEAD `24808f2`, concluiu 15/15 jobs; o passo
-Arch passou em 5,94 s. Porém `pytest -q` capturou a saída do teste, então os
-valores de versão e caminhos não ficaram nos logs consultáveis. A execução foi
-ampliada com `pacman -Q nodejs pnpm` e `pytest -s` para expor prova exata;
-nova CI está pendente. Não contar versão publicada pelo teste sem saída visível.
-PXA-005 continua `in_progress`.
+guarda. CI PR `36542599094`, HEAD `24808f2`, concluiu 15/15 jobs e o passo
+Arch passou em 5,94 s, mas `pytest -q` ocultou prints. Correção `6cdb2f9`
+adicionou consulta e saída explícita de versões, e CI PR `36547216433`, job
+Arch `109336375932`, concluiu 15/15 jobs; teste público passou em 5,83 s.
+Runner Ubuntu 24.04 hospedou container descartável `archlinux:latest`. Antes,
+`pacman -Q` confirmou Node.js/pnpm ausentes. Preview público foi confirmado;
+engine terminou `complete` e atribuiu `development.nodejs` e
+`development.pnpm`. Versões pacman: `nodejs 26.10.0-1`, `pnpm 11.26.0-1`;
+binários responderam Node.js `v26.10.0` e pnpm `11.26.0`. Validação pública
+marcou ambos instalados; abrir levou ao detalhe canônico `app.nodejs`. Rollback
+terminou `complete`; `pacman -Q nodejs` e `pacman -Q pnpm` confirmaram
+ausência. O log registra raiz `/`, db/cache/log do pacman e HOME, XDG e PZ
+temporários. CI inteira: Python 1335 passed, 3 skipped, 15 subtests; hit-test
+Xvfb 2 passaram em cada escala 100/150/200%; Pester 801 passed, 0 failed,
+2 skipped; todos 15 jobs verdes. Limites: caminho Arch com rede/repos acessíveis,
+instalação→uso→rollback de Node.js/pnpm; não cobre reativação, modo offline,
+Windows G2 ou G4. PXA-005 permanece `in_progress`.
 
 PXA-004/005/014 Windows G2 — **não realizada em 2026-09-29**. Operador forneceu
 `/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` e pediu
