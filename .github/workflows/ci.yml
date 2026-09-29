@@ -389,6 +389,12 @@ jobs:
           PZ_ENABLE_ARCH_PACMAN_G2: "1"
         run: python "$GITHUB_WORKSPACE/tests/pacman_cancel_g2.py"
 
+      - name: Run public Development install-use-rollback journey in disposable Arch
+        env:
+          PZ_ENABLE_ARCH_PUBLIC_JOURNEY_G2: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests/test_development_journey_g2.py -q
+
   package-smoke:
     runs-on: ubuntu-latest
     needs: shell-lint

@@ -2246,3 +2246,21 @@ CI da revisão documental v6.1.3/PXA-008 — 2026-09-29, HEAD `858a797`: push
 801 passed, 0 failed, 2 skipped; fixtures Windows de Credential Store passaram
 9/9. São execuções do mesmo código com mudança só documental; não provam conta,
 quota, túnel, broker, Windows G2, leitor de tela ou G4.
+
+PXA-005 jornada pública G2 Arch adicionada — 2026-09-29 05:23 -03:00: o teste
+`tests/test_development_journey_g2.py` e o passo `arch-clean-host` em CI cobrem
+prévia e confirmação públicas, instalação real via `pacman`, validação de
+Node.js/pnpm, abertura do app canônico e rollback pelo recibo do engine. Execução
+real só é permitida com opt-in, `GITHUB_ACTIONS=true`, job/repositório esperados,
+root, `/etc/arch-release` e `/usr/bin/pacman`. O teste registra raiz de pacote,
+banco/cache/log do pacman e caminhos HOME/XDG/PZ; verifica ausência inicial dos
+pacotes e registra versões usadas. No host, `py_compile`, YAML e `git diff
+--check` passaram; regressão Development passou 13, com 1 skip da etapa G2 pela
+guarda. CI real ainda pendente; PXA-005 continua `in_progress`.
+
+PXA-004/005/014 Windows G2 — **não realizada em 2026-09-29**. Operador forneceu
+`/home/misael/Downloads/Win11_25H2_BrazilianPortuguese_x64_v2 (1).iso` e pediu
+avaliação por risco de concorrência no host. Para preservar os processos e
+trabalhos existentes, não inspecionei, montei, inicializei nem executei a ISO;
+nenhuma VM, boot ou pacote foi acionado no host. Etapa registrada como não
+realizada; seguir com provas descartáveis CI e demais tarefas independentes.
