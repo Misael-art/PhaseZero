@@ -2370,8 +2370,27 @@ verdes. Python: 1335 passaram, 3 ignorados e 15 subtests; hit-test Xvfb 2/2
 em 100%, 150% e 200%; Pester: 801 passaram, 0 falhas e 2 ignorados; Windows
 credential-store fixtures: 9 passaram. Job Arch continua containerizado e
 `windows-vm-shell-test` continua hermético; nenhum fecha VM G2. Em seguida,
-`a16d0a3` adiciona probe opcional do QEMU/KVM em runner Ubuntu hospedado para
+`df6f561` adiciona probe opcional do QEMU/KVM em runner Ubuntu hospedado para
 decidir viabilidade de VM G2 sem carga local. Probe vazio apenas consulta QMP e
 `query-kvm`; mesmo verde não equivale a guest Arch/Windows, ciclo do produto ou
 snapshot G2. Validação estática local: ShellCheck e `bash -n` do probe, parse do
-YAML e `git diff --check` passaram; execução remota aguarda push do commit.
+YAML e `git diff --check` passaram; execução remota iniciou.
+
+PXA-010 conferência das fontes oficiais — 2026-09-29: o Help Center atualizado
+confirma beta de MCP completo com escrita em Business e Enterprise/Edu; Pro tem
+read/fetch. Developer Mode depende do workspace e plano; login não demonstra
+elegibilidade. A documentação Secure MCP Tunnel confirma ausência de ingress
+público/porta de entrada, `tunnel_id` + runtime key, cliente em HTTPS de saída,
+Read + Manage para administrar e Read + Use para executar/selecionar. Isso
+confirma os requisitos documentados, não uma conta/workspace real. [Help Center
+OpenAI](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt),
+[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+Probe remoto `df6f5616c80668cfbc15d0bfabe882fa3ca10043` — PR run
+`36589276298`, job `109477799729`: instalação QEMU passou; etapa de probe
+falhou com `FAIL: hosted runner has no usable /dev/kvm`. Runner Ubuntu 24.04
+não oferece KVM utilizável; nenhum QEMU/guest iniciou. `continue-on-error`
+preservou a suíte normal. Isto descarta esse runner como caminho KVM de G2;
+TCG e outros runners não foram avaliados. Windows G2 segue não realizado e a
+ISO segue intocada. O resultado não substitui guest Arch/Windows nem evidência
+de ciclo/snapshot.
